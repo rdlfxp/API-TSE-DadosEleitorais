@@ -112,5 +112,5 @@ def test_service_unavailable_returns_503(client: TestClient):
     payload = response.json()
     assert payload["message"] == (
         "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH "
-        "ou coloque o arquivo em data/analytics.csv."
+        "ou coloque o arquivo em data/curated/analytics.csv."
     )

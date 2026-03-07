@@ -9,5 +9,15 @@ __pycache__/
 # Local data files (keep only .gitkeep versioned)
 data/*
 !data/.gitkeep
-!data/analytics.csv
-!data/quality_report.json
+!data/raw/
+!data/curated/
+data/raw/**
+data/curated/**
+!data/raw/.gitkeep
+!data/curated/.gitkeep
+!data/curated/analytics.csv
+!data/curated/quality_report.json
+
+# Curated outputs (local only)
+data/curated/*.csv
+data/curated/*.json

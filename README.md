@@ -13,12 +13,18 @@ pip install -r requirements.txt
 
 ## 2) Dados
 
-Por padrão, a API tenta carregar `data/analytics.csv`.
+Organizacao recomendada:
+
+- `data/raw/<ano>/...csv`: arquivos brutos do TSE (entrada)
+- `data/curated/analytics.csv`: base consolidada consumida pela API (saida)
+- `data/curated/quality_report.json`: relatorio de qualidade da consolidacao
+
+Por padrao, a API tenta carregar `data/curated/analytics.csv`.
 
 Você pode configurar via `.env`:
 
 ```env
-ANALYTICS_DATA_PATH=data/analytics.csv
+ANALYTICS_DATA_PATH=data/curated/analytics.csv
 ANALYTICS_SEPARATOR=,
 ANALYTICS_ENCODING=utf-8
 ```
@@ -31,14 +37,43 @@ uvicorn app.main:app --reload
 
 ## 4) Normalizacao multi-ano (2014/2018/2022)
 
-Use o script para gerar um unico `data/analytics.csv` a partir dos CSVs brutos:
+### 4.1) Fluxo recomendado (auto descoberta em `data/raw`)
+
+Estruture os arquivos:
+
+```text
+data/raw/
+  2014/
+    consulta_cand_2014_*.csv
+    votacao_candidato_munzona_2014_*.csv
+  2018/
+    consulta_cand_2018_*.csv
+    votacao_candidato_munzona_2018_*.csv
+  2022/
+    consulta_cand_2022_*.csv
+    votacao_candidato_munzona_2022_*.csv
+```
+
+Gere a base consolidada:
+
+```bash
+python3 scripts/normalize.py \
+  --raw-dir data/raw \
+  --years 2014 2018 2022 \
+  --output data/curated/analytics.csv \
+  --report data/curated/quality_report.json
+```
+
+### 4.2) Fluxo manual (arquivos explicitos)
+
+Use quando quiser controlar exatamente quais CSVs entram:
 
 ```bash
 python3 scripts/normalize.py \
   --votacao /caminho/votacao_candidato_munzona_2014_*.csv /caminho/votacao_candidato_munzona_2018_*.csv /caminho/votacao_candidato_munzona_2022_*.csv \
   --consulta /caminho/consulta_cand_2014_*.csv /caminho/consulta_cand_2018_*.csv /caminho/consulta_cand_2022_*.csv \
-  --output data/analytics.csv \
-  --report data/quality_report.json
+  --output data/curated/analytics.csv \
+  --report data/curated/quality_report.json
 ```
 
 Notas:
@@ -51,10 +86,10 @@ Quality gate (bloqueio por qualidade):
 
 ```bash
 python3 scripts/normalize.py \
-  --votacao /caminho/votacao_2018.csv /caminho/votacao_2022.csv \
-  --consulta /caminho/consulta_2018.csv /caminho/consulta_2022.csv \
-  --output data/analytics.csv \
-  --report data/quality_report.json \
+  --raw-dir data/raw \
+  --years 2018 2022 \
+  --output data/curated/analytics.csv \
+  --report data/curated/quality_report.json \
   --quality-gate \
   --max-duplicate-rows 0 \
   --max-negative-votes 0 \
@@ -110,7 +145,7 @@ Erro `503`:
 
 ```json
 {
-  "message": "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH ou coloque o arquivo em data/analytics.csv."
+  "message": "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH ou coloque o arquivo em data/curated/analytics.csv."
 }
 ```
 
@@ -269,6 +304,10 @@ API-MeuCandidato/
   docs/
     openapi.v1.json
   data/
+    raw/
+      .gitkeep
+    curated/
+      .gitkeep
     .gitkeep
   .env.example
   .gitignore
