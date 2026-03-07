@@ -1,6 +1,10 @@
 from pydantic import BaseModel, Field
 
 
+class ErrorResponse(BaseModel):
+    message: str
+
+
 class SeriesItem(BaseModel):
     label: str
     value: float
