@@ -45,8 +45,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--votacao",
-        required=True,
         nargs="+",
+        default=[],
         help="Um ou mais CSVs de votacao candidato (ex.: votacao_candidato_munzona_2022_SP.csv).",
     )
     parser.add_argument(
@@ -56,13 +56,38 @@ def parse_args() -> argparse.Namespace:
         help="CSVs opcionais de consulta_cand para enriquecer perfil do candidato.",
     )
     parser.add_argument(
+        "--raw-dir",
+        default=None,
+        help=(
+            "Diretorio raiz com CSVs brutos por ano (ex.: data/raw). "
+            "Quando informado, arquivos de votacao/consulta sao descobertos automaticamente."
+        ),
+    )
+    parser.add_argument(
+        "--years",
+        nargs="*",
+        type=int,
+        default=[],
+        help="Anos especificos para varredura dentro de --raw-dir (ex.: --years 2018 2022).",
+    )
+    parser.add_argument(
+        "--votacao-pattern",
+        default="*votacao_candidato*munzona*.csv",
+        help="Padrao glob para descobrir arquivos de votacao em --raw-dir.",
+    )
+    parser.add_argument(
+        "--consulta-pattern",
+        default="*consulta_cand*.csv",
+        help="Padrao glob para descobrir arquivos de consulta em --raw-dir.",
+    )
+    parser.add_argument(
         "--output",
-        default="data/analytics.csv",
+        default="data/curated/analytics.csv",
         help="Arquivo final normalizado.",
     )
     parser.add_argument(
         "--report",
-        default="data/quality_report.json",
+        default="data/curated/quality_report.json",
         help="Relatorio de qualidade de dados (JSON).",
     )
     parser.add_argument(
@@ -129,6 +154,35 @@ def _extract_year_from_path(file_path: str) -> int | None:
 
 def _parse_date(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce", dayfirst=True)
+
+
+def _discover_files(raw_dir: str, years: list[int], pattern: str) -> list[str]:
+    root = Path(raw_dir)
+    if not root.exists():
+        return []
+
+    candidates: list[Path] = []
+    if years:
+        for year in years:
+            year_dir = root / str(year)
+            if year_dir.exists():
+                candidates.extend(year_dir.rglob(pattern))
+    else:
+        candidates.extend(root.rglob(pattern))
+
+    files = [str(p) for p in candidates if p.is_file()]
+    return sorted(files)
+
+
+def _merge_unique_paths(*path_lists: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for items in path_lists:
+        for item in items:
+            if item not in seen:
+                merged.append(item)
+                seen.add(item)
+    return merged
 
 
 def _classify_age(age: float) -> str:
@@ -223,7 +277,7 @@ def _normalize_votacao_file(
     encoding: str,
 ) -> pd.DataFrame:
     df = pd.read_csv(file_path, sep=sep, encoding=encoding, low_memory=False)
-    df = _clean_columns(df)
+    df = _clean_columns(df).copy()
 
     rename_map: dict[str, str] = {}
     col_ano = _find_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
@@ -233,12 +287,12 @@ def _normalize_votacao_file(
     if col_votos and col_votos != "QT_VOTOS_NOMINAIS_VALIDOS":
         rename_map[col_votos] = "QT_VOTOS_NOMINAIS_VALIDOS"
     if rename_map:
-        df = df.rename(columns=rename_map)
+        df = df.rename(columns=rename_map).copy()
 
     if "ANO_ELEICAO" not in df.columns:
         year_guess = _extract_year_from_path(file_path)
         if year_guess is not None:
-            df["ANO_ELEICAO"] = year_guess
+            df.loc[:, "ANO_ELEICAO"] = year_guess
 
     if not consulta_df.empty:
         join_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in df.columns and c in consulta_df.columns]
@@ -265,28 +319,28 @@ def _normalize_votacao_file(
                     on=join_keys,
                     how="left",
                     suffixes=("", "_CONS"),
-                )
+                ).copy()
                 for col in profile_cols:
                     alt = f"{col}_CONS"
                     if alt in df.columns:
                         if col in df.columns:
-                            df[col] = df[col].fillna(df[alt])
+                            df.loc[:, col] = df[col].fillna(df[alt])
                             df = df.drop(columns=[alt])
                         else:
                             df = df.rename(columns={alt: col})
 
     if "QT_VOTOS_NOMINAIS_VALIDOS" not in df.columns:
-        df["QT_VOTOS_NOMINAIS_VALIDOS"] = 0
-    df["QT_VOTOS_NOMINAIS_VALIDOS"] = (
+        df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = 0
+    df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = (
         pd.to_numeric(df["QT_VOTOS_NOMINAIS_VALIDOS"], errors="coerce").fillna(0).astype("int64")
     )
 
     for col in CANONICAL_COLUMNS:
         if col not in df.columns:
-            df[col] = pd.NA
+            df.loc[:, col] = pd.NA
 
-    df["IDADE"] = _compute_age(df)
-    df["FAIXA_ETARIA"] = df["IDADE"].apply(_classify_age)
+    df.loc[:, "IDADE"] = _compute_age(df)
+    df.loc[:, "FAIXA_ETARIA"] = df["IDADE"].apply(_classify_age)
 
     group_cols = [
         "ANO_ELEICAO",
@@ -314,11 +368,12 @@ def _normalize_votacao_file(
         df[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
         .groupby(group_cols, dropna=False, as_index=False)["QT_VOTOS_NOMINAIS_VALIDOS"]
         .sum()
+        .copy()
     )
 
-    agg["IDADE"] = _compute_age(agg)
-    agg["FAIXA_ETARIA"] = agg["IDADE"].apply(_classify_age)
-    return agg[CANONICAL_COLUMNS]
+    agg.loc[:, "IDADE"] = _compute_age(agg)
+    agg.loc[:, "FAIXA_ETARIA"] = agg["IDADE"].apply(_classify_age)
+    return agg[CANONICAL_COLUMNS].copy()
 
 
 def _quality_report(df: pd.DataFrame) -> dict:
@@ -419,10 +474,39 @@ def _evaluate_quality_gate(report: dict, args: argparse.Namespace) -> list[str]:
 def main() -> None:
     args = parse_args()
 
-    consulta = _prepare_consulta(args.consulta, sep=args.sep, encoding=args.encoding)
+    discovered_votacao: list[str] = []
+    discovered_consulta: list[str] = []
+    if args.raw_dir:
+        discovered_votacao = _discover_files(
+            raw_dir=args.raw_dir,
+            years=args.years,
+            pattern=args.votacao_pattern,
+        )
+        discovered_consulta = _discover_files(
+            raw_dir=args.raw_dir,
+            years=args.years,
+            pattern=args.consulta_pattern,
+        )
+        print(
+            f"[normalize] descobertos em raw-dir: "
+            f"{len(discovered_votacao)} votacao, {len(discovered_consulta)} consulta"
+        )
+
+    votacao_files = _merge_unique_paths(args.votacao, discovered_votacao)
+    consulta_files = _merge_unique_paths(args.consulta, discovered_consulta)
+
+    if not votacao_files:
+        print("[normalize] erro: nenhum arquivo de votacao informado/encontrado.")
+        print(
+            "[normalize] use --votacao ... ou --raw-dir data/raw "
+            "[--years 2014 2018 2022]"
+        )
+        raise SystemExit(2)
+
+    consulta = _prepare_consulta(consulta_files, sep=args.sep, encoding=args.encoding)
     normalized_frames: list[pd.DataFrame] = []
 
-    for vot_file in args.votacao:
+    for vot_file in votacao_files:
         print(f"[normalize] lendo votacao: {vot_file}")
         normalized_frames.append(
             _normalize_votacao_file(
@@ -437,8 +521,8 @@ def main() -> None:
     final_df = final_df.drop_duplicates(
         subset=["ANO_ELEICAO", "SQ_CANDIDATO", "NR_CANDIDATO", "DS_CARGO", "SG_UF"],
         keep="last",
-    )
-    final_df["ANO_ELEICAO"] = pd.to_numeric(final_df["ANO_ELEICAO"], errors="coerce").astype("Int64")
+    ).copy()
+    final_df.loc[:, "ANO_ELEICAO"] = pd.to_numeric(final_df["ANO_ELEICAO"], errors="coerce").astype("Int64")
 
     report = _quality_report(final_df)
     report_path = Path(args.report)
@@ -465,6 +549,8 @@ def main() -> None:
     print(f"[normalize] output: {output_path}")
     print(f"[normalize] report: {report_path}")
     print(f"[normalize] linhas: {len(final_df)}")
+    print(f"[normalize] arquivos votacao: {len(votacao_files)}")
+    print(f"[normalize] arquivos consulta: {len(consulta_files)}")
     print(f"[normalize] anos: {anos}")
     print(f"[normalize] qtd cargos: {len(cargos)}")
 
