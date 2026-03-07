@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from fnmatch import fnmatch
 from pathlib import Path
 
 import pandas as pd
@@ -72,18 +73,32 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--votacao-pattern",
-        default="*votacao_candidato*munzona*.csv",
-        help="Padrao glob para descobrir arquivos de votacao em --raw-dir.",
+        nargs="+",
+        default=["*votacao_candidato*munzona*.csv"],
+        help=(
+            "Um ou mais padroes glob para descobrir arquivos de votacao em --raw-dir. "
+            "Ex.: --votacao-pattern '*votacao_candidato*munzona*.csv' '*votacao_candidato*.csv'"
+        ),
     )
     parser.add_argument(
         "--consulta-pattern",
-        default="*consulta_cand*.csv",
-        help="Padrao glob para descobrir arquivos de consulta em --raw-dir.",
+        nargs="+",
+        default=["*consulta_cand*.csv"],
+        help="Um ou mais padroes glob para descobrir arquivos de consulta em --raw-dir.",
+    )
+    parser.add_argument(
+        "--exclude-pattern",
+        nargs="*",
+        default=["*.DS_Store", "*classificado*.csv"],
+        help=(
+            "Padroes glob para excluir arquivos descobertos no --raw-dir. "
+            "Ex.: --exclude-pattern '*classificado*.csv' '*_backup*.csv'"
+        ),
     )
     parser.add_argument(
         "--output",
         default="data/curated/analytics.csv",
-        help="Arquivo final normalizado.",
+        help="Arquivo final normalizado (.csv padrao, ou .parquet se engine estiver instalada).",
     )
     parser.add_argument(
         "--report",
@@ -156,21 +171,32 @@ def _parse_date(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce", dayfirst=True)
 
 
-def _discover_files(raw_dir: str, years: list[int], pattern: str) -> list[str]:
+def _discover_files(
+    raw_dir: str,
+    years: list[int],
+    patterns: list[str],
+    exclude_patterns: list[str],
+) -> list[str]:
     root = Path(raw_dir)
     if not root.exists():
         return []
 
-    candidates: list[Path] = []
+    candidates: set[Path] = set()
     if years:
         for year in years:
             year_dir = root / str(year)
             if year_dir.exists():
-                candidates.extend(year_dir.rglob(pattern))
+                for pattern in patterns:
+                    candidates.update(year_dir.rglob(pattern))
     else:
-        candidates.extend(root.rglob(pattern))
+        for pattern in patterns:
+            candidates.update(root.rglob(pattern))
 
-    files = [str(p) for p in candidates if p.is_file()]
+    def is_excluded(path: Path) -> bool:
+        path_str = str(path)
+        return any(fnmatch(path.name, pat) or fnmatch(path_str, pat) for pat in exclude_patterns)
+
+    files = [str(p) for p in candidates if p.is_file() and not is_excluded(p)]
     return sorted(files)
 
 
@@ -471,6 +497,22 @@ def _evaluate_quality_gate(report: dict, args: argparse.Namespace) -> list[str]:
     return failures
 
 
+def _write_output(df: pd.DataFrame, output_path: Path) -> None:
+    suffix = output_path.suffix.lower()
+    if suffix == ".parquet":
+        try:
+            df.to_parquet(output_path, index=False)
+        except ImportError as exc:
+            raise RuntimeError(
+                "Para gerar parquet, instale uma engine suportada (ex.: pyarrow)."
+            ) from exc
+        return
+    if suffix == ".csv":
+        df.to_csv(output_path, index=False, encoding="utf-8")
+        return
+    raise ValueError("Formato de saida nao suportado. Use extensao .parquet ou .csv.")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -480,12 +522,14 @@ def main() -> None:
         discovered_votacao = _discover_files(
             raw_dir=args.raw_dir,
             years=args.years,
-            pattern=args.votacao_pattern,
+            patterns=args.votacao_pattern,
+            exclude_patterns=args.exclude_pattern,
         )
         discovered_consulta = _discover_files(
             raw_dir=args.raw_dir,
             years=args.years,
-            pattern=args.consulta_pattern,
+            patterns=args.consulta_pattern,
+            exclude_patterns=args.exclude_pattern,
         )
         print(
             f"[normalize] descobertos em raw-dir: "
@@ -541,7 +585,7 @@ def main() -> None:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    final_df.to_csv(output_path, index=False, encoding="utf-8")
+    _write_output(final_df, output_path)
 
     anos = sorted(final_df["ANO_ELEICAO"].dropna().astype(int).unique().tolist())
     cargos = sorted(final_df["DS_CARGO"].dropna().astype(str).unique().tolist())

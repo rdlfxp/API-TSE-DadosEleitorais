@@ -21,3 +21,4 @@ data/curated/**
 # Curated outputs (local only)
 data/curated/*.csv
 data/curated/*.json
+data/curated/*.parquet
