@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.schemas import (
     AgeStatsResponse,
+    CandidateSearchResponse,
     ErrorResponse,
     FilterOptionsResponse,
     GroupedDistributionResponse,
@@ -30,7 +31,7 @@ async def lifespan(_: FastAPI):
     service = None
     file_path = Path(settings.analytics_data_path)
     if file_path.exists():
-        service = AnalyticsService.from_csv(
+        service = AnalyticsService.from_file(
             file_path=str(file_path),
             default_top_n=settings.default_top_n,
             max_top_n=settings.max_top_n,
@@ -50,7 +51,7 @@ def get_service() -> AnalyticsService:
             status_code=503,
             detail=(
                 "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH "
-                "ou coloque o arquivo em data/curated/analytics.csv."
+                "ou coloque o arquivo em data/curated/analytics.parquet (ou .csv)."
             ),
         )
     return service
@@ -101,6 +102,26 @@ def analytics_top_candidates(
 ) -> TopCandidatesResponse:
     items = get_service().top_candidates(ano=ano, uf=uf, cargo=cargo, top_n=top_n)
     return TopCandidatesResponse(top_n=top_n or settings.default_top_n, items=items)
+
+
+@app.get("/v1/analytics/candidatos", response_model=CandidateSearchResponse, responses=ERROR_RESPONSES)
+def analytics_candidates_search(
+    query: str = Query(..., min_length=2, description="Busca por nome do candidato"),
+    ano: int | None = None,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> CandidateSearchResponse:
+    data = get_service().search_candidates(
+        query=query,
+        ano=ano,
+        uf=uf,
+        cargo=cargo,
+        page=page,
+        page_size=page_size,
+    )
+    return CandidateSearchResponse(**data)
 
 
 @app.get("/v1/analytics/distribuicao", response_model=GroupedDistributionResponse, responses=ERROR_RESPONSES)

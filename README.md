@@ -16,7 +16,7 @@ pip install -r requirements.txt
 Organizacao recomendada:
 
 - `data/raw/<ano>/...csv`: arquivos brutos do TSE (entrada)
-- `data/curated/analytics.csv`: base consolidada consumida pela API (saida)
+- `data/curated/analytics.csv`: base consolidada consumida pela API (saida padrao)
 - `data/curated/quality_report.json`: relatorio de qualidade da consolidacao
 
 Por padrao, a API tenta carregar `data/curated/analytics.csv`.
@@ -60,8 +60,32 @@ Gere a base consolidada:
 python3 scripts/normalize.py \
   --raw-dir data/raw \
   --years 2014 2018 2022 \
+  --votacao-pattern '*votacao_candidato*munzona*.csv' \
+  --consulta-pattern '*consulta_cand*.csv' \
+  --exclude-pattern '*.DS_Store' '*classificado*.csv' \
   --output data/curated/analytics.csv \
   --report data/curated/quality_report.json
+```
+
+Parquet opcional (melhor performance em volume alto):
+
+```bash
+pip install pyarrow
+python3 scripts/normalize.py \
+  --raw-dir data/raw \
+  --years 2018 2020 2022 2024 \
+  --output data/curated/analytics.parquet \
+  --report data/curated/quality_report.json
+```
+
+Para integrar outras variacoes de planilha de votacao, adicione mais padroes:
+
+```bash
+python3 scripts/normalize.py \
+  --raw-dir data/raw \
+  --years 2018 2020 2022 2024 \
+  --votacao-pattern '*votacao_candidato*munzona*.csv' '*votacao_candidato*.csv' \
+  --consulta-pattern '*consulta_cand*.csv'
 ```
 
 ### 4.2) Fluxo manual (arquivos explicitos)
@@ -96,7 +120,7 @@ python3 scripts/normalize.py \
   --max-required-null-rate 0.02
 ```
 
-Se reprovar no gate, o script encerra com codigo `2` e nao grava o `analytics.csv`.
+Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de saida.
 
 ## 5) Endpoints para iOS
 
@@ -104,6 +128,7 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o `analytics.cs
 - `GET /v1/analytics/filtros` (`200`, `503`)
 - `GET /v1/analytics/overview?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
 - `GET /v1/analytics/top-candidatos?ano=2022&uf=SP&cargo=Deputado%20Estadual&top_n=20` (`200`, `422`, `503`)
+- `GET /v1/analytics/candidatos?query=candidato&ano=2022&uf=SP&cargo=Deputado%20Estadual&page=1&page_size=20` (`200`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=genero&ano=2022&uf=SP` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=status&ano=2022&uf=SP&cargo=Senador` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/idade?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
@@ -145,7 +170,7 @@ Erro `503`:
 
 ```json
 {
-  "message": "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH ou coloque o arquivo em data/curated/analytics.csv."
+  "message": "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH ou coloque o arquivo em data/curated/analytics.parquet (ou .csv)."
 }
 ```
 

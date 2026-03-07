@@ -105,6 +105,40 @@ def test_distribution_invalid_group_by_returns_400(client: TestClient):
     assert payload["message"] == "group_by invalido ou coluna ausente no dataset"
 
 
+def test_candidates_search_with_filters_and_order(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos",
+        params={"query": "candidato", "ano": 2022, "uf": "SP", "cargo": "Deputado Estadual"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["total_pages"] == 1
+    assert len(payload["items"]) == 2
+    assert payload["items"][0]["candidato"] == "Candidato A"
+    assert payload["items"][1]["candidato"] == "Candidato B"
+
+
+def test_candidates_search_pagination(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos",
+        params={"query": "candidato", "ano": 2022, "page": 2, "page_size": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert payload["total_pages"] == 3
+    assert payload["page"] == 2
+    assert len(payload["items"]) == 1
+
+
+def test_candidates_search_query_validation(client: TestClient):
+    response = client.get("/v1/analytics/candidatos", params={"query": "a"})
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["message"] == "Parametros de consulta invalidos."
+
+
 def test_service_unavailable_returns_503(client: TestClient):
     main_module.service = None
     response = client.get("/v1/analytics/overview")
@@ -112,5 +146,5 @@ def test_service_unavailable_returns_503(client: TestClient):
     payload = response.json()
     assert payload["message"] == (
         "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH "
-        "ou coloque o arquivo em data/curated/analytics.csv."
+        "ou coloque o arquivo em data/curated/analytics.parquet (ou .csv)."
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
@@ -31,6 +32,34 @@ class AnalyticsService:
     ) -> "AnalyticsService":
         df = pd.read_csv(file_path, sep=separator, encoding=encoding, low_memory=False)
         return cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
+
+    @classmethod
+    def from_file(
+        cls,
+        file_path: str,
+        default_top_n: int,
+        max_top_n: int,
+        separator: str = ",",
+        encoding: str = "utf-8",
+    ) -> "AnalyticsService":
+        suffix = Path(file_path).suffix.lower()
+        if suffix == ".parquet":
+            try:
+                df = pd.read_parquet(file_path)
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Leitura parquet requer engine instalada (ex.: pyarrow)."
+                ) from exc
+            return cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
+        if suffix == ".csv":
+            return cls.from_csv(
+                file_path=file_path,
+                default_top_n=default_top_n,
+                max_top_n=max_top_n,
+                separator=separator,
+                encoding=encoding,
+            )
+        raise ValueError("Formato de analytics nao suportado. Use .csv ou .parquet.")
 
     def _pick_col(self, options: Iterable[str]) -> str | None:
         for col in options:
@@ -262,4 +291,87 @@ class AnalyticsService:
             "maximo": float(idade.max()),
             "desvio_padrao": round(float(idade.std(ddof=0)), 2),
             "bins": dist,
+        }
+
+    def search_candidates(
+        self,
+        query: str,
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo)
+
+        col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        col_partido = self._pick_col(["SG_PARTIDO"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_votos = self._pick_col(
+            ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
+        )
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+
+        if not col_candidato:
+            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        q = query.strip().lower()
+        if not q:
+            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        names = df[col_candidato].fillna("").astype(str).str.strip()
+        names_lc = names.str.lower()
+
+        contains = names_lc.str.contains(q, regex=False)
+        matched = contains
+        if not matched.any():
+            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        ranked = df.loc[matched].copy()
+        name_match_lc = names_lc.loc[matched]
+        score = (
+            (name_match_lc == q).astype(int) * 3
+            + (name_match_lc.str.startswith(q)).astype(int) * 2
+            + (name_match_lc.str.contains(q, regex=False)).astype(int)
+        )
+        if col_votos:
+            votos = pd.to_numeric(ranked[col_votos], errors="coerce").fillna(0).astype("int64")
+        else:
+            votos = 0
+        ranked = ranked.assign(_score=score, _votos=votos)
+
+        ranked = ranked.sort_values(
+            by=["_score", "_votos", col_candidato],
+            ascending=[False, False, True],
+        )
+
+        total = int(len(ranked))
+        total_pages = (total + page_size - 1) // page_size
+        start = (page - 1) * page_size
+        end = start + page_size
+        sliced = ranked.iloc[start:end]
+
+        items: list[dict] = []
+        for _, row in sliced.iterrows():
+            items.append(
+                {
+                    "candidato": str(row[col_candidato]),
+                    "partido": str(row[col_partido]) if col_partido else None,
+                    "cargo": str(row[col_cargo]) if col_cargo else None,
+                    "uf": str(row[col_uf]) if col_uf else None,
+                    "ano": int(row[col_ano]) if col_ano and pd.notna(row[col_ano]) else None,
+                    "votos": int(row["_votos"]),
+                    "situacao": str(row[col_situacao]) if col_situacao else None,
+                }
+            )
+
+        return {
+            "query": query,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "items": items,
         }

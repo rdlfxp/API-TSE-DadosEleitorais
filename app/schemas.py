@@ -32,6 +32,25 @@ class TopCandidatesResponse(BaseModel):
     items: list[TopCandidateItem]
 
 
+class CandidateSearchItem(BaseModel):
+    candidato: str
+    partido: str | None = None
+    cargo: str | None = None
+    uf: str | None = None
+    ano: int | None = None
+    votos: int
+    situacao: str | None = None
+
+
+class CandidateSearchResponse(BaseModel):
+    query: str
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    items: list[CandidateSearchItem]
+
+
 class GroupedDistributionResponse(BaseModel):
     group_by: str
     items: list[SeriesItem]
