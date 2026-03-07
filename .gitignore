@@ -11,10 +11,13 @@ data/*
 !data/.gitkeep
 !data/raw/
 !data/curated/
+!data/releases/
 data/raw/**
 data/curated/**
+data/releases/**
 !data/raw/.gitkeep
 !data/curated/.gitkeep
+!data/releases/.gitkeep
 !data/curated/analytics.csv
 !data/curated/quality_report.json
 

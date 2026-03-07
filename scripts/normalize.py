@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -104,6 +106,11 @@ def parse_args() -> argparse.Namespace:
         "--report",
         default="data/curated/quality_report.json",
         help="Relatorio de qualidade de dados (JSON).",
+    )
+    parser.add_argument(
+        "--manifest",
+        default="data/curated/manifest.json",
+        help="Manifesto de auditoria da carga (JSON).",
     )
     parser.add_argument(
         "--sep",
@@ -497,6 +504,67 @@ def _evaluate_quality_gate(report: dict, args: argparse.Namespace) -> list[str]:
     return failures
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_manifest(
+    votacao_files: list[str],
+    consulta_files: list[str],
+    output_path: Path,
+    report_path: Path,
+    report: dict,
+) -> dict:
+    source_files: list[dict] = []
+    for p in votacao_files:
+        path = Path(p)
+        if path.exists():
+            source_files.append(
+                {
+                    "kind": "votacao",
+                    "path": str(path),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
+            )
+    for p in consulta_files:
+        path = Path(p)
+        if path.exists():
+            source_files.append(
+                {
+                    "kind": "consulta",
+                    "path": str(path),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
+            )
+
+    output_hash = _sha256(output_path) if output_path.exists() else None
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "output": str(output_path),
+        "output_format": output_path.suffix.lower().lstrip("."),
+        "output_sha256": output_hash,
+        "report": str(report_path),
+        "source_files_count": len(source_files),
+        "source_files": source_files,
+        "summary": {
+            "linhas_totais": report.get("linhas_totais", 0),
+            "anos": report.get("anos", []),
+            "required_missing_columns": report.get("required_missing_columns", []),
+            "duplicate_rows_on_key": report.get("duplicate_rows_on_key", 0),
+            "votos_invalidos_negativos": report.get("votos_invalidos_negativos", 0),
+        },
+    }
+
+
 def _write_output(df: pd.DataFrame, output_path: Path) -> None:
     suffix = output_path.suffix.lower()
     if suffix == ".parquet":
@@ -587,11 +655,23 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _write_output(final_df, output_path)
 
+    manifest = _build_manifest(
+        votacao_files=votacao_files,
+        consulta_files=consulta_files,
+        output_path=output_path,
+        report_path=report_path,
+        report=report,
+    )
+    manifest_path = Path(args.manifest)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
     anos = sorted(final_df["ANO_ELEICAO"].dropna().astype(int).unique().tolist())
     cargos = sorted(final_df["DS_CARGO"].dropna().astype(str).unique().tolist())
     print("[normalize] concluido")
     print(f"[normalize] output: {output_path}")
     print(f"[normalize] report: {report_path}")
+    print(f"[normalize] manifest: {manifest_path}")
     print(f"[normalize] linhas: {len(final_df)}")
     print(f"[normalize] arquivos votacao: {len(votacao_files)}")
     print(f"[normalize] arquivos consulta: {len(consulta_files)}")

@@ -1,0 +1,13 @@
+services:
+  api:
+    build: .
+    container_name: meucandidato-api
+    ports:
+      - "8000:8000"
+    environment:
+      ANALYTICS_DATA_PATH: data/curated/analytics.csv
+      ANALYTICS_SEPARATOR: ","
+      ANALYTICS_ENCODING: "utf-8"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
