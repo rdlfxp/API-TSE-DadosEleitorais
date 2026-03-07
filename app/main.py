@@ -1,9 +1,14 @@
+import json
+import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import settings
 from app.schemas import (
@@ -18,6 +23,18 @@ from app.schemas import (
 from app.services.analytics_service import AnalyticsService
 
 service: AnalyticsService | None = None
+logger = logging.getLogger("api.meucandidato")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+METRICS_LOCK = Lock()
+METRICS = {
+    "requests_total": 0,
+    "requests_5xx_total": 0,
+    "requests_4xx_total": 0,
+    "last_request_duration_ms": 0.0,
+}
+
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Bad Request"},
     422: {"model": ErrorResponse, "description": "Validation Error"},
@@ -30,13 +47,39 @@ async def lifespan(_: FastAPI):
     global service
     service = None
     file_path = Path(settings.analytics_data_path)
-    if file_path.exists():
+    selected_path = file_path
+    if settings.prefer_parquet_if_available and file_path.suffix.lower() == ".csv":
+        parquet_candidate = file_path.with_suffix(".parquet")
+        if parquet_candidate.exists():
+            selected_path = parquet_candidate
+
+    if selected_path.exists():
         service = AnalyticsService.from_file(
-            file_path=str(file_path),
+            file_path=str(selected_path),
             default_top_n=settings.default_top_n,
             max_top_n=settings.max_top_n,
             separator=settings.analytics_separator,
             encoding=settings.analytics_encoding,
+        )
+        logger.info(
+            json.dumps(
+                {
+                    "event": "startup_data_loaded",
+                    "path": str(selected_path),
+                    "rows": int(len(service.dataframe)),
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        logger.info(
+            json.dumps(
+                {
+                    "event": "startup_data_missing",
+                    "path": str(selected_path),
+                },
+                ensure_ascii=False,
+            )
         )
     yield
     service = None
@@ -57,6 +100,42 @@ def get_service() -> AnalyticsService:
     return service
 
 
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id", str(uuid4()))
+    started_at = time.perf_counter()
+
+    with METRICS_LOCK:
+        METRICS["requests_total"] += 1
+
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    response.headers["X-Request-Id"] = request_id
+
+    status_code = response.status_code
+    with METRICS_LOCK:
+        METRICS["last_request_duration_ms"] = duration_ms
+        if 400 <= status_code < 500:
+            METRICS["requests_4xx_total"] += 1
+        elif status_code >= 500:
+            METRICS["requests_5xx_total"] += 1
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "http_request",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": status_code,
+                "duration_ms": duration_ms,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return response
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException):
     message = exc.detail if isinstance(exc.detail, str) else "Erro na requisicao."
@@ -75,6 +154,22 @@ def health() -> dict:
         "data_loaded": service is not None,
         "version": settings.app_version,
     }
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics() -> str:
+    with METRICS_LOCK:
+        lines = [
+            "# TYPE requests_total counter",
+            f"requests_total {METRICS['requests_total']}",
+            "# TYPE requests_4xx_total counter",
+            f"requests_4xx_total {METRICS['requests_4xx_total']}",
+            "# TYPE requests_5xx_total counter",
+            f"requests_5xx_total {METRICS['requests_5xx_total']}",
+            "# TYPE last_request_duration_ms gauge",
+            f"last_request_duration_ms {METRICS['last_request_duration_ms']}",
+        ]
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/v1/analytics/overview", response_model=OverviewResponse, responses=ERROR_RESPONSES)

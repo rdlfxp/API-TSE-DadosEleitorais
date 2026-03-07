@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     analytics_data_path: str = "data/curated/analytics.csv"
     analytics_encoding: str = "utf-8"
     analytics_separator: str = ","
+    prefer_parquet_if_available: bool = True
     default_top_n: int = 20
     max_top_n: int = 100
 

@@ -51,6 +51,7 @@ def client():
 def test_health_endpoint(client: TestClient):
     response = client.get("/health")
     assert response.status_code == 200
+    assert "X-Request-Id" in response.headers
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["data_loaded"] is True
@@ -148,3 +149,12 @@ def test_service_unavailable_returns_503(client: TestClient):
         "Base analytics indisponivel. Ajuste ANALYTICS_DATA_PATH "
         "ou coloque o arquivo em data/curated/analytics.parquet (ou .csv)."
     )
+
+
+def test_metrics_endpoint(client: TestClient):
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    text = response.text
+    assert "requests_total" in text
+    assert "requests_4xx_total" in text
+    assert "requests_5xx_total" in text

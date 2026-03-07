@@ -1,0 +1,67 @@
+name: Data Refresh
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 1"
+
+jobs:
+  normalize-and-snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check raw data availability
+        id: raw_check
+        run: |
+          CSV_COUNT=$(find data/raw -type f -name '*.csv' | wc -l | tr -d ' ')
+          echo "csv_count=$CSV_COUNT" >> "$GITHUB_OUTPUT"
+          echo "CSV files found: $CSV_COUNT"
+
+      - name: Normalize raw data
+        if: steps.raw_check.outputs.csv_count != '0'
+        run: |
+          python scripts/normalize.py \
+            --raw-dir data/raw \
+            --quality-gate \
+            --max-duplicate-rows 0 \
+            --max-negative-votes 0 \
+            --max-required-null-rate 0.02 \
+            --output data/curated/analytics.csv \
+            --report data/curated/quality_report.json \
+            --manifest data/curated/manifest.json
+
+      - name: Publish snapshot
+        if: steps.raw_check.outputs.csv_count != '0'
+        run: python scripts/publish_snapshot.py
+
+      - name: Upload curated artifacts
+        if: steps.raw_check.outputs.csv_count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: curated-output
+          path: |
+            data/curated/analytics.csv
+            data/curated/quality_report.json
+            data/curated/manifest.json
+
+      - name: Upload release snapshots
+        if: steps.raw_check.outputs.csv_count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: releases
+          path: data/releases

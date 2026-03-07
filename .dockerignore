@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+.venv-1
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+data/raw

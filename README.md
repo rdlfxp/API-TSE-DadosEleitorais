@@ -125,6 +125,7 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 ## 5) Endpoints para iOS
 
 - `GET /health`
+- `GET /metrics` (observabilidade)
 - `GET /v1/analytics/filtros` (`200`, `503`)
 - `GET /v1/analytics/overview?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
 - `GET /v1/analytics/top-candidatos?ano=2022&uf=SP&cargo=Deputado%20Estadual&top_n=20` (`200`, `422`, `503`)
@@ -313,10 +314,45 @@ git commit -m "chore: update openapi contract"
 
 No GitHub: aba `Actions` > workflow `CI` > abrir o job `test-and-contract`.
 
-## 10) Estrutura final do projeto
+## 10) Carga agendada e snapshots
+
+Workflow agendado: `.github/workflows/data-refresh.yml`
+
+O que ele faz:
+- roda normalizacao de `data/raw` para `data/curated`
+- gera `manifest.json` de auditoria da carga
+- publica snapshot em `data/releases/YYYYMMDD`
+- sobe artifacts da execucao no GitHub Actions
+
+Execucao manual:
+- GitHub > `Actions` > `Data Refresh` > `Run workflow`
+
+## 11) Deploy (staging/producao)
+
+Arquivos:
+- `Dockerfile`
+- `docker-compose.yml`
+
+Subir local/staging:
+
+```bash
+docker compose up -d --build
+```
+
+Validar:
+
+```bash
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/metrics
+```
+
+## 12) Estrutura final do projeto
 
 ```text
 API-MeuCandidato/
+  .github/workflows/
+    ci.yml
+    data-refresh.yml
   app/
     main.py
     config.py
@@ -326,14 +362,18 @@ API-MeuCandidato/
   scripts/
     normalize.py
     export_openapi.py
-  docs/
-    openapi.v1.json
+    publish_snapshot.py
   data/
-    raw/
-      .gitkeep
     curated/
       .gitkeep
-    .gitkeep
+    raw/
+      .gitkeep
+    releases/
+  docs/
+    openapi.v1.json
+  Dockerfile
+  docker-compose.yml
+  .dockerignore
   .env.example
   .gitignore
   requirements.txt
