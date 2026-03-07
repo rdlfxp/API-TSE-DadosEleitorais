@@ -1,4 +1,5 @@
 # API MeuCandidato (iOS Analytics)
+[![CI](https://github.com/rdlfxp/API-TSE-DadosEleitorais/actions/workflows/ci.yml/badge.svg)](https://github.com/rdlfxp/API-TSE-DadosEleitorais/actions/workflows/ci.yml)
 
 Projeto limpo para backend mobile-first: FastAPI + analytics em JSON para app iOS (Swift/SwiftUI).
 
@@ -230,9 +231,17 @@ Regenerar apos mudancas de endpoint/schema:
 Workflow: `.github/workflows/ci.yml`
 
 Executa em todo `push` e `pull_request`:
+- roda lint (`ruff check .`)
 - instala dependencias
 - roda `pytest -q`
 - regenera `docs/openapi.v1.json` e falha se o arquivo versionado estiver desatualizado
+
+Rodar localmente antes do push:
+
+```bash
+./.venv/bin/ruff check .
+./.venv/bin/python -m pytest -q
+```
 
 Quando a pipeline falhar por contrato OpenAPI:
 
