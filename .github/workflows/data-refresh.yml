@@ -25,6 +25,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Fetch configured TSE sources
+        run: |
+          if [ -f config/tse_sources.json ]; then
+            python scripts/fetch_sources.py --config config/tse_sources.json --raw-dir data/raw
+          else
+            echo "config/tse_sources.json not found; skipping remote fetch."
+          fi
+
       - name: Check raw data availability
         id: raw_check
         run: |

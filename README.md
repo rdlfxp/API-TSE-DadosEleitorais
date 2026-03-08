@@ -319,10 +319,16 @@ No GitHub: aba `Actions` > workflow `CI` > abrir o job `test-and-contract`.
 Workflow agendado: `.github/workflows/data-refresh.yml`
 
 O que ele faz:
+- baixa fontes públicas configuradas em `config/tse_sources.json` (se existir)
 - roda normalizacao de `data/raw` para `data/curated`
 - gera `manifest.json` de auditoria da carga
 - publica snapshot em `data/releases/YYYYMMDD`
 - sobe artifacts da execucao no GitHub Actions
+
+Configuração de fontes remotas:
+- copie `config/tse_sources.example.json` para `config/tse_sources.json`
+- preencha URLs públicas reais do TSE e paths de destino em `data/raw`
+- o arquivo `config/tse_sources.json` é local (ignorando no git), para evitar hardcode rígido
 
 Execucao manual:
 - GitHub > `Actions` > `Data Refresh` > `Run workflow`
