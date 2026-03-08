@@ -21,6 +21,7 @@ from app.schemas import (
     TopCandidatesResponse,
 )
 from app.services.analytics_service import AnalyticsService
+from app.services.r2_bootstrap import ensure_local_analytics_from_r2
 
 service: AnalyticsService | None = None
 logger = logging.getLogger("api.meucandidato")
@@ -53,6 +54,23 @@ async def lifespan(_: FastAPI):
         if parquet_candidate.exists():
             selected_path = parquet_candidate
 
+    if not selected_path.exists():
+        downloaded_path = ensure_local_analytics_from_r2(
+            preferred_csv_path=file_path,
+            prefer_parquet=settings.prefer_parquet_if_available,
+        )
+        if downloaded_path is not None:
+            selected_path = downloaded_path
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "startup_data_downloaded_from_r2",
+                        "path": str(selected_path),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
     if selected_path.exists():
         service = AnalyticsService.from_file(
             file_path=str(selected_path),
@@ -77,6 +95,7 @@ async def lifespan(_: FastAPI):
                 {
                     "event": "startup_data_missing",
                     "path": str(selected_path),
+                    "hint": "Configure R2_* vars or provide local analytics file.",
                 },
                 ensure_ascii=False,
             )

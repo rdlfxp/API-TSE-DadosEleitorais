@@ -29,6 +29,17 @@ ANALYTICS_SEPARATOR=,
 ANALYTICS_ENCODING=utf-8
 ```
 
+Se o arquivo local não existir, a API pode baixar automaticamente do Cloudflare R2 na inicialização:
+
+```env
+R2_ACCOUNT_ID=seu_account_id
+R2_ACCESS_KEY_ID=seu_access_key
+R2_SECRET_ACCESS_KEY=sua_secret_key
+R2_BUCKET=tse-curated
+R2_OBJECT_KEY_CSV=latest/analytics.csv
+R2_OBJECT_KEY_PARQUET=latest/analytics.parquet
+```
+
 ## 3) Run
 
 ```bash
@@ -319,16 +330,73 @@ No GitHub: aba `Actions` > workflow `CI` > abrir o job `test-and-contract`.
 Workflow agendado: `.github/workflows/data-refresh.yml`
 
 O que ele faz:
-- baixa fontes públicas configuradas em `config/tse_sources.json` (se existir)
+- baixa fontes públicas configuradas via secret `TSE_SOURCES_JSON` (preferencial)
+- fallback para `config/tse_sources.json` (se existir)
 - roda normalizacao de `data/raw` para `data/curated`
 - gera `manifest.json` de auditoria da carga
 - publica snapshot em `data/releases/YYYYMMDD`
+- publica `latest/*` e `snapshots/YYYYMMDD/*` no Cloudflare R2 (quando secrets R2 existem)
 - sobe artifacts da execucao no GitHub Actions
 
 Configuração de fontes remotas:
+- em `Settings > Secrets and variables > Actions > Secrets`, crie `TSE_SOURCES_JSON`
+- valor do secret: JSON no mesmo formato do arquivo de exemplo
 - copie `config/tse_sources.example.json` para `config/tse_sources.json`
 - preencha URLs públicas reais do TSE e paths de destino em `data/raw`
-- o arquivo `config/tse_sources.json` é local (ignorando no git), para evitar hardcode rígido
+- `config/tse_sources.json` é fallback local (ignorado no git), útil para execução local
+
+### 10.1) Cloudflare R2 (baixo custo, limite inicial 10 GB)
+
+1. Criar bucket no R2:
+- Cloudflare Dashboard > `R2 Object Storage` > `Create bucket`
+- nome sugerido: `tse-curated`
+- região: automática (padrão)
+
+2. Criar chave S3 API para R2:
+- R2 > `Manage R2 API tokens` > `Create API token`
+- permissão mínima: `Object Read & Write` no bucket `tse-curated`
+- salve `Access Key ID` e `Secret Access Key`
+
+3. Coletar o `Account ID`:
+- Cloudflare Dashboard > coluna lateral (conta) > `Account ID`
+
+4. Configurar secrets no GitHub:
+- GitHub > repo > `Settings` > `Secrets and variables` > `Actions`
+- em `Repository secrets`, criar:
+  - `R2_ACCOUNT_ID`
+  - `R2_ACCESS_KEY_ID`
+  - `R2_SECRET_ACCESS_KEY`
+  - `R2_BUCKET` (ex.: `tse-curated`)
+
+5. Rodar upload no workflow:
+- `Actions` > `Data Refresh` > `Run workflow`
+- inputs:
+  - `publish_to_r2`: `true`
+  - `keep_snapshots`: `7` (ou menos para economizar espaço)
+
+6. Estratégia para ficar no limite de 10 GB:
+- mantenha apenas:
+  - `latest/analytics.csv` (ou `analytics.parquet`)
+  - `latest/manifest.json`
+  - `latest/quality_report.json`
+  - poucos diretórios em `snapshots/` (ex.: últimos 7)
+- prefira Parquet quando possível para reduzir tamanho:
+  - `pip install pyarrow`
+  - gerar `data/curated/analytics.parquet`
+- não publique `data/raw` completo no R2 nesse estágio
+
+Teste local opcional de upload para R2:
+
+```bash
+python3 scripts/upload_to_r2.py \
+  --account-id "$R2_ACCOUNT_ID" \
+  --access-key-id "$R2_ACCESS_KEY_ID" \
+  --secret-access-key "$R2_SECRET_ACCESS_KEY" \
+  --bucket "$R2_BUCKET" \
+  --source-dir data/curated \
+  --releases-dir data/releases \
+  --keep-snapshots 7
+```
 
 Execucao manual:
 - GitHub > `Actions` > `Data Refresh` > `Run workflow`
@@ -390,6 +458,14 @@ Smoke test via GitHub Actions:
 - preencher `base_url` com a URL de staging
 - o job falha automaticamente se algum endpoint crítico falhar
 
+Variáveis recomendadas no Render (para bootstrap de dados via R2):
+- `R2_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+- `R2_BUCKET` (`tse-curated`)
+- `R2_OBJECT_KEY_CSV` (`latest/analytics.csv`)
+- `R2_OBJECT_KEY_PARQUET` (`latest/analytics.parquet`)
+
 ## 12) Estrutura final do projeto
 
 ```text
@@ -408,6 +484,7 @@ API-MeuCandidato/
     normalize.py
     export_openapi.py
     publish_snapshot.py
+    upload_to_r2.py
     smoke_test_api.py
   data/
     curated/
