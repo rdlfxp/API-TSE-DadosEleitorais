@@ -384,6 +384,12 @@ Exemplo para staging:
 python3 scripts/smoke_test_api.py --base-url https://seu-staging.exemplo.com
 ```
 
+Smoke test via GitHub Actions:
+- workflow: `.github/workflows/staging-smoke.yml`
+- execucao: `Actions` > `Staging Smoke` > `Run workflow`
+- preencher `base_url` com a URL de staging
+- o job falha automaticamente se algum endpoint crítico falhar
+
 ## 12) Estrutura final do projeto
 
 ```text
@@ -391,6 +397,7 @@ API-MeuCandidato/
   .github/workflows/
     ci.yml
     data-refresh.yml
+    staging-smoke.yml
   app/
     main.py
     config.py
