@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     r2_object_key_parquet: str = "latest/analytics.parquet"
     r2_endpoint: str | None = None
     r2_region_name: str = "auto"
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = 60
+    rate_limit_max_requests_per_ip: int = 120
 
 
 settings = Settings()

@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         "--consulta",
         nargs="*",
         default=[],
-        help="CSVs opcionais de consulta_cand para enriquecer perfil do candidato.",
+        help="CSVs opcionais de consulta (ex.: consulta_cand/consulta_vagas).",
     )
     parser.add_argument(
         "--raw-dir",
@@ -85,8 +85,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--consulta-pattern",
         nargs="+",
-        default=["*consulta_cand*.csv"],
-        help="Um ou mais padroes glob para descobrir arquivos de consulta em --raw-dir.",
+        default=["*consulta_cand*.csv", "*consulta_vagas*.csv"],
+        help="Padroes glob para descobrir arquivos de consulta em --raw-dir.",
     )
     parser.add_argument(
         "--exclude-pattern",

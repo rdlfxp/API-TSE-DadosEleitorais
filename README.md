@@ -27,6 +27,9 @@ Você pode configurar via `.env`:
 ANALYTICS_DATA_PATH=data/curated/analytics.csv
 ANALYTICS_SEPARATOR=,
 ANALYTICS_ENCODING=utf-8
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_MAX_REQUESTS_PER_IP=120
 ```
 
 Se o arquivo local não existir, a API pode baixar automaticamente do Cloudflare R2 na inicialização:
@@ -72,7 +75,7 @@ python3 scripts/normalize.py \
   --raw-dir data/raw \
   --years 2014 2018 2022 \
   --votacao-pattern '*votacao_candidato*munzona*.csv' \
-  --consulta-pattern '*consulta_cand*.csv' \
+  --consulta-pattern '*consulta_cand*.csv' '*consulta_vagas*.csv' \
   --exclude-pattern '*.DS_Store' '*classificado*.csv' \
   --output data/curated/analytics.csv \
   --report data/curated/quality_report.json
@@ -96,7 +99,7 @@ python3 scripts/normalize.py \
   --raw-dir data/raw \
   --years 2018 2020 2022 2024 \
   --votacao-pattern '*votacao_candidato*munzona*.csv' '*votacao_candidato*.csv' \
-  --consulta-pattern '*consulta_cand*.csv'
+  --consulta-pattern '*consulta_cand*.csv' '*consulta_vagas*.csv'
 ```
 
 ### 4.2) Fluxo manual (arquivos explicitos)
@@ -338,12 +341,23 @@ O que ele faz:
 - publica `latest/*` e `snapshots/YYYYMMDD/*` no Cloudflare R2 (quando secrets R2 existem)
 - sobe artifacts da execucao no GitHub Actions
 
+Agendamento semanal:
+- cron atual: `0 9 * * 1` (toda segunda-feira, 09:00 UTC)
+- para runs agendados, `publish_to_r2` fica ativo automaticamente
+- anos padrão de normalização: `2018 2020 2022 2024`
+
 Configuração de fontes remotas:
 - em `Settings > Secrets and variables > Actions > Secrets`, crie `TSE_SOURCES_JSON`
 - valor do secret: JSON no mesmo formato do arquivo de exemplo
 - copie `config/tse_sources.example.json` para `config/tse_sources.json`
 - preencha URLs públicas reais do TSE e paths de destino em `data/raw`
 - `config/tse_sources.json` é fallback local (ignorado no git), útil para execução local
+
+Execução manual com multi-ano customizado:
+- `Actions` > `Data Refresh` > `Run workflow`
+- `normalize_years`: ex. `2018 2020 2022 2024`
+- `publish_to_r2`: `true`
+- `keep_snapshots`: ex. `7`
 
 ### 10.1) Cloudflare R2 (baixo custo, limite inicial 10 GB)
 

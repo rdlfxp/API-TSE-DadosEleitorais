@@ -1,5 +1,29 @@
 [
   {
+    "url": "https://exemplo.tse.jus.br/dados/2018/consulta_cand_2018_BRASIL.csv",
+    "target": "2018/consulta_cand_2018_BRASIL.csv"
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2018/votacao_candidato_munzona_2018_BRASIL.zip",
+    "target": "2018/votacao_candidato_munzona_2018_BRASIL.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2018_BRASIL*.csv"
+    ]
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2020/consulta_cand_2020_BRASIL.csv",
+    "target": "2020/consulta_cand_2020_BRASIL.csv"
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2020/votacao_candidato_munzona_2020_BRASIL.zip",
+    "target": "2020/votacao_candidato_munzona_2020_BRASIL.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2020_BRASIL*.csv"
+    ]
+  },
+  {
     "url": "https://exemplo.tse.jus.br/dados/2022/consulta_cand_2022_BRASIL.csv",
     "target": "2022/consulta_cand_2022_BRASIL.csv"
   },
@@ -9,6 +33,22 @@
     "extract": true,
     "extract_members": [
       "*votacao_candidato_munzona_2022_BRASIL*.csv"
+    ]
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2024/consulta_cand_2024_BRASIL.csv",
+    "target": "2024/consulta_cand_2024_BRASIL.csv"
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2024/consulta_vagas_2024_BRASIL.csv",
+    "target": "2024/consulta_vagas_2024_BRASIL.csv"
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2024/votacao_candidato_munzona_2024_BRASIL.zip",
+    "target": "2024/votacao_candidato_munzona_2024_BRASIL.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2024_BRASIL*.csv"
     ]
   }
 ]
