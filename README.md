@@ -372,6 +372,18 @@ curl -s http://localhost:8000/health
 curl -s http://localhost:8000/metrics
 ```
 
+Smoke test de cliente (local/staging):
+
+```bash
+python3 scripts/smoke_test_api.py --base-url http://localhost:8000
+```
+
+Exemplo para staging:
+
+```bash
+python3 scripts/smoke_test_api.py --base-url https://seu-staging.exemplo.com
+```
+
 ## 12) Estrutura final do projeto
 
 ```text
@@ -389,6 +401,7 @@ API-MeuCandidato/
     normalize.py
     export_openapi.py
     publish_snapshot.py
+    smoke_test_api.py
   data/
     curated/
       .gitkeep
