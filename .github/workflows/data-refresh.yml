@@ -2,6 +2,17 @@ name: Data Refresh
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_to_r2:
+        description: "Publicar curated/snapshots no Cloudflare R2"
+        required: false
+        default: true
+        type: boolean
+      keep_snapshots:
+        description: "Qtd de snapshots remotos para manter no R2"
+        required: false
+        default: "7"
+        type: string
   schedule:
     - cron: "0 9 * * 1"
 
@@ -27,10 +38,13 @@ jobs:
 
       - name: Fetch configured TSE sources
         run: |
-          if [ -f config/tse_sources.json ]; then
+          if [ -n "${{ secrets.TSE_SOURCES_JSON }}" ]; then
+            printf '%s' '${{ secrets.TSE_SOURCES_JSON }}' > /tmp/tse_sources.json
+            python scripts/fetch_sources.py --config /tmp/tse_sources.json --raw-dir data/raw
+          elif [ -f config/tse_sources.json ]; then
             python scripts/fetch_sources.py --config config/tse_sources.json --raw-dir data/raw
           else
-            echo "config/tse_sources.json not found; skipping remote fetch."
+            echo "No remote source config found (secret/local file); skipping remote fetch."
           fi
 
       - name: Check raw data availability
@@ -85,3 +99,33 @@ jobs:
         with:
           name: releases
           path: data/releases
+
+      - name: Publish curated/snapshots to Cloudflare R2
+        if: steps.raw_check.outputs.csv_count != '0'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          PUBLISH_TO_R2="${{ github.event_name != 'workflow_dispatch' || inputs.publish_to_r2 }}"
+          KEEP_SNAPSHOTS="${{ inputs.keep_snapshots || '7' }}"
+
+          if [ "$PUBLISH_TO_R2" != "true" ]; then
+            echo "R2 publish disabled for this run."
+            exit 0
+          fi
+
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ] || [ -z "$R2_BUCKET" ]; then
+            echo "R2 secrets are missing; skipping R2 publish."
+            exit 0
+          fi
+
+          python scripts/upload_to_r2.py \
+            --account-id "$R2_ACCOUNT_ID" \
+            --access-key-id "$R2_ACCESS_KEY_ID" \
+            --secret-access-key "$R2_SECRET_ACCESS_KEY" \
+            --bucket "$R2_BUCKET" \
+            --source-dir data/curated \
+            --releases-dir data/releases \
+            --keep-snapshots "$KEEP_SNAPSHOTS"
