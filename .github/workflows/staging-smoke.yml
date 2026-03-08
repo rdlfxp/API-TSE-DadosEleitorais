@@ -1,0 +1,33 @@
+name: Staging Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL da API de staging (ex.: https://api-staging.exemplo.com)"
+        required: true
+        type: string
+      timeout:
+        description: "Timeout por request em segundos"
+        required: false
+        default: "8"
+        type: string
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run staging smoke test
+        run: |
+          python scripts/smoke_test_api.py \
+            --base-url "${{ inputs.base_url }}" \
+            --timeout "${{ inputs.timeout }}"
