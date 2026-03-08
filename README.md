@@ -24,12 +24,21 @@ Por padrao, a API tenta carregar `data/curated/analytics.csv`.
 Você pode configurar via `.env`:
 
 ```env
+ANALYTICS_ENGINE=duckdb
 ANALYTICS_DATA_PATH=data/curated/analytics.csv
 ANALYTICS_SEPARATOR=,
 ANALYTICS_ENCODING=utf-8
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS_PER_IP=120
+```
+
+Para volume alto (produção), prefira `analytics.parquet` com DuckDB:
+
+```env
+ANALYTICS_ENGINE=duckdb
+ANALYTICS_DATA_PATH=data/curated/analytics.parquet
+PREFER_PARQUET_IF_AVAILABLE=true
 ```
 
 Se o arquivo local não existir, a API pode baixar automaticamente do Cloudflare R2 na inicialização:
@@ -494,8 +503,10 @@ API-MeuCandidato/
     schemas.py
     services/
       analytics_service.py
+      duckdb_analytics_service.py
   scripts/
     normalize.py
+    convert_csv_to_parquet.py
     export_openapi.py
     publish_snapshot.py
     upload_to_r2.py

@@ -21,9 +21,10 @@ from app.schemas import (
     TopCandidatesResponse,
 )
 from app.services.analytics_service import AnalyticsService
+from app.services.duckdb_analytics_service import DuckDBAnalyticsService
 from app.services.r2_bootstrap import ensure_local_analytics_from_r2
 
-service: AnalyticsService | None = None
+service: AnalyticsService | DuckDBAnalyticsService | None = None
 logger = logging.getLogger("api.meucandidato")
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -75,19 +76,33 @@ async def lifespan(_: FastAPI):
             )
 
     if selected_path.exists():
-        service = AnalyticsService.from_file(
-            file_path=str(selected_path),
-            default_top_n=settings.default_top_n,
-            max_top_n=settings.max_top_n,
-            separator=settings.analytics_separator,
-            encoding=settings.analytics_encoding,
-        )
+        if settings.analytics_engine.lower() == "duckdb":
+            service = DuckDBAnalyticsService.from_file(
+                file_path=str(selected_path),
+                default_top_n=settings.default_top_n,
+                max_top_n=settings.max_top_n,
+                separator=settings.analytics_separator,
+                encoding=settings.analytics_encoding,
+            )
+        else:
+            service = AnalyticsService.from_file(
+                file_path=str(selected_path),
+                default_top_n=settings.default_top_n,
+                max_top_n=settings.max_top_n,
+                separator=settings.analytics_separator,
+                encoding=settings.analytics_encoding,
+            )
         logger.info(
             json.dumps(
                 {
                     "event": "startup_data_loaded",
                     "path": str(selected_path),
-                    "rows": int(len(service.dataframe)),
+                    "engine": settings.analytics_engine.lower(),
+                    "rows": (
+                        int(len(service.dataframe))
+                        if isinstance(service, AnalyticsService)
+                        else int(service.row_count)
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -110,7 +125,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 
 
-def get_service() -> AnalyticsService:
+def get_service() -> AnalyticsService | DuckDBAnalyticsService:
     if service is None:
         raise HTTPException(
             status_code=503,

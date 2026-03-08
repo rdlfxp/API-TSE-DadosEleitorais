@@ -75,6 +75,14 @@ jobs:
             --report data/curated/quality_report.json \
             --manifest data/curated/manifest.json
 
+      - name: Convert curated CSV to Parquet
+        if: steps.raw_check.outputs.csv_count != '0'
+        run: |
+          python scripts/convert_csv_to_parquet.py \
+            --input data/curated/analytics.csv \
+            --output data/curated/analytics.parquet \
+            --delimiter ","
+
       - name: Publish snapshot
         if: steps.raw_check.outputs.csv_count != '0'
         run: python scripts/publish_snapshot.py
@@ -98,6 +106,7 @@ jobs:
           name: curated-output
           path: |
             data/curated/analytics.csv
+            data/curated/analytics.parquet
             data/curated/quality_report.json
             data/curated/manifest.json
 

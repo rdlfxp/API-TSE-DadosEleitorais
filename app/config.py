@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     app_name: str = "MeuCandidato Analytics API"
     app_version: str = "1.0.0"
+    analytics_engine: str = "duckdb"
     analytics_data_path: str = "data/curated/analytics.csv"
     analytics_encoding: str = "utf-8"
     analytics_separator: str = ","
