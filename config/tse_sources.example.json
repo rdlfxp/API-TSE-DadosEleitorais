@@ -1,0 +1,14 @@
+[
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2022/consulta_cand_2022_BRASIL.csv",
+    "target": "2022/consulta_cand_2022_BRASIL.csv"
+  },
+  {
+    "url": "https://exemplo.tse.jus.br/dados/2022/votacao_candidato_munzona_2022_BRASIL.zip",
+    "target": "2022/votacao_candidato_munzona_2022_BRASIL.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2022_BRASIL*.csv"
+    ]
+  }
+]
