@@ -158,3 +158,25 @@ def test_metrics_endpoint(client: TestClient):
     assert "requests_total" in text
     assert "requests_4xx_total" in text
     assert "requests_5xx_total" in text
+
+
+def test_rate_limit_returns_429(client: TestClient):
+    original_enabled = main_module.settings.rate_limit_enabled
+    original_limit = main_module.settings.rate_limit_max_requests_per_ip
+    original_window = main_module.settings.rate_limit_window_seconds
+    try:
+        main_module.settings.rate_limit_enabled = True
+        main_module.settings.rate_limit_max_requests_per_ip = 2
+        main_module.settings.rate_limit_window_seconds = 60
+        main_module.RATE_LIMIT_COUNTERS.clear()
+
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").status_code == 200
+        blocked = client.get("/health")
+        assert blocked.status_code == 429
+        assert blocked.json()["message"] == "Limite de requisicoes excedido para este IP."
+    finally:
+        main_module.settings.rate_limit_enabled = original_enabled
+        main_module.settings.rate_limit_max_requests_per_ip = original_limit
+        main_module.settings.rate_limit_window_seconds = original_window
+        main_module.RATE_LIMIT_COUNTERS.clear()

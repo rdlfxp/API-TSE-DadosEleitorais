@@ -29,15 +29,18 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 METRICS_LOCK = Lock()
+RATE_LIMIT_LOCK = Lock()
 METRICS = {
     "requests_total": 0,
     "requests_5xx_total": 0,
     "requests_4xx_total": 0,
     "last_request_duration_ms": 0.0,
 }
+RATE_LIMIT_COUNTERS: dict[tuple[str, int], int] = {}
 
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Bad Request"},
+    429: {"model": ErrorResponse, "description": "Too Many Requests"},
     422: {"model": ErrorResponse, "description": "Validation Error"},
     503: {"model": ErrorResponse, "description": "Service Unavailable"},
 }
@@ -123,6 +126,44 @@ def get_service() -> AnalyticsService:
 async def observability_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-Id", str(uuid4()))
     started_at = time.perf_counter()
+    client_ip = (
+        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+    if settings.rate_limit_enabled:
+        window = max(1, int(settings.rate_limit_window_seconds))
+        limit = max(1, int(settings.rate_limit_max_requests_per_ip))
+        bucket = int(time.time() // window)
+        key = (client_ip, bucket)
+        blocked = False
+        with RATE_LIMIT_LOCK:
+            RATE_LIMIT_COUNTERS[key] = RATE_LIMIT_COUNTERS.get(key, 0) + 1
+            if RATE_LIMIT_COUNTERS[key] > limit:
+                blocked = True
+            expired = [k for k in RATE_LIMIT_COUNTERS if k[1] < bucket - 1]
+            for old in expired:
+                RATE_LIMIT_COUNTERS.pop(old, None)
+
+        if blocked:
+            with METRICS_LOCK:
+                METRICS["requests_4xx_total"] += 1
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "rate_limit_exceeded",
+                        "request_id": request_id,
+                        "client_ip": client_ip,
+                        "path": request.url.path,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return JSONResponse(
+                status_code=429,
+                headers={"X-Request-Id": request_id, "Retry-After": str(window)},
+                content={"message": "Limite de requisicoes excedido para este IP."},
+            )
 
     with METRICS_LOCK:
         METRICS["requests_total"] += 1

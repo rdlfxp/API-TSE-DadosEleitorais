@@ -3,6 +3,11 @@ name: Data Refresh
 on:
   workflow_dispatch:
     inputs:
+      normalize_years:
+        description: "Anos para normalizacao (separados por espaco)"
+        required: false
+        default: "2018 2020 2022 2024"
+        type: string
       publish_to_r2:
         description: "Publicar curated/snapshots no Cloudflare R2"
         required: false
@@ -57,8 +62,11 @@ jobs:
       - name: Normalize raw data
         if: steps.raw_check.outputs.csv_count != '0'
         run: |
+          NORMALIZE_YEARS="${{ inputs.normalize_years || '2018 2020 2022 2024' }}"
+          echo "Normalize years: $NORMALIZE_YEARS"
           python scripts/normalize.py \
             --raw-dir data/raw \
+            --years $NORMALIZE_YEARS \
             --quality-gate \
             --max-duplicate-rows 0 \
             --max-negative-votes 0 \
