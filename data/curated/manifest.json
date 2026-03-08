@@ -1,0 +1,31 @@
+{
+  "generated_at_utc": "2026-03-08T02:12:22.467966+00:00",
+  "output": "data/curated/analytics.csv",
+  "output_format": "csv",
+  "output_sha256": "43c2afaa17ac5731d65b719821496cb9eaf1aef6959fa14cca18fa2cc048c3da",
+  "report": "data/curated/quality_report.json",
+  "source_files_count": 2,
+  "source_files": [
+    {
+      "kind": "votacao",
+      "path": "data/raw/2022/votacao_candidato_munzona_2022_BRASIL.csv",
+      "size_bytes": 4316380810,
+      "sha256": "70163821b45ba4c4a901b5a9459d27f4cc539f09a42e9a7b8fc0fc54cadfd3d9"
+    },
+    {
+      "kind": "consulta",
+      "path": "data/raw/2022/consulta_cand_2022_BRASIL.csv",
+      "size_bytes": 15746535,
+      "sha256": "5ee4c93864d0ee87f4cfcd752ca630b687033db1c84ad115c6b18a1c5c83a41e"
+    }
+  ],
+  "summary": {
+    "linhas_totais": 26531,
+    "anos": [
+      2022
+    ],
+    "required_missing_columns": [],
+    "duplicate_rows_on_key": 0,
+    "votos_invalidos_negativos": 0
+  }
+}
