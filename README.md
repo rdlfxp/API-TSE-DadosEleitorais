@@ -327,6 +327,26 @@ O que ele faz:
 Execucao manual:
 - GitHub > `Actions` > `Data Refresh` > `Run workflow`
 
+Validacao go/no-go local:
+
+```bash
+python3 scripts/go_no_go.py \
+  --analytics data/curated/analytics.csv \
+  --quality-report data/curated/quality_report.json \
+  --manifest data/curated/manifest.json \
+  --require-release \
+  --max-duplicate-rows 0 \
+  --max-negative-votes 0 \
+  --max-required-null-rate 0.02
+```
+
+Criterios criticos (NO-GO se falhar):
+- arquivos curated obrigatorios ausentes
+- colunas obrigatorias faltantes
+- duplicidade/votos negativos acima do limite
+- taxa de nulos acima do limite por coluna obrigatoria
+- manifest sem hash/output/fontes
+
 ## 11) Deploy (staging/producao)
 
 Arquivos:

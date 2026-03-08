@@ -49,6 +49,18 @@ jobs:
         if: steps.raw_check.outputs.csv_count != '0'
         run: python scripts/publish_snapshot.py
 
+      - name: Go/No-Go validation
+        if: steps.raw_check.outputs.csv_count != '0'
+        run: |
+          python scripts/go_no_go.py \
+            --analytics data/curated/analytics.csv \
+            --quality-report data/curated/quality_report.json \
+            --manifest data/curated/manifest.json \
+            --require-release \
+            --max-duplicate-rows 0 \
+            --max-negative-votes 0 \
+            --max-required-null-rate 0.02
+
       - name: Upload curated artifacts
         if: steps.raw_check.outputs.csv_count != '0'
         uses: actions/upload-artifact@v4
