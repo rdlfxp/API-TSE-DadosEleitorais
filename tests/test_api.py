@@ -180,3 +180,58 @@ def test_rate_limit_returns_429(client: TestClient):
         main_module.settings.rate_limit_max_requests_per_ip = original_limit
         main_module.settings.rate_limit_window_seconds = original_window
         main_module.RATE_LIMIT_COUNTERS.clear()
+
+
+def test_time_series_endpoint(client: TestClient):
+    response = client.get(
+        "/v1/analytics/serie-temporal",
+        params={"metric": "votos_nominais", "uf": "SP", "cargo": "Deputado Estadual"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metric"] == "votos_nominais"
+    assert payload["items"][0]["ano"] == 2022
+    assert payload["items"][0]["value"] == 20000
+
+
+def test_ranking_endpoint(client: TestClient):
+    response = client.get(
+        "/v1/analytics/ranking",
+        params={
+            "group_by": "partido",
+            "metric": "votos_nominais",
+            "ano": 2022,
+            "uf": "SP",
+            "cargo": "Deputado Estadual",
+            "top_n": 2,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["group_by"] == "partido"
+    assert payload["metric"] == "votos_nominais"
+    assert payload["top_n"] == 2
+    assert len(payload["items"]) == 2
+    assert payload["items"][0]["label"] == "AAA"
+    assert payload["items"][0]["value"] == 12000
+
+
+def test_uf_map_endpoint(client: TestClient):
+    response = client.get("/v1/analytics/mapa-uf", params={"metric": "registros", "ano": 2022})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metric"] == "registros"
+    assert payload["items"][0]["uf"] == "SP"
+    assert payload["items"][0]["value"] == 2
+
+
+def test_time_series_invalid_metric_returns_400(client: TestClient):
+    response = client.get("/v1/analytics/serie-temporal", params={"metric": "invalida"})
+    assert response.status_code == 400
+    assert response.json()["message"] == "metric invalida ou coluna ausente no dataset"
+
+
+def test_ranking_invalid_group_by_returns_400(client: TestClient):
+    response = client.get("/v1/analytics/ranking", params={"group_by": "invalido", "metric": "registros"})
+    assert response.status_code == 400
+    assert response.json()["message"] == "group_by/metric invalido ou coluna ausente no dataset"

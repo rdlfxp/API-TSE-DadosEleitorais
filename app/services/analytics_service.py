@@ -293,6 +293,164 @@ class AnalyticsService:
             "bins": dist,
         }
 
+    def _aggregate_metric(self, df: pd.DataFrame, metric: str, group_cols: list[str]) -> pd.DataFrame | None:
+        col_votos = self._pick_col(
+            ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
+        )
+        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+
+        if metric == "registros":
+            out = df.groupby(group_cols, dropna=False).size().reset_index(name="value")
+            return out
+
+        if metric == "votos_nominais":
+            if not col_votos:
+                return None
+            tmp = df.assign(_votos=pd.to_numeric(df[col_votos], errors="coerce").fillna(0))
+            out = tmp.groupby(group_cols, dropna=False)["_votos"].sum().reset_index(name="value")
+            return out
+
+        if metric == "candidatos":
+            if not col_candidato:
+                return None
+            out = (
+                df.groupby(group_cols, dropna=False)[col_candidato]
+                .nunique(dropna=True)
+                .reset_index(name="value")
+            )
+            return out
+
+        if metric == "eleitos":
+            if not col_situacao:
+                return None
+            tmp = df.assign(
+                _eleito=df[col_situacao].astype(str).str.upper().isin(ELEITO_LABELS).astype(int)
+            )
+            out = tmp.groupby(group_cols, dropna=False)["_eleito"].sum().reset_index(name="value")
+            return out
+
+        return None
+
+    def time_series(
+        self,
+        metric: str = "votos_nominais",
+        uf: str | None = None,
+        cargo: str | None = None,
+        somente_eleitos: bool = False,
+    ) -> list[dict]:
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        if not col_ano:
+            return []
+
+        df = self._apply_filters(ano=None, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        tmp = df.assign(_ano=pd.to_numeric(df[col_ano], errors="coerce")).dropna(subset=["_ano"])
+        if tmp.empty:
+            return []
+
+        agg = self._aggregate_metric(tmp, metric=metric, group_cols=["_ano"])
+        if agg is None or agg.empty:
+            return []
+
+        agg = agg.sort_values("_ano")
+        items: list[dict] = []
+        for _, row in agg.iterrows():
+            items.append({"ano": int(row["_ano"]), "value": float(row["value"])})
+        return items
+
+    def ranking(
+        self,
+        group_by: str = "partido",
+        metric: str = "votos_nominais",
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        somente_eleitos: bool = False,
+        top_n: int | None = None,
+    ) -> list[dict]:
+        group_map = {
+            "candidato": ["NM_CANDIDATO", "NM_URNA_CANDIDATO"],
+            "partido": ["SG_PARTIDO"],
+            "cargo": ["DS_CARGO", "DS_CARGO_D"],
+            "uf": ["SG_UF"],
+        }
+        options = group_map.get(group_by)
+        if not options:
+            return []
+        col_group = self._pick_col(options)
+        if not col_group:
+            return []
+
+        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        agg = self._aggregate_metric(df, metric=metric, group_cols=[col_group])
+        if agg is None or agg.empty:
+            return []
+
+        agg = agg.assign(
+            **{
+                col_group: agg[col_group]
+                .fillna("N/A")
+                .astype(str)
+                .str.strip()
+                .replace("", "N/A")
+            }
+        )
+        agg = agg.groupby(col_group, as_index=False)["value"].sum()
+        agg = agg.sort_values("value", ascending=False)
+        n = min(top_n or self.default_top_n, self.max_top_n)
+        agg = agg.head(n)
+        total = float(agg["value"].sum()) or 1.0
+        items: list[dict] = []
+        for _, row in agg.iterrows():
+            val = float(row["value"])
+            items.append(
+                {
+                    "label": str(row[col_group]),
+                    "value": val,
+                    "percentage": round((val / total) * 100, 2),
+                }
+            )
+        return items
+
+    def uf_map(
+        self,
+        metric: str = "votos_nominais",
+        ano: int | None = None,
+        cargo: str | None = None,
+        somente_eleitos: bool = False,
+    ) -> list[dict]:
+        col_uf = self._pick_col(["SG_UF"])
+        if not col_uf:
+            return []
+        df = self._apply_filters(ano=ano, uf=None, cargo=cargo, somente_eleitos=somente_eleitos)
+        agg = self._aggregate_metric(df, metric=metric, group_cols=[col_uf])
+        if agg is None or agg.empty:
+            return []
+
+        agg = agg.assign(
+            **{
+                col_uf: agg[col_uf]
+                .fillna("N/A")
+                .astype(str)
+                .str.upper()
+                .str.strip()
+                .replace("", "N/A")
+            }
+        )
+        agg = agg.groupby(col_uf, as_index=False)["value"].sum().sort_values("value", ascending=False)
+        total = float(agg["value"].sum()) or 1.0
+        items: list[dict] = []
+        for _, row in agg.iterrows():
+            val = float(row["value"])
+            items.append(
+                {
+                    "uf": str(row[col_uf]),
+                    "value": val,
+                    "percentage": round((val / total) * 100, 2),
+                }
+            )
+        return items
+
     def search_candidates(
         self,
         query: str,
