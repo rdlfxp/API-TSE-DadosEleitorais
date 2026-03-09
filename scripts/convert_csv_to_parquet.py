@@ -25,13 +25,17 @@ def main() -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    csv_path = str(input_path).replace("'", "''")
+    parquet_path = str(output_path).replace("'", "''")
+    delim = str(args.delimiter).replace("'", "''")
+
     con = duckdb.connect(database=":memory:")
     con.execute(
-        (
-            "COPY (SELECT * FROM read_csv_auto(?, delim=?, header=true, ignore_errors=true)) "
-            "TO ? (FORMAT PARQUET, COMPRESSION ZSTD)"
-        ),
-        [str(input_path), args.delimiter, str(output_path)],
+        "COPY ("
+        f"SELECT * FROM read_csv_auto('{csv_path}', delim='{delim}', header=true, ignore_errors=true)"
+        ") TO "
+        f"'{parquet_path}' "
+        "(FORMAT PARQUET, COMPRESSION ZSTD)"
     )
 
     print(f"[convert] input: {input_path}")
