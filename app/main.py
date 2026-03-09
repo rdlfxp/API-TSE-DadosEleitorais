@@ -18,7 +18,10 @@ from app.schemas import (
     FilterOptionsResponse,
     GroupedDistributionResponse,
     OverviewResponse,
+    RankingResponse,
+    TimeSeriesResponse,
     TopCandidatesResponse,
+    UFMapResponse,
 )
 from app.services.analytics_service import AnalyticsService
 from app.services.duckdb_analytics_service import DuckDBAnalyticsService
@@ -326,3 +329,57 @@ def analytics_age(
 ) -> AgeStatsResponse:
     data = get_service().age_stats(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
     return AgeStatsResponse(**data)
+
+
+@app.get("/v1/analytics/serie-temporal", response_model=TimeSeriesResponse, responses=ERROR_RESPONSES)
+def analytics_time_series(
+    metric: str = Query(
+        default="votos_nominais",
+        description="Valores: votos_nominais, candidatos, eleitos, registros",
+    ),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    somente_eleitos: bool = False,
+) -> TimeSeriesResponse:
+    items = get_service().time_series(metric=metric, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+    if not items:
+        raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
+    return TimeSeriesResponse(metric=metric, items=items)
+
+
+@app.get("/v1/analytics/ranking", response_model=RankingResponse, responses=ERROR_RESPONSES)
+def analytics_ranking(
+    group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"),
+    metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
+    ano: int | None = None,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    somente_eleitos: bool = False,
+    top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
+) -> RankingResponse:
+    effective_top_n = top_n or settings.default_top_n
+    items = get_service().ranking(
+        group_by=group_by,
+        metric=metric,
+        ano=ano,
+        uf=uf,
+        cargo=cargo,
+        somente_eleitos=somente_eleitos,
+        top_n=effective_top_n,
+    )
+    if not items:
+        raise HTTPException(status_code=400, detail="group_by/metric invalido ou coluna ausente no dataset")
+    return RankingResponse(group_by=group_by, metric=metric, top_n=effective_top_n, items=items)
+
+
+@app.get("/v1/analytics/mapa-uf", response_model=UFMapResponse, responses=ERROR_RESPONSES)
+def analytics_uf_map(
+    metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
+    ano: int | None = None,
+    cargo: str | None = None,
+    somente_eleitos: bool = False,
+) -> UFMapResponse:
+    items = get_service().uf_map(metric=metric, ano=ano, cargo=cargo, somente_eleitos=somente_eleitos)
+    if not items:
+        raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
+    return UFMapResponse(metric=metric, items=items)

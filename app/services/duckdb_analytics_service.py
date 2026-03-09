@@ -354,6 +354,138 @@ class DuckDBAnalyticsService:
             "bins": bins,
         }
 
+    def _metric_sql(self, metric: str) -> str | None:
+        col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+
+        if metric == "registros":
+            return "COUNT(*)"
+        if metric == "votos_nominais":
+            if not col_votos:
+                return None
+            return f"COALESCE(SUM(TRY_CAST({col_votos} AS DOUBLE)), 0)"
+        if metric == "candidatos":
+            if not col_candidato:
+                return None
+            return f"COUNT(DISTINCT CAST({col_candidato} AS VARCHAR))"
+        if metric == "eleitos":
+            if not col_situacao:
+                return None
+            labels = sorted(ELEITO_LABELS)
+            label_list = ", ".join(f"'{lbl}'" for lbl in labels)
+            return (
+                "SUM(CASE WHEN "
+                f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) IN ({label_list}) "
+                "THEN 1 ELSE 0 END)"
+            )
+        return None
+
+    def time_series(
+        self,
+        metric: str = "votos_nominais",
+        uf: str | None = None,
+        cargo: str | None = None,
+        somente_eleitos: bool = False,
+    ) -> list[dict]:
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        metric_sql = self._metric_sql(metric)
+        if not col_ano or not metric_sql:
+            return []
+
+        where, params = self._where(ano=None, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        rows = self._rows(
+            (
+                "SELECT "
+                f"TRY_CAST({col_ano} AS BIGINT) AS ano, "
+                f"{metric_sql} AS value "
+                f"FROM analytics {where} "
+                f"{'AND' if where else 'WHERE'} TRY_CAST({col_ano} AS BIGINT) IS NOT NULL "
+                "GROUP BY 1 ORDER BY 1"
+            ),
+            params,
+        )
+        return [{"ano": int(r[0]), "value": float(r[1] or 0)} for r in rows if r[0] is not None]
+
+    def ranking(
+        self,
+        group_by: str = "partido",
+        metric: str = "votos_nominais",
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        somente_eleitos: bool = False,
+        top_n: int | None = None,
+    ) -> list[dict]:
+        group_map = {
+            "candidato": ["NM_CANDIDATO", "NM_URNA_CANDIDATO"],
+            "partido": ["SG_PARTIDO"],
+            "cargo": ["DS_CARGO", "DS_CARGO_D"],
+            "uf": ["SG_UF"],
+        }
+        target_opts = group_map.get(group_by)
+        if not target_opts:
+            return []
+        target_col = self._pick_col(target_opts)
+        metric_sql = self._metric_sql(metric)
+        if not target_col or not metric_sql:
+            return []
+
+        where, params = self._where(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        n = min(top_n or self.default_top_n, self.max_top_n)
+        rows = self._rows(
+            (
+                "SELECT "
+                f"COALESCE(NULLIF(TRIM(CAST({target_col} AS VARCHAR)), ''), 'N/A') AS label, "
+                f"{metric_sql} AS value "
+                f"FROM analytics {where} "
+                "GROUP BY 1 ORDER BY value DESC LIMIT ?"
+            ),
+            params + [n],
+        )
+        total = float(sum(float(r[1] or 0) for r in rows) or 1.0)
+        return [
+            {
+                "label": str(r[0]),
+                "value": float(r[1] or 0),
+                "percentage": round((float(r[1] or 0) / total) * 100, 2),
+            }
+            for r in rows
+        ]
+
+    def uf_map(
+        self,
+        metric: str = "votos_nominais",
+        ano: int | None = None,
+        cargo: str | None = None,
+        somente_eleitos: bool = False,
+    ) -> list[dict]:
+        target_col = self._pick_col(["SG_UF"])
+        metric_sql = self._metric_sql(metric)
+        if not target_col or not metric_sql:
+            return []
+
+        where, params = self._where(ano=ano, uf=None, cargo=cargo, somente_eleitos=somente_eleitos)
+        rows = self._rows(
+            (
+                "SELECT "
+                f"COALESCE(NULLIF(UPPER(TRIM(CAST({target_col} AS VARCHAR))), ''), 'N/A') AS uf, "
+                f"{metric_sql} AS value "
+                f"FROM analytics {where} "
+                "GROUP BY 1 ORDER BY value DESC"
+            ),
+            params,
+        )
+        total = float(sum(float(r[1] or 0) for r in rows) or 1.0)
+        return [
+            {
+                "uf": str(r[0]),
+                "value": float(r[1] or 0),
+                "percentage": round((float(r[1] or 0) / total) * 100, 2),
+            }
+            for r in rows
+        ]
+
     def search_candidates(
         self,
         query: str,

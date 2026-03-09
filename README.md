@@ -156,8 +156,13 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /v1/analytics/distribuicao?group_by=genero&ano=2022&uf=SP` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=status&ano=2022&uf=SP&cargo=Senador` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/idade?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
+- `GET /v1/analytics/serie-temporal?metric=votos_nominais&uf=SP&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
+- `GET /v1/analytics/ranking?group_by=partido&metric=votos_nominais&ano=2022&uf=SP&top_n=10` (`200`, `400`, `422`, `503`)
+- `GET /v1/analytics/mapa-uf?metric=votos_nominais&ano=2022&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
 
-`group_by` aceitos: `status`, `genero`, `instrucao`, `cor_raca`, `estado_civil`, `ocupacao`, `cargo`, `uf`.
+`group_by` aceitos em `/distribuicao`: `status`, `genero`, `instrucao`, `cor_raca`, `estado_civil`, `ocupacao`, `cargo`, `uf`.
+`metric` aceitos em `/serie-temporal`, `/ranking`, `/mapa-uf`: `votos_nominais`, `candidatos`, `eleitos`, `registros`.
+`group_by` aceitos em `/ranking`: `candidato`, `partido`, `cargo`, `uf`.
 
 ### Contrato de erro (padrao)
 

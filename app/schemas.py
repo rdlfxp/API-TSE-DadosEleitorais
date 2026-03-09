@@ -69,3 +69,37 @@ class FilterOptionsResponse(BaseModel):
     anos: list[int] = Field(default_factory=list)
     ufs: list[str] = Field(default_factory=list)
     cargos: list[str] = Field(default_factory=list)
+
+
+class TimeSeriesItem(BaseModel):
+    ano: int
+    value: float
+
+
+class TimeSeriesResponse(BaseModel):
+    metric: str
+    items: list[TimeSeriesItem] = Field(default_factory=list)
+
+
+class RankingItem(BaseModel):
+    label: str
+    value: float
+    percentage: float
+
+
+class RankingResponse(BaseModel):
+    group_by: str
+    metric: str
+    top_n: int
+    items: list[RankingItem] = Field(default_factory=list)
+
+
+class UFMapItem(BaseModel):
+    uf: str
+    value: float
+    percentage: float
+
+
+class UFMapResponse(BaseModel):
+    metric: str
+    items: list[UFMapItem] = Field(default_factory=list)
