@@ -14,6 +14,12 @@ ELEITO_LABELS = {
     "MÉDIA",
 }
 
+MUNICIPAL_CARGOS = {
+    "PREFEITO",
+    "VICE-PREFEITO",
+    "VEREADOR",
+}
+
 
 @dataclass
 class AnalyticsService:
@@ -72,12 +78,14 @@ class AnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> pd.DataFrame:
         df = self.dataframe.copy()
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
         if ano is not None and col_ano:
@@ -86,9 +94,14 @@ class AnalyticsService:
             df = df[df[col_uf].astype(str).str.upper() == uf.upper()]
         if cargo and col_cargo:
             df = df[df[col_cargo].astype(str).str.lower() == cargo.lower()]
+        if municipio and col_municipio:
+            df = df[df[col_municipio].astype(str).str.upper().str.strip() == municipio.upper().strip()]
         if somente_eleitos and col_situacao:
             df = df[df[col_situacao].astype(str).str.upper().isin(ELEITO_LABELS)]
         return df
+
+    def _normalize_text(self, series: pd.Series) -> pd.Series:
+        return series.fillna("").astype(str).str.strip()
 
     def filter_options(self) -> dict:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
@@ -531,5 +544,97 @@ class AnalyticsService:
             "page_size": page_size,
             "total": total,
             "total_pages": total_pages,
+            "items": items,
+        }
+
+    def official_vacancies(
+        self,
+        group_by: str = "cargo",
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+    ) -> dict:
+        allowed_groups = {"cargo", "uf", "municipio"}
+        if group_by not in allowed_groups:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+
+        if not col_candidato or not col_situacao:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        if group_by == "cargo" and not col_cargo:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+        if group_by == "uf" and not col_uf:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+        if group_by == "municipio" and (not col_municipio or not col_cargo):
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        df = self._apply_filters(
+            ano=ano,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=True,
+        )
+        if df.empty:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        if group_by == "municipio":
+            cargos_upper = self._normalize_text(df[col_cargo]).str.upper()
+            df = df[cargos_upper.isin(MUNICIPAL_CARGOS)]
+            if df.empty:
+                return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        dedup_keys = [col_candidato]
+        if col_ano:
+            dedup_keys.append(col_ano)
+        if col_uf:
+            dedup_keys.append(col_uf)
+        if col_cargo:
+            dedup_keys.append(col_cargo)
+        if group_by == "municipio" and col_municipio:
+            dedup_keys.append(col_municipio)
+
+        dedup = df.drop_duplicates(subset=dedup_keys, keep="first").copy()
+
+        group_col_map = {
+            "cargo": col_cargo,
+            "uf": col_uf,
+            "municipio": col_municipio,
+        }
+        group_col = group_col_map[group_by]
+        grouped = (
+            dedup.assign(_group=self._normalize_text(dedup[group_col]).replace("", "N/A"))
+            .groupby("_group", dropna=False)
+            .agg(vagas_oficiais=("_group", "size"))
+            .reset_index()
+            .sort_values("vagas_oficiais", ascending=False)
+        )
+
+        items: list[dict] = []
+        for _, row in grouped.iterrows():
+            group_val = str(row["_group"]) if pd.notna(row["_group"]) else "N/A"
+            items.append(
+                {
+                    "ano": int(ano) if ano is not None else None,
+                    "uf": (group_val if group_by == "uf" else (uf.upper().strip() if uf else None)),
+                    "cargo": (group_val if group_by == "cargo" else (cargo.strip() if cargo else None)),
+                    "municipio": (
+                        group_val if group_by == "municipio" else (municipio.strip() if municipio else None)
+                    ),
+                    "vagas_oficiais": int(row["vagas_oficiais"]),
+                }
+            )
+
+        return {
+            "group_by": group_by,
+            "total_vagas_oficiais": int(sum(item["vagas_oficiais"] for item in items)),
             "items": items,
         }

@@ -159,10 +159,12 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /v1/analytics/serie-temporal?metric=votos_nominais&uf=SP&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/ranking?group_by=partido&metric=votos_nominais&ano=2022&uf=SP&top_n=10` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/mapa-uf?metric=votos_nominais&ano=2022&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
+- `GET /v1/analytics/vagas-oficiais?ano=2024&uf=SP&group_by=cargo` (`200`, `400`, `422`, `503`)
 
 `group_by` aceitos em `/distribuicao`: `status`, `genero`, `instrucao`, `cor_raca`, `estado_civil`, `ocupacao`, `cargo`, `uf`.
 `metric` aceitos em `/serie-temporal`, `/ranking`, `/mapa-uf`: `votos_nominais`, `candidatos`, `eleitos`, `registros`.
 `group_by` aceitos em `/ranking`: `candidato`, `partido`, `cargo`, `uf`.
+`group_by` aceitos em `/vagas-oficiais`: `cargo`, `uf`, `municipio`.
 
 ### Contrato de erro (padrao)
 
@@ -293,6 +295,36 @@ Resposta `200`:
     { "label": "60-69", "value": 240, "percentage": 12.47 },
     { "label": "70+", "value": 54, "percentage": 2.81 }
   ]
+}
+```
+
+### `GET /vagas-oficiais?ano=2024&uf=SP&group_by=cargo`
+
+Query params:
+- `group_by` (default `cargo`): `cargo`, `uf`, `municipio`
+- `ano` (opcional)
+- `uf` (opcional, 2 chars)
+- `cargo` (opcional)
+- `municipio` (opcional)
+
+Resposta `200`:
+
+```json
+{
+  "group_by": "cargo",
+  "total_vagas_oficiais": 4865,
+  "items": [
+    { "ano": 2024, "uf": "SP", "municipio": null, "cargo": "Vereador", "vagas_oficiais": 4243 },
+    { "ano": 2024, "uf": "SP", "municipio": null, "cargo": "Prefeito", "vagas_oficiais": 622 }
+  ]
+}
+```
+
+Erro `400`:
+
+```json
+{
+  "message": "group_by invalido, coluna ausente no dataset ou combinacao sem vagas oficiais (ex.: group_by=municipio para cargo nao municipal)."
 }
 ```
 

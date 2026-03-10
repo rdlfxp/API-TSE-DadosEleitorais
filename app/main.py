@@ -16,6 +16,7 @@ from app.schemas import (
     CandidateSearchResponse,
     ErrorResponse,
     FilterOptionsResponse,
+    OfficialVacanciesResponse,
     GroupedDistributionResponse,
     OverviewResponse,
     RankingResponse,
@@ -383,3 +384,29 @@ def analytics_uf_map(
     if not items:
         raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
     return UFMapResponse(metric=metric, items=items)
+
+
+@app.get("/v1/analytics/vagas-oficiais", response_model=OfficialVacanciesResponse, responses=ERROR_RESPONSES)
+def analytics_official_vacancies(
+    group_by: str = Query(default="cargo", description="Valores: cargo, uf, municipio"),
+    ano: int | None = None,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    municipio: str | None = None,
+) -> OfficialVacanciesResponse:
+    data = get_service().official_vacancies(
+        group_by=group_by,
+        ano=ano,
+        uf=uf,
+        cargo=cargo,
+        municipio=municipio,
+    )
+    if not data.get("items"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "group_by invalido, coluna ausente no dataset ou combinacao sem vagas oficiais "
+                "(ex.: group_by=municipio para cargo nao municipal)."
+            ),
+        )
+    return OfficialVacanciesResponse(**data)
