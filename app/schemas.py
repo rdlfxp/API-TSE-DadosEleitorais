@@ -103,3 +103,17 @@ class UFMapItem(BaseModel):
 class UFMapResponse(BaseModel):
     metric: str
     items: list[UFMapItem] = Field(default_factory=list)
+
+
+class OfficialVacancyItem(BaseModel):
+    ano: int | None = None
+    uf: str | None = None
+    municipio: str | None = None
+    cargo: str | None = None
+    vagas_oficiais: int
+
+
+class OfficialVacanciesResponse(BaseModel):
+    group_by: str
+    total_vagas_oficiais: int
+    items: list[OfficialVacancyItem] = Field(default_factory=list)

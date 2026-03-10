@@ -14,6 +14,12 @@ ELEITO_LABELS = {
     "MÉDIA",
 }
 
+MUNICIPAL_CARGOS = {
+    "PREFEITO",
+    "VICE-PREFEITO",
+    "VEREADOR",
+}
+
 
 @dataclass
 class DuckDBAnalyticsService:
@@ -87,6 +93,7 @@ class DuckDBAnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> tuple[str, list]:
         clauses = []
@@ -95,6 +102,7 @@ class DuckDBAnalyticsService:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
         if ano is not None and col_ano:
@@ -106,6 +114,9 @@ class DuckDBAnalyticsService:
         if cargo and col_cargo:
             clauses.append(f"LOWER(TRIM(CAST({col_cargo} AS VARCHAR))) = ?")
             params.append(cargo.lower())
+        if municipio and col_municipio:
+            clauses.append(f"UPPER(TRIM(CAST({col_municipio} AS VARCHAR))) = ?")
+            params.append(municipio.upper().strip())
         if somente_eleitos and col_situacao:
             labels = sorted(ELEITO_LABELS)
             placeholders = ", ".join(["?"] * len(labels))
@@ -560,5 +571,94 @@ class DuckDBAnalyticsService:
             "page_size": page_size,
             "total": total,
             "total_pages": total_pages,
+            "items": items,
+        }
+
+    def official_vacancies(
+        self,
+        group_by: str = "cargo",
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+    ) -> dict:
+        allowed_groups = {"cargo", "uf", "municipio"}
+        if group_by not in allowed_groups:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+
+        if not col_candidato or not col_situacao:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+        if group_by == "cargo" and not col_cargo:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+        if group_by == "uf" and not col_uf:
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+        if group_by == "municipio" and (not col_municipio or not col_cargo):
+            return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+
+        where, params = self._where(
+            ano=ano,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=True,
+        )
+
+        if group_by == "municipio":
+            placeholders = ", ".join(["?"] * len(MUNICIPAL_CARGOS))
+            where = f"{where} {'AND' if where else 'WHERE'} UPPER(TRIM(CAST({col_cargo} AS VARCHAR))) IN ({placeholders})"
+            params = params + sorted(MUNICIPAL_CARGOS)
+
+        group_col_map = {"cargo": col_cargo, "uf": col_uf, "municipio": col_municipio}
+        group_col = group_col_map[group_by]
+        group_expr = (
+            f"COALESCE(NULLIF({('UPPER(' if group_by == 'uf' else '')}TRIM(CAST({group_col} AS VARCHAR)){')' if group_by == 'uf' else ''}, ''), 'N/A')"
+        )
+
+        dedup_cols = [col_candidato]
+        if col_ano:
+            dedup_cols.append(col_ano)
+        if col_uf:
+            dedup_cols.append(col_uf)
+        if col_cargo:
+            dedup_cols.append(col_cargo)
+        if group_by == "municipio" and col_municipio:
+            dedup_cols.append(col_municipio)
+        dedup_expr = ", ".join(dedup_cols)
+
+        rows = self._rows(
+            (
+                "SELECT group_value, COUNT(*) AS vagas_oficiais FROM ("
+                f"  SELECT DISTINCT {dedup_expr}, {group_expr} AS group_value "
+                f"  FROM analytics {where}"
+                ") t GROUP BY 1 ORDER BY vagas_oficiais DESC"
+            ),
+            params,
+        )
+
+        items: list[dict] = []
+        for group_value, vagas in rows:
+            value = str(group_value) if group_value is not None else "N/A"
+            items.append(
+                {
+                    "ano": int(ano) if ano is not None else None,
+                    "uf": (value if group_by == "uf" else (uf.upper().strip() if uf else None)),
+                    "cargo": (value if group_by == "cargo" else (cargo.strip() if cargo else None)),
+                    "municipio": (
+                        value if group_by == "municipio" else (municipio.strip() if municipio else None)
+                    ),
+                    "vagas_oficiais": int(vagas or 0),
+                }
+            )
+
+        return {
+            "group_by": group_by,
+            "total_vagas_oficiais": int(sum(item["vagas_oficiais"] for item in items)),
             "items": items,
         }
