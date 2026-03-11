@@ -599,6 +599,22 @@
             }
           },
           {
+            "name": "municipio",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Municipio"
+            }
+          },
+          {
             "name": "somente_eleitos",
             "in": "query",
             "required": false,
