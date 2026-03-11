@@ -256,8 +256,9 @@ def analytics_overview(
     ano: int | None = None,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
 ) -> OverviewResponse:
-    data = get_service().overview(ano=ano, uf=uf, cargo=cargo)
+    data = get_service().overview(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
     return OverviewResponse(**data)
 
 
@@ -272,9 +273,10 @@ def analytics_top_candidates(
     ano: int | None = None,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
     top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> TopCandidatesResponse:
-    items = get_service().top_candidates(ano=ano, uf=uf, cargo=cargo, top_n=top_n)
+    items = get_service().top_candidates(ano=ano, uf=uf, cargo=cargo, municipio=municipio, top_n=top_n)
     return TopCandidatesResponse(top_n=top_n or settings.default_top_n, items=items)
 
 
@@ -284,6 +286,7 @@ def analytics_candidates_search(
     ano: int | None = None,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateSearchResponse:
@@ -292,6 +295,7 @@ def analytics_candidates_search(
         ano=ano,
         uf=uf,
         cargo=cargo,
+        municipio=municipio,
         page=page,
         page_size=page_size,
     )
@@ -340,9 +344,16 @@ def analytics_time_series(
     ),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
     somente_eleitos: bool = False,
 ) -> TimeSeriesResponse:
-    items = get_service().time_series(metric=metric, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+    items = get_service().time_series(
+        metric=metric,
+        uf=uf,
+        cargo=cargo,
+        municipio=municipio,
+        somente_eleitos=somente_eleitos,
+    )
     if not items:
         raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
     return TimeSeriesResponse(metric=metric, items=items)
@@ -355,6 +366,7 @@ def analytics_ranking(
     ano: int | None = None,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
     somente_eleitos: bool = False,
     top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> RankingResponse:
@@ -365,6 +377,7 @@ def analytics_ranking(
         ano=ano,
         uf=uf,
         cargo=cargo,
+        municipio=municipio,
         somente_eleitos=somente_eleitos,
         top_n=effective_top_n,
     )
@@ -378,9 +391,16 @@ def analytics_uf_map(
     metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
     ano: int | None = None,
     cargo: str | None = None,
+    municipio: str | None = None,
     somente_eleitos: bool = False,
 ) -> UFMapResponse:
-    items = get_service().uf_map(metric=metric, ano=ano, cargo=cargo, somente_eleitos=somente_eleitos)
+    items = get_service().uf_map(
+        metric=metric,
+        ano=ano,
+        cargo=cargo,
+        municipio=municipio,
+        somente_eleitos=somente_eleitos,
+    )
     if not items:
         raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
     return UFMapResponse(metric=metric, items=items)

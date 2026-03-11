@@ -164,8 +164,14 @@ class DuckDBAnalyticsService:
 
         return {"anos": anos, "ufs": ufs, "cargos": cargos}
 
-    def overview(self, ano: int | None = None, uf: str | None = None, cargo: str | None = None) -> dict:
-        where, params = self._where(ano=ano, uf=uf, cargo=cargo)
+    def overview(
+        self,
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+    ) -> dict:
+        where, params = self._where(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
@@ -215,6 +221,7 @@ class DuckDBAnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         top_n: int | None = None,
     ) -> list[dict]:
         col_candidato = self._pick_col(["NM_CANDIDATO"])
@@ -226,7 +233,7 @@ class DuckDBAnalyticsService:
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
-        where, params = self._where(ano=ano, uf=uf, cargo=cargo)
+        where, params = self._where(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
         n = min(top_n or self.default_top_n, self.max_top_n)
 
         rows = self._rows(
@@ -395,6 +402,7 @@ class DuckDBAnalyticsService:
         metric: str = "votos_nominais",
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> list[dict]:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
@@ -402,7 +410,13 @@ class DuckDBAnalyticsService:
         if not col_ano or not metric_sql:
             return []
 
-        where, params = self._where(ano=None, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        where, params = self._where(
+            ano=None,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         rows = self._rows(
             (
                 "SELECT "
@@ -423,6 +437,7 @@ class DuckDBAnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
         top_n: int | None = None,
     ) -> list[dict]:
@@ -440,7 +455,13 @@ class DuckDBAnalyticsService:
         if not target_col or not metric_sql:
             return []
 
-        where, params = self._where(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        where, params = self._where(
+            ano=ano,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         n = min(top_n or self.default_top_n, self.max_top_n)
         rows = self._rows(
             (
@@ -467,6 +488,7 @@ class DuckDBAnalyticsService:
         metric: str = "votos_nominais",
         ano: int | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> list[dict]:
         target_col = self._pick_col(["SG_UF"])
@@ -474,7 +496,13 @@ class DuckDBAnalyticsService:
         if not target_col or not metric_sql:
             return []
 
-        where, params = self._where(ano=ano, uf=None, cargo=cargo, somente_eleitos=somente_eleitos)
+        where, params = self._where(
+            ano=ano,
+            uf=None,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         rows = self._rows(
             (
                 "SELECT "
@@ -501,6 +529,7 @@ class DuckDBAnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
@@ -519,7 +548,7 @@ class DuckDBAnalyticsService:
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
-        where, params = self._where(ano=ano, uf=uf, cargo=cargo)
+        where, params = self._where(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
         pattern = f"%{q}%"
         filter_sql = (
             f"{where} {'AND' if where else 'WHERE'} LOWER(TRIM(CAST({col_candidato} AS VARCHAR))) LIKE ?"

@@ -146,6 +146,19 @@ def test_overview_with_filters(client: TestClient):
     assert payload["total_votos_nominais"] == 20000
 
 
+def test_overview_with_municipio_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/overview",
+        params={"ano": 2024, "uf": "SP", "municipio": "Campinas"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_registros"] == 2
+    assert payload["total_candidatos"] == 2
+    assert payload["total_eleitos"] == 2
+    assert payload["total_votos_nominais"] == 218000
+
+
 def test_top_candidates_respects_top_n(client: TestClient):
     response = client.get(
         "/v1/analytics/top-candidatos",
@@ -206,6 +219,17 @@ def test_candidates_search_query_validation(client: TestClient):
     assert payload["message"] == "Parametros de consulta invalidos."
 
 
+def test_candidates_search_with_municipio_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos",
+        params={"query": "vereador", "ano": 2024, "uf": "SP", "municipio": "Campinas"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["candidato"] == "Vereador C"
+
+
 def test_service_unavailable_returns_503(client: TestClient):
     main_module.service = None
     response = client.get("/v1/analytics/overview")
@@ -260,6 +284,16 @@ def test_time_series_endpoint(client: TestClient):
     assert payload["items"][0]["value"] == 20000
 
 
+def test_time_series_with_municipio_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/serie-temporal",
+        params={"metric": "votos_nominais", "uf": "SP", "municipio": "Campinas"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"] == [{"ano": 2024, "value": 218000.0}]
+
+
 def test_ranking_endpoint(client: TestClient):
     response = client.get(
         "/v1/analytics/ranking",
@@ -280,6 +314,26 @@ def test_ranking_endpoint(client: TestClient):
     assert len(payload["items"]) == 2
     assert payload["items"][0]["label"] == "AAA"
     assert payload["items"][0]["value"] == 12000
+
+
+def test_ranking_eleitos_with_municipio_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/ranking",
+        params={
+            "group_by": "partido",
+            "metric": "eleitos",
+            "ano": 2024,
+            "uf": "SP",
+            "municipio": "Campinas",
+            "top_n": 5,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 2
+    labels = {item["label"] for item in payload["items"]}
+    assert labels == {"DDD", "EEE"}
+    assert sum(item["value"] for item in payload["items"]) == 2
 
 
 def test_uf_map_endpoint(client: TestClient):
