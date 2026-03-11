@@ -164,8 +164,14 @@ class AnalyticsService:
 
         return {"anos": anos, "ufs": ufs, "cargos": cargos}
 
-    def overview(self, ano: int | None = None, uf: str | None = None, cargo: str | None = None) -> dict:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo)
+    def overview(
+        self,
+        ano: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+    ) -> dict:
+        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
@@ -193,9 +199,10 @@ class AnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         top_n: int | None = None,
     ) -> list[dict]:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo)
+        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
         col_candidato = self._pick_col(["NM_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
@@ -367,13 +374,20 @@ class AnalyticsService:
         metric: str = "votos_nominais",
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> list[dict]:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         if not col_ano:
             return []
 
-        df = self._apply_filters(ano=None, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        df = self._apply_filters(
+            ano=None,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         tmp = df.assign(_ano=pd.to_numeric(df[col_ano], errors="coerce")).dropna(subset=["_ano"])
         if tmp.empty:
             return []
@@ -395,6 +409,7 @@ class AnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
         top_n: int | None = None,
     ) -> list[dict]:
@@ -411,7 +426,13 @@ class AnalyticsService:
         if not col_group:
             return []
 
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        df = self._apply_filters(
+            ano=ano,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         agg = self._aggregate_metric(df, metric=metric, group_cols=[col_group])
         if agg is None or agg.empty:
             return []
@@ -447,12 +468,19 @@ class AnalyticsService:
         metric: str = "votos_nominais",
         ano: int | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> list[dict]:
         col_uf = self._pick_col(["SG_UF"])
         if not col_uf:
             return []
-        df = self._apply_filters(ano=ano, uf=None, cargo=cargo, somente_eleitos=somente_eleitos)
+        df = self._apply_filters(
+            ano=ano,
+            uf=None,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         agg = self._aggregate_metric(df, metric=metric, group_cols=[col_uf])
         if agg is None or agg.empty:
             return []
@@ -487,10 +515,11 @@ class AnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo)
+        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
 
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])
