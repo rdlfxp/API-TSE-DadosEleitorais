@@ -268,6 +268,7 @@ class DuckDBAnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> list[dict]:
         col_map = {
@@ -288,7 +289,13 @@ class DuckDBAnalyticsService:
         if not target_col:
             return []
 
-        where, params = self._where(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        where, params = self._where(
+            ano=ano,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         rows = self._rows(
             (
                 "SELECT "
