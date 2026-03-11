@@ -1,0 +1,38 @@
+name: Keep Alive
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate configuration
+        run: |
+          if [ -z "${HEALTHCHECK_URL}" ]; then
+            echo "Missing secret: RENDER_HEALTHCHECK_URL"
+            exit 1
+          fi
+        env:
+          HEALTHCHECK_URL: ${{ secrets.RENDER_HEALTHCHECK_URL }}
+
+      - name: Ping health endpoint
+        run: |
+          set -euo pipefail
+
+          HTTP_CODE="$(curl -sS -L --max-time 20 --retry 2 --retry-delay 2 --output /tmp/keepalive_body.txt --write-out "%{http_code}" "${HEALTHCHECK_URL}")"
+          echo "healthcheck_status=${HTTP_CODE}"
+
+          case "${HTTP_CODE}" in
+            2*) ;;
+            *)
+              echo "Healthcheck failed. Response body:"
+              cat /tmp/keepalive_body.txt || true
+              exit 1
+              ;;
+          esac
+        env:
+          HEALTHCHECK_URL: ${{ secrets.RENDER_HEALTHCHECK_URL }}

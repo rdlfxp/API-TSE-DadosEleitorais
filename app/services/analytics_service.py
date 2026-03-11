@@ -20,6 +20,11 @@ MUNICIPAL_CARGOS = {
     "VEREADOR",
 }
 
+NATIONAL_CARGOS = {
+    "PRESIDENTE",
+    "VICE-PRESIDENTE",
+}
+
 
 @dataclass
 class AnalyticsService:
@@ -97,11 +102,23 @@ class AnalyticsService:
         if municipio and col_municipio:
             df = df[df[col_municipio].astype(str).str.upper().str.strip() == municipio.upper().strip()]
         if somente_eleitos and col_situacao:
-            df = df[df[col_situacao].astype(str).str.upper().isin(ELEITO_LABELS)]
+            df = df[self._is_elected(df[col_situacao])]
         return df
 
     def _normalize_text(self, series: pd.Series) -> pd.Series:
         return series.fillna("").astype(str).str.strip()
+
+    def _is_elected(self, series: pd.Series) -> pd.Series:
+        normalized = self._normalize_text(series).str.upper()
+        return normalized.str.startswith("ELEITO")
+
+    def _cargo_scope(self, cargo: str | None) -> str:
+        cargo_up = (cargo or "").strip().upper()
+        if cargo_up in MUNICIPAL_CARGOS:
+            return "municipio"
+        if cargo_up in NATIONAL_CARGOS:
+            return "nacional"
+        return "uf"
 
     def filter_options(self) -> dict:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
@@ -157,7 +174,7 @@ class AnalyticsService:
 
         total_eleitos = None
         if col_situacao:
-            total_eleitos = int(df[col_situacao].astype(str).str.upper().isin(ELEITO_LABELS).sum())
+            total_eleitos = int(self._is_elected(df[col_situacao]).sum())
 
         total_votos = None
         if col_votos:
@@ -338,7 +355,7 @@ class AnalyticsService:
             if not col_situacao:
                 return None
             tmp = df.assign(
-                _eleito=df[col_situacao].astype(str).str.upper().isin(ELEITO_LABELS).astype(int)
+                _eleito=self._is_elected(df[col_situacao]).astype(int)
             )
             out = tmp.groupby(group_cols, dropna=False)["_eleito"].sum().reset_index(name="value")
             return out
@@ -565,6 +582,7 @@ class AnalyticsService:
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        col_qt_vagas = self._pick_col(["QT_VAGAS", "QTD_VAGAS", "QTDE_VAGAS"])
 
         if not col_candidato or not col_situacao:
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
@@ -576,13 +594,7 @@ class AnalyticsService:
         if group_by == "municipio" and (not col_municipio or not col_cargo):
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
 
-        df = self._apply_filters(
-            ano=ano,
-            uf=uf,
-            cargo=cargo,
-            municipio=municipio,
-            somente_eleitos=True,
-        )
+        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=False)
         if df.empty:
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
 
@@ -592,35 +604,91 @@ class AnalyticsService:
             if df.empty:
                 return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
 
-        dedup_keys = [col_candidato]
-        if col_ano:
-            dedup_keys.append(col_ano)
-        if col_uf:
-            dedup_keys.append(col_uf)
-        if col_cargo:
-            dedup_keys.append(col_cargo)
-        if group_by == "municipio" and col_municipio:
-            dedup_keys.append(col_municipio)
-
-        dedup = df.drop_duplicates(subset=dedup_keys, keep="first").copy()
-
-        group_col_map = {
-            "cargo": col_cargo,
-            "uf": col_uf,
-            "municipio": col_municipio,
-        }
+        group_col_map = {"cargo": col_cargo, "uf": col_uf, "municipio": col_municipio}
         group_col = group_col_map[group_by]
-        grouped = (
-            dedup.assign(_group=self._normalize_text(dedup[group_col]).replace("", "N/A"))
-            .groupby("_group", dropna=False)
-            .agg(vagas_oficiais=("_group", "size"))
-            .reset_index()
-            .sort_values("vagas_oficiais", ascending=False)
-        )
+
+        if col_qt_vagas:
+            tmp = df.assign(
+                _ano=(
+                    pd.to_numeric(df[col_ano], errors="coerce").astype("Int64")
+                    if col_ano
+                    else pd.Series([pd.NA] * len(df), index=df.index)
+                ),
+                _uf=(
+                    self._normalize_text(df[col_uf]).str.upper().replace("", "N/A")
+                    if col_uf
+                    else pd.Series(["N/A"] * len(df), index=df.index)
+                ),
+                _cargo=(
+                    self._normalize_text(df[col_cargo]).replace("", "N/A")
+                    if col_cargo
+                    else pd.Series(["N/A"] * len(df), index=df.index)
+                ),
+                _municipio=(
+                    self._normalize_text(df[col_municipio]).replace("", "N/A")
+                    if col_municipio
+                    else pd.Series(["N/A"] * len(df), index=df.index)
+                ),
+                _group=self._normalize_text(df[group_col]).replace("", "N/A"),
+                _qt_vagas=pd.to_numeric(df[col_qt_vagas], errors="coerce").fillna(0),
+            )
+            tmp["_scope"] = tmp["_cargo"].apply(self._cargo_scope)
+            tmp["_unit_key"] = tmp.apply(
+                lambda row: (
+                    f"{row['_ano']}|{row['_cargo']}"
+                    if row["_scope"] == "nacional"
+                    else (
+                        f"{row['_ano']}|{row['_uf']}|{row['_cargo']}"
+                        if row["_scope"] == "uf"
+                        else f"{row['_ano']}|{row['_uf']}|{row['_cargo']}|{row['_municipio']}"
+                    )
+                ),
+                axis=1,
+            )
+            unit = (
+                tmp.groupby("_unit_key", as_index=False)
+                .agg(
+                    vagas_oficiais=("_qt_vagas", "max"),
+                    ano=("_ano", "max"),
+                    uf=("_uf", "max"),
+                    cargo=("_cargo", "max"),
+                    municipio=("_municipio", "max"),
+                    group_value=("_group", "max"),
+                    scope=("_scope", "max"),
+                )
+                .copy()
+            )
+            if group_by == "municipio":
+                unit = unit[unit["scope"] == "municipio"]
+            grouped = (
+                unit.groupby("group_value", as_index=False)
+                .agg(vagas_oficiais=("vagas_oficiais", "sum"))
+                .sort_values("vagas_oficiais", ascending=False)
+            )
+        else:
+            elected = df[self._is_elected(df[col_situacao])].copy()
+            if elected.empty:
+                return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
+            dedup_keys = [group_col, col_candidato]
+            if col_ano:
+                dedup_keys.append(col_ano)
+            if col_cargo:
+                dedup_keys.append(col_cargo)
+            if group_by == "municipio" and col_municipio:
+                dedup_keys.append(col_municipio)
+            dedup = elected.drop_duplicates(subset=dedup_keys, keep="first").copy()
+            grouped = (
+                dedup.assign(_group=self._normalize_text(dedup[group_col]).replace("", "N/A"))
+                .groupby("_group", dropna=False)
+                .agg(vagas_oficiais=("_group", "size"))
+                .reset_index()
+                .sort_values("vagas_oficiais", ascending=False)
+            )
 
         items: list[dict] = []
         for _, row in grouped.iterrows():
-            group_val = str(row["_group"]) if pd.notna(row["_group"]) else "N/A"
+            group_col_name = "group_value" if "group_value" in grouped.columns else "_group"
+            group_val = str(row[group_col_name]) if pd.notna(row[group_col_name]) else "N/A"
             items.append(
                 {
                     "ano": int(ano) if ano is not None else None,
