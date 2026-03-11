@@ -20,6 +20,11 @@ MUNICIPAL_CARGOS = {
     "VEREADOR",
 }
 
+NATIONAL_CARGOS = {
+    "PRESIDENTE",
+    "VICE-PRESIDENTE",
+}
+
 
 @dataclass
 class DuckDBAnalyticsService:
@@ -118,10 +123,7 @@ class DuckDBAnalyticsService:
             clauses.append(f"UPPER(TRIM(CAST({col_municipio} AS VARCHAR))) = ?")
             params.append(municipio.upper().strip())
         if somente_eleitos and col_situacao:
-            labels = sorted(ELEITO_LABELS)
-            placeholders = ", ".join(["?"] * len(labels))
-            clauses.append(f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) IN ({placeholders})")
-            params.extend(labels)
+            clauses.append(f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%'")
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
@@ -179,16 +181,14 @@ class DuckDBAnalyticsService:
 
         total_eleitos = None
         if col_situacao:
-            labels = sorted(ELEITO_LABELS)
-            placeholders = ", ".join(["?"] * len(labels))
             total_eleitos = int(
                 self._scalar(
                     (
                         "SELECT COUNT(*) FROM analytics "
                         f"{where} {'AND' if where else 'WHERE'} "
-                        f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) IN ({placeholders})"
+                        f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%'"
                     ),
-                    params + labels,
+                    params,
                 )
                 or 0
             )
@@ -383,11 +383,9 @@ class DuckDBAnalyticsService:
         if metric == "eleitos":
             if not col_situacao:
                 return None
-            labels = sorted(ELEITO_LABELS)
-            label_list = ", ".join(f"'{lbl}'" for lbl in labels)
             return (
                 "SUM(CASE WHEN "
-                f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) IN ({label_list}) "
+                f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%' "
                 "THEN 1 ELSE 0 END)"
             )
         return None
@@ -592,6 +590,7 @@ class DuckDBAnalyticsService:
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        col_qt_vagas = self._pick_col(["QT_VAGAS", "QTD_VAGAS", "QTDE_VAGAS"])
 
         if not col_candidato or not col_situacao:
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
@@ -602,13 +601,7 @@ class DuckDBAnalyticsService:
         if group_by == "municipio" and (not col_municipio or not col_cargo):
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
 
-        where, params = self._where(
-            ano=ano,
-            uf=uf,
-            cargo=cargo,
-            municipio=municipio,
-            somente_eleitos=True,
-        )
+        where, params = self._where(ano=ano, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=False)
 
         if group_by == "municipio":
             placeholders = ", ".join(["?"] * len(MUNICIPAL_CARGOS))
@@ -617,30 +610,80 @@ class DuckDBAnalyticsService:
 
         group_col_map = {"cargo": col_cargo, "uf": col_uf, "municipio": col_municipio}
         group_col = group_col_map[group_by]
-        group_expr = (
-            f"COALESCE(NULLIF({('UPPER(' if group_by == 'uf' else '')}TRIM(CAST({group_col} AS VARCHAR)){')' if group_by == 'uf' else ''}, ''), 'N/A')"
-        )
+        if group_by == "uf":
+            group_expr = f"COALESCE(NULLIF(UPPER(TRIM(CAST({group_col} AS VARCHAR))), ''), 'N/A')"
+        else:
+            group_expr = f"COALESCE(NULLIF(TRIM(CAST({group_col} AS VARCHAR)), ''), 'N/A')"
 
-        dedup_cols = [col_candidato]
-        if col_ano:
-            dedup_cols.append(col_ano)
-        if col_uf:
-            dedup_cols.append(col_uf)
-        if col_cargo:
-            dedup_cols.append(col_cargo)
-        if group_by == "municipio" and col_municipio:
-            dedup_cols.append(col_municipio)
-        dedup_expr = ", ".join(dedup_cols)
+        if col_qt_vagas:
+            def norm_expr(col: str | None, uppercase: bool = False) -> str:
+                if not col:
+                    return "'N/A'"
+                base = f"TRIM(CAST({col} AS VARCHAR))"
+                if uppercase:
+                    base = f"UPPER({base})"
+                return f"COALESCE(NULLIF({base}, ''), 'N/A')"
 
-        rows = self._rows(
-            (
-                "SELECT group_value, COUNT(*) AS vagas_oficiais FROM ("
-                f"  SELECT DISTINCT {dedup_expr}, {group_expr} AS group_value "
-                f"  FROM analytics {where}"
-                ") t GROUP BY 1 ORDER BY vagas_oficiais DESC"
-            ),
-            params,
-        )
+            select_cols = [
+                f"{f'TRY_CAST({col_ano} AS BIGINT)' if col_ano else 'NULL'} AS ano",
+                f"{norm_expr(col_uf, uppercase=True)} AS uf",
+                f"{norm_expr(col_cargo)} AS cargo",
+                f"{norm_expr(col_municipio)} AS municipio",
+                f"{group_expr} AS group_value",
+                f"COALESCE(TRY_CAST({col_qt_vagas} AS DOUBLE), 0) AS qt_vagas",
+            ]
+            raw_rows = self._rows(f"SELECT {', '.join(select_cols)} FROM analytics {where}", params)
+
+            unit_map: dict[str, dict] = {}
+            for row in raw_rows:
+                row_ano, row_uf, row_cargo, row_municipio, group_value, qt_vagas = row
+                cargo_up = str(row_cargo or "N/A").upper()
+                if cargo_up in MUNICIPAL_CARGOS:
+                    scope = "municipio"
+                elif cargo_up in NATIONAL_CARGOS:
+                    scope = "nacional"
+                else:
+                    scope = "uf"
+                if group_by == "municipio" and scope != "municipio":
+                    continue
+                if scope == "nacional":
+                    unit_key = f"{row_ano}|{row_cargo}"
+                elif scope == "uf":
+                    unit_key = f"{row_ano}|{row_uf}|{row_cargo}"
+                else:
+                    unit_key = f"{row_ano}|{row_uf}|{row_cargo}|{row_municipio}"
+                current = unit_map.get(unit_key)
+                if current is None or float(qt_vagas or 0) > current["qt_vagas"]:
+                    unit_map[unit_key] = {
+                        "group_value": str(group_value or "N/A"),
+                        "qt_vagas": float(qt_vagas or 0),
+                    }
+
+            agg: dict[str, float] = {}
+            for item in unit_map.values():
+                key = item["group_value"]
+                agg[key] = agg.get(key, 0.0) + float(item["qt_vagas"])
+            rows = sorted(agg.items(), key=lambda x: x[1], reverse=True)
+        else:
+            dedup_cols = [group_col, col_candidato]
+            if col_ano:
+                dedup_cols.append(col_ano)
+            if col_cargo:
+                dedup_cols.append(col_cargo)
+            if group_by == "municipio" and col_municipio:
+                dedup_cols.append(col_municipio)
+            dedup_expr = ", ".join(dedup_cols)
+
+            rows = self._rows(
+                (
+                    "SELECT group_value, COUNT(*) AS vagas_oficiais FROM ("
+                    f"  SELECT DISTINCT {dedup_expr}, {group_expr} AS group_value "
+                    f"  FROM analytics {where} "
+                    f"{'AND' if where else 'WHERE'} UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%'"
+                    ") t GROUP BY 1 ORDER BY vagas_oficiais DESC"
+                ),
+                params,
+            )
 
         items: list[dict] = []
         for group_value, vagas in rows:
@@ -653,7 +696,7 @@ class DuckDBAnalyticsService:
                     "municipio": (
                         value if group_by == "municipio" else (municipio.strip() if municipio else None)
                     ),
-                    "vagas_oficiais": int(vagas or 0),
+                    "vagas_oficiais": int(round(float(vagas or 0))),
                 }
             )
 
