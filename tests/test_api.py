@@ -185,6 +185,18 @@ def test_distribution_invalid_group_by_returns_400(client: TestClient):
     assert payload["message"] == "group_by invalido ou coluna ausente no dataset"
 
 
+def test_distribution_with_municipio_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/distribuicao",
+        params={"group_by": "cargo", "ano": 2024, "uf": "SP", "municipio": "Campinas"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["group_by"] == "cargo"
+    items = {item["label"]: item["value"] for item in payload["items"]}
+    assert items == {"Prefeito": 1.0, "Vereador": 1.0}
+
+
 def test_candidates_search_with_filters_and_order(client: TestClient):
     response = client.get(
         "/v1/analytics/candidatos",

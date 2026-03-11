@@ -311,6 +311,7 @@ def analytics_distribution(
     ano: int | None = None,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
     somente_eleitos: bool = False,
 ) -> GroupedDistributionResponse:
     items = get_service().distribution(
@@ -318,6 +319,7 @@ def analytics_distribution(
         ano=ano,
         uf=uf,
         cargo=cargo,
+        municipio=municipio,
         somente_eleitos=somente_eleitos,
     )
     if not items:

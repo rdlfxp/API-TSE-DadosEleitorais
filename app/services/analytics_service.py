@@ -239,6 +239,7 @@ class AnalyticsService:
         ano: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> list[dict]:
         col_map = {
@@ -259,7 +260,13 @@ class AnalyticsService:
         if not target_col:
             return []
 
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        df = self._apply_filters(
+            ano=ano,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         counts = (
             df[target_col]
             .fillna("N/A")
