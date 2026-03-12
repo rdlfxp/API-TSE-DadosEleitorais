@@ -29,6 +29,10 @@ class TopCandidateItem(BaseModel):
 
 class TopCandidatesResponse(BaseModel):
     top_n: int
+    page: int = 1
+    page_size: int
+    total: int
+    total_pages: int
     items: list[TopCandidateItem]
 
 

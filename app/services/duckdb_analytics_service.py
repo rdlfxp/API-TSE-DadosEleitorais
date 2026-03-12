@@ -237,19 +237,29 @@ class DuckDBAnalyticsService:
         cargo: str | None = None,
         municipio: str | None = None,
         top_n: int | None = None,
-    ) -> list[dict]:
+        page: int = 1,
+        page_size: int | None = None,
+    ) -> dict:
         col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_candidato = self._pick_col(["NM_CANDIDATO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        effective_page_size = min(page_size or top_n or self.default_top_n, self.max_top_n)
         if not col_candidato or not col_votos:
-            return []
+            return {
+                "top_n": effective_page_size,
+                "page": page,
+                "page_size": effective_page_size,
+                "total": 0,
+                "total_pages": 0,
+                "items": [],
+            }
 
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
         where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
-        n = min(top_n or self.default_top_n, self.max_top_n)
+        offset = (page - 1) * effective_page_size
 
         key_expr = (
             f"COALESCE(NULLIF(TRIM(CAST({col_candidate_key} AS VARCHAR)), ''), LOWER(TRIM(CAST({col_candidato} AS VARCHAR))))"
@@ -261,46 +271,59 @@ class DuckDBAnalyticsService:
         cargo_expr = f"{'CAST(' + col_cargo + ' AS VARCHAR)' if col_cargo else 'NULL'}"
         situacao_expr = f"{'CAST(' + col_situacao + ' AS VARCHAR)' if col_situacao else 'NULL'}"
         uf_norm_expr = f"{'NULLIF(UPPER(TRIM(CAST(' + col_uf + ' AS VARCHAR))), \'\')' if col_uf else 'NULL'}"
+        grouped_sql = (
+            "SELECT "
+            "MIN(candidato) AS candidato, "
+            "MIN(partido) AS partido, "
+            "MIN(cargo) AS cargo, "
+            "CASE WHEN COUNT(DISTINCT uf_norm) = 1 THEN MIN(uf_norm) ELSE NULL END AS uf, "
+            "SUM(votos) AS votos, "
+            "MIN(situacao) AS situacao "
+            "FROM ("
+            "  SELECT "
+            f"  {key_expr} AS candidate_key, "
+            f"  {candidato_expr} AS candidato, "
+            f"  {partido_expr} AS partido, "
+            f"  {cargo_expr} AS cargo, "
+            f"  {uf_norm_expr} AS uf_norm, "
+            f"  COALESCE(TRY_CAST({col_votos} AS BIGINT), 0) AS votos, "
+            f"  {situacao_expr} AS situacao "
+            f"  FROM analytics {where}"
+            ") t "
+            "WHERE candidate_key IS NOT NULL AND candidate_key <> '' "
+            "GROUP BY candidate_key"
+        )
+        total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
+        total_pages = (total + effective_page_size - 1) // effective_page_size
 
         rows = self._rows(
             (
-                "SELECT "
-                "MIN(candidato) AS candidato, "
-                "MIN(partido) AS partido, "
-                "MIN(cargo) AS cargo, "
-                "CASE WHEN COUNT(DISTINCT uf_norm) = 1 THEN MIN(uf_norm) ELSE NULL END AS uf, "
-                "SUM(votos) AS votos, "
-                "MIN(situacao) AS situacao "
-                "FROM ("
-                "  SELECT "
-                f"  {key_expr} AS candidate_key, "
-                f"  {candidato_expr} AS candidato, "
-                f"  {partido_expr} AS partido, "
-                f"  {cargo_expr} AS cargo, "
-                f"  {uf_norm_expr} AS uf_norm, "
-                f"  COALESCE(TRY_CAST({col_votos} AS BIGINT), 0) AS votos, "
-                f"  {situacao_expr} AS situacao "
-                f"  FROM analytics {where}"
-                ") t "
-                "WHERE candidate_key IS NOT NULL AND candidate_key <> '' "
-                "GROUP BY candidate_key "
+                "SELECT candidato, partido, cargo, uf, votos, situacao "
+                f"FROM ({grouped_sql}) g "
                 "ORDER BY votos DESC "
-                "LIMIT ?"
+                "LIMIT ? OFFSET ?"
             ),
-            params + [n],
+            params + [effective_page_size, offset],
         )
 
-        return [
-            {
-                "candidato": r[0] or "",
-                "partido": r[1],
-                "cargo": r[2],
-                "uf": r[3],
-                "votos": int(r[4] or 0),
-                "situacao": r[5],
-            }
-            for r in rows
-        ]
+        return {
+            "top_n": effective_page_size,
+            "page": page,
+            "page_size": effective_page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "items": [
+                {
+                    "candidato": r[0] or "",
+                    "partido": r[1],
+                    "cargo": r[2],
+                    "uf": r[3],
+                    "votos": int(r[4] or 0),
+                    "situacao": r[5],
+                }
+                for r in rows
+            ],
+        }
 
     def distribution(
         self,
