@@ -351,6 +351,35 @@
               ],
               "title": "Top N"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Size"
+            }
           }
         ],
         "responses": {
@@ -2101,6 +2130,23 @@
             "type": "integer",
             "title": "Top N"
           },
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/TopCandidateItem"
@@ -2112,6 +2158,9 @@
         "type": "object",
         "required": [
           "top_n",
+          "page_size",
+          "total",
+          "total_pages",
           "items"
         ],
         "title": "TopCandidatesResponse"

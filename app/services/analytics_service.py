@@ -215,7 +215,9 @@ class AnalyticsService:
         cargo: str | None = None,
         municipio: str | None = None,
         top_n: int | None = None,
-    ) -> list[dict]:
+        page: int = 1,
+        page_size: int | None = None,
+    ) -> dict:
         df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
         col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_candidato = self._pick_col(["NM_CANDIDATO"])
@@ -228,9 +230,17 @@ class AnalyticsService:
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
         if not col_candidato or not col_votos:
-            return []
+            effective_page_size = min(page_size or top_n or self.default_top_n, self.max_top_n)
+            return {
+                "top_n": effective_page_size,
+                "page": page,
+                "page_size": effective_page_size,
+                "total": 0,
+                "total_pages": 0,
+                "items": [],
+            }
 
-        n = min(top_n or self.default_top_n, self.max_top_n)
+        effective_page_size = min(page_size or top_n or self.default_top_n, self.max_top_n)
         df = df.assign(
             _votos=pd.to_numeric(df[col_votos], errors="coerce").fillna(0),
             _candidate_key=(
@@ -241,7 +251,14 @@ class AnalyticsService:
         )
         df = df.dropna(subset=["_candidate_key"]).copy()
         if df.empty:
-            return []
+            return {
+                "top_n": effective_page_size,
+                "page": page,
+                "page_size": effective_page_size,
+                "total": 0,
+                "total_pages": 0,
+                "items": [],
+            }
 
         agg_spec: dict[str, str] = {"_votos": "sum", col_candidato: "first"}
         if col_partido:
@@ -266,7 +283,12 @@ class AnalyticsService:
         else:
             grouped["_uf_out"] = None
 
-        grouped = grouped.sort_values("_votos", ascending=False).head(n)
+        grouped = grouped.sort_values("_votos", ascending=False)
+        total = int(len(grouped))
+        total_pages = (total + effective_page_size - 1) // effective_page_size
+        start = (page - 1) * effective_page_size
+        end = start + effective_page_size
+        grouped = grouped.iloc[start:end]
 
         out: list[dict] = []
         for _, row in grouped.iterrows():
@@ -280,7 +302,14 @@ class AnalyticsService:
                     "situacao": str(row[col_situacao]) if col_situacao else None,
                 }
             )
-        return out
+        return {
+            "top_n": effective_page_size,
+            "page": page,
+            "page_size": effective_page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "items": out,
+        }
 
     def distribution(
         self,

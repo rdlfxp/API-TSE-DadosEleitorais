@@ -227,6 +227,10 @@ def test_top_candidates_respects_top_n(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["top_n"] == 1
+    assert payload["page"] == 1
+    assert payload["page_size"] == 1
+    assert payload["total"] == 2
+    assert payload["total_pages"] == 2
     assert len(payload["items"]) == 1
     assert payload["items"][0]["candidato"] == "Candidato A"
 
@@ -261,6 +265,24 @@ def test_top_candidates_rejects_above_limit(client: TestClient):
     assert response.status_code == 422
     payload = response.json()
     assert payload["message"] == "Parametros de consulta invalidos."
+
+
+def test_top_candidates_pagination_returns_distinct_pages(client: TestClient):
+    page_1 = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual", "page_size": 1, "page": 1},
+    )
+    page_2 = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual", "page_size": 1, "page": 2},
+    )
+    assert page_1.status_code == 200
+    assert page_2.status_code == 200
+    p1 = page_1.json()
+    p2 = page_2.json()
+    assert p1["items"][0]["candidato"] == "Candidato A"
+    assert p2["items"][0]["candidato"] == "Candidato B"
+    assert p1["items"] != p2["items"]
 
 
 def test_distribution_invalid_group_by_returns_400(client: TestClient):

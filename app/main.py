@@ -277,9 +277,20 @@ def analytics_top_candidates(
     cargo: str | None = None,
     municipio: str | None = None,
     top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> TopCandidatesResponse:
-    items = get_service().top_candidates(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, top_n=top_n)
-    return TopCandidatesResponse(top_n=top_n or settings.default_top_n, items=items)
+    data = get_service().top_candidates(
+        ano=ano,
+        turno=turno,
+        uf=uf,
+        cargo=cargo,
+        municipio=municipio,
+        top_n=top_n,
+        page=page,
+        page_size=page_size,
+    )
+    return TopCandidatesResponse(**data)
 
 
 @app.get("/v1/analytics/candidatos", response_model=CandidateSearchResponse, responses=ERROR_RESPONSES)
