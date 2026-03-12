@@ -254,11 +254,12 @@ def metrics() -> str:
 @app.get("/v1/analytics/overview", response_model=OverviewResponse, responses=ERROR_RESPONSES)
 def analytics_overview(
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
 ) -> OverviewResponse:
-    data = get_service().overview(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
+    data = get_service().overview(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
     return OverviewResponse(**data)
 
 
@@ -271,12 +272,13 @@ def analytics_filter_options() -> FilterOptionsResponse:
 @app.get("/v1/analytics/top-candidatos", response_model=TopCandidatesResponse, responses=ERROR_RESPONSES)
 def analytics_top_candidates(
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
     top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> TopCandidatesResponse:
-    items = get_service().top_candidates(ano=ano, uf=uf, cargo=cargo, municipio=municipio, top_n=top_n)
+    items = get_service().top_candidates(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, top_n=top_n)
     return TopCandidatesResponse(top_n=top_n or settings.default_top_n, items=items)
 
 
@@ -284,6 +286,7 @@ def analytics_top_candidates(
 def analytics_candidates_search(
     query: str = Query(..., min_length=2, description="Busca por nome do candidato"),
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
@@ -293,6 +296,7 @@ def analytics_candidates_search(
     data = get_service().search_candidates(
         query=query,
         ano=ano,
+        turno=turno,
         uf=uf,
         cargo=cargo,
         municipio=municipio,
@@ -309,6 +313,7 @@ def analytics_distribution(
         description="Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf",
     ),
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
@@ -317,6 +322,7 @@ def analytics_distribution(
     items = get_service().distribution(
         group_by=group_by,
         ano=ano,
+        turno=turno,
         uf=uf,
         cargo=cargo,
         municipio=municipio,
@@ -330,11 +336,12 @@ def analytics_distribution(
 @app.get("/v1/analytics/idade", response_model=AgeStatsResponse, responses=ERROR_RESPONSES)
 def analytics_age(
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     somente_eleitos: bool = True,
 ) -> AgeStatsResponse:
-    data = get_service().age_stats(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+    data = get_service().age_stats(ano=ano, turno=turno, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
     return AgeStatsResponse(**data)
 
 
@@ -344,6 +351,7 @@ def analytics_time_series(
         default="votos_nominais",
         description="Valores: votos_nominais, candidatos, eleitos, registros",
     ),
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
@@ -351,6 +359,7 @@ def analytics_time_series(
 ) -> TimeSeriesResponse:
     items = get_service().time_series(
         metric=metric,
+        turno=turno,
         uf=uf,
         cargo=cargo,
         municipio=municipio,
@@ -366,6 +375,7 @@ def analytics_ranking(
     group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"),
     metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
@@ -377,6 +387,7 @@ def analytics_ranking(
         group_by=group_by,
         metric=metric,
         ano=ano,
+        turno=turno,
         uf=uf,
         cargo=cargo,
         municipio=municipio,
@@ -392,6 +403,7 @@ def analytics_ranking(
 def analytics_uf_map(
     metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     cargo: str | None = None,
     municipio: str | None = None,
     somente_eleitos: bool = False,
@@ -399,6 +411,7 @@ def analytics_uf_map(
     items = get_service().uf_map(
         metric=metric,
         ano=ano,
+        turno=turno,
         cargo=cargo,
         municipio=municipio,
         somente_eleitos=somente_eleitos,
@@ -412,6 +425,7 @@ def analytics_uf_map(
 def analytics_official_vacancies(
     group_by: str = Query(default="cargo", description="Valores: cargo, uf, municipio"),
     ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
@@ -419,6 +433,7 @@ def analytics_official_vacancies(
     data = get_service().official_vacancies(
         group_by=group_by,
         ano=ano,
+        turno=turno,
         uf=uf,
         cargo=cargo,
         municipio=municipio,
