@@ -14,6 +14,7 @@ import pandas as pd
 
 CANONICAL_COLUMNS = [
     "ANO_ELEICAO",
+    "NR_TURNO",
     "SG_UF",
     "NM_UE",
     "CD_CARGO",
@@ -253,6 +254,14 @@ def _compute_age(df: pd.DataFrame) -> pd.Series:
     return pd.Series([pd.NA] * len(df), index=df.index, dtype="float64")
 
 
+def _normalize_turno(series: pd.Series) -> pd.Series:
+    raw = series.astype(str).str.strip()
+    numeric = pd.to_numeric(series, errors="coerce")
+    extracted = pd.to_numeric(raw.str.extract(r"(\d+)", expand=False), errors="coerce")
+    turno = numeric.fillna(extracted)
+    return turno.astype("Int64")
+
+
 def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame:
     if not paths:
         return pd.DataFrame()
@@ -319,6 +328,9 @@ def _normalize_votacao_file(
     col_votos = _find_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL"])
     if col_votos and col_votos != "QT_VOTOS_NOMINAIS_VALIDOS":
         rename_map[col_votos] = "QT_VOTOS_NOMINAIS_VALIDOS"
+    col_turno = _find_col(df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+    if col_turno and col_turno != "NR_TURNO":
+        rename_map[col_turno] = "NR_TURNO"
     if rename_map:
         df = df.rename(columns=rename_map).copy()
 
@@ -367,6 +379,8 @@ def _normalize_votacao_file(
     df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = (
         pd.to_numeric(df["QT_VOTOS_NOMINAIS_VALIDOS"], errors="coerce").fillna(0).astype("int64")
     )
+    if "NR_TURNO" in df.columns:
+        df.loc[:, "NR_TURNO"] = _normalize_turno(df["NR_TURNO"])
 
     for col in CANONICAL_COLUMNS:
         if col not in df.columns:
@@ -377,6 +391,7 @@ def _normalize_votacao_file(
 
     group_cols = [
         "ANO_ELEICAO",
+        "NR_TURNO",
         "SG_UF",
         "NM_UE",
         "CD_CARGO",
@@ -420,7 +435,7 @@ def _quality_report(df: pd.DataFrame) -> dict:
     ]
     required_missing = [c for c in required if c not in df.columns]
 
-    duplicates_key = ["ANO_ELEICAO", "SQ_CANDIDATO", "DS_CARGO", "SG_UF"]
+    duplicates_key = ["ANO_ELEICAO", "NR_TURNO", "SQ_CANDIDATO", "DS_CARGO", "SG_UF"]
     duplicates_key = [c for c in duplicates_key if c in df.columns]
     duplicate_rows = 0
     if duplicates_key:
@@ -631,10 +646,11 @@ def main() -> None:
 
     final_df = pd.concat(normalized_frames, ignore_index=True)
     final_df = final_df.drop_duplicates(
-        subset=["ANO_ELEICAO", "SQ_CANDIDATO", "NR_CANDIDATO", "DS_CARGO", "SG_UF"],
+        subset=["ANO_ELEICAO", "NR_TURNO", "SQ_CANDIDATO", "NR_CANDIDATO", "DS_CARGO", "SG_UF"],
         keep="last",
     ).copy()
     final_df.loc[:, "ANO_ELEICAO"] = pd.to_numeric(final_df["ANO_ELEICAO"], errors="coerce").astype("Int64")
+    final_df.loc[:, "NR_TURNO"] = _normalize_turno(final_df["NR_TURNO"])
 
     report = _quality_report(final_df)
     report_path = Path(args.report)
