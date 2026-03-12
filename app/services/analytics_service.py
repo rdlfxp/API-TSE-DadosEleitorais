@@ -81,6 +81,7 @@ class AnalyticsService:
     def _apply_filters(
         self,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
@@ -88,6 +89,7 @@ class AnalyticsService:
     ) -> pd.DataFrame:
         df = self.dataframe.copy()
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
@@ -95,6 +97,16 @@ class AnalyticsService:
 
         if ano is not None and col_ano:
             df = df[df[col_ano] == ano]
+        if turno is not None and col_turno:
+            turno_num = pd.to_numeric(df[col_turno], errors="coerce")
+            turno_text = (
+                df[col_turno]
+                .astype(str)
+                .str.extract(r"(\d+)", expand=False)
+                .fillna("")
+                .str.strip()
+            )
+            df = df[(turno_num == int(turno)).fillna(False) | (turno_text == str(int(turno))).fillna(False)]
         if uf and col_uf:
             df = df[df[col_uf].astype(str).str.upper() == uf.upper()]
         if cargo and col_cargo:
@@ -167,11 +179,12 @@ class AnalyticsService:
     def overview(
         self,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
     ) -> dict:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
+        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
@@ -197,12 +210,14 @@ class AnalyticsService:
     def top_candidates(
         self,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
         top_n: int | None = None,
     ) -> list[dict]:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
+        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+        col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_candidato = self._pick_col(["NM_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
@@ -216,17 +231,51 @@ class AnalyticsService:
             return []
 
         n = min(top_n or self.default_top_n, self.max_top_n)
-        df = df.assign(_votos=pd.to_numeric(df[col_votos], errors="coerce").fillna(0))
-        df = df.sort_values("_votos", ascending=False).head(n)
+        df = df.assign(
+            _votos=pd.to_numeric(df[col_votos], errors="coerce").fillna(0),
+            _candidate_key=(
+                self._normalize_text(df[col_candidate_key]).replace("", pd.NA)
+                if col_candidate_key
+                else self._normalize_text(df[col_candidato]).str.lower().replace("", pd.NA)
+            ),
+        )
+        df = df.dropna(subset=["_candidate_key"]).copy()
+        if df.empty:
+            return []
+
+        agg_spec: dict[str, str] = {"_votos": "sum", col_candidato: "first"}
+        if col_partido:
+            agg_spec[col_partido] = "first"
+        if col_cargo:
+            agg_spec[col_cargo] = "first"
+        if col_situacao:
+            agg_spec[col_situacao] = "first"
+
+        grouped = df.groupby("_candidate_key", as_index=False).agg(agg_spec)
+        if col_uf:
+            uf_stats = (
+                df.assign(_uf_norm=self._normalize_text(df[col_uf]).str.upper().replace("", pd.NA))
+                .groupby("_candidate_key", as_index=False)
+                .agg(_uf_count=("_uf_norm", "nunique"), _uf_first=("_uf_norm", "first"))
+            )
+            grouped = grouped.merge(uf_stats, on="_candidate_key", how="left")
+            grouped["_uf_out"] = grouped.apply(
+                lambda row: row["_uf_first"] if int(row["_uf_count"] or 0) == 1 else None,
+                axis=1,
+            )
+        else:
+            grouped["_uf_out"] = None
+
+        grouped = grouped.sort_values("_votos", ascending=False).head(n)
 
         out: list[dict] = []
-        for _, row in df.iterrows():
+        for _, row in grouped.iterrows():
             out.append(
                 {
                     "candidato": str(row[col_candidato]),
                     "partido": str(row[col_partido]) if col_partido else None,
                     "cargo": str(row[col_cargo]) if col_cargo else None,
-                    "uf": str(row[col_uf]) if col_uf else None,
+                    "uf": str(row["_uf_out"]) if pd.notna(row["_uf_out"]) else None,
                     "votos": int(row["_votos"]),
                     "situacao": str(row[col_situacao]) if col_situacao else None,
                 }
@@ -237,6 +286,7 @@ class AnalyticsService:
         self,
         group_by: str,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
@@ -262,6 +312,7 @@ class AnalyticsService:
 
         df = self._apply_filters(
             ano=ano,
+            turno=turno,
             uf=uf,
             cargo=cargo,
             municipio=municipio,
@@ -292,11 +343,12 @@ class AnalyticsService:
     def age_stats(
         self,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         somente_eleitos: bool = True,
     ) -> dict:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
 
         col_data_nasc = self._pick_col(["DT_NASCIMENTO"])
         col_idade = self._pick_col(["IDADE"])
@@ -379,6 +431,7 @@ class AnalyticsService:
     def time_series(
         self,
         metric: str = "votos_nominais",
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
@@ -390,6 +443,7 @@ class AnalyticsService:
 
         df = self._apply_filters(
             ano=None,
+            turno=turno,
             uf=uf,
             cargo=cargo,
             municipio=municipio,
@@ -414,6 +468,7 @@ class AnalyticsService:
         group_by: str = "partido",
         metric: str = "votos_nominais",
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
@@ -435,6 +490,7 @@ class AnalyticsService:
 
         df = self._apply_filters(
             ano=ano,
+            turno=turno,
             uf=uf,
             cargo=cargo,
             municipio=municipio,
@@ -474,6 +530,7 @@ class AnalyticsService:
         self,
         metric: str = "votos_nominais",
         ano: int | None = None,
+        turno: int | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
         somente_eleitos: bool = False,
@@ -483,6 +540,7 @@ class AnalyticsService:
             return []
         df = self._apply_filters(
             ano=ano,
+            turno=turno,
             uf=None,
             cargo=cargo,
             municipio=municipio,
@@ -520,13 +578,14 @@ class AnalyticsService:
         self,
         query: str,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
+        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
 
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])
@@ -604,6 +663,7 @@ class AnalyticsService:
         self,
         group_by: str = "cargo",
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
@@ -630,7 +690,14 @@ class AnalyticsService:
         if group_by == "municipio" and (not col_municipio or not col_cargo):
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
 
-        df = self._apply_filters(ano=ano, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=False)
+        df = self._apply_filters(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=False,
+        )
         if df.empty:
             return {"group_by": group_by, "total_vagas_oficiais": 0, "items": []}
 

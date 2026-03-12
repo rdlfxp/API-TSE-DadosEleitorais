@@ -12,6 +12,7 @@ def client():
         [
             {
                 "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "SAO PAULO",
                 "DS_CARGO": "Deputado Estadual",
@@ -24,6 +25,7 @@ def client():
             },
             {
                 "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "SAO PAULO",
                 "DS_CARGO": "Deputado Estadual",
@@ -36,6 +38,7 @@ def client():
             },
             {
                 "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
                 "SG_UF": "RJ",
                 "NM_UE": "RIO DE JANEIRO",
                 "DS_CARGO": "Senador",
@@ -47,7 +50,34 @@ def client():
                 "IDADE": 60,
             },
             {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 9,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PPP",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 70000,
+                "IDADE": 58,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 9,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PPP",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 80000,
+                "IDADE": 58,
+            },
+            {
                 "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "SAO PAULO",
                 "DS_CARGO": "Prefeito",
@@ -60,6 +90,20 @@ def client():
             },
             {
                 "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 4,
+                "NM_CANDIDATO": "Prefeito A",
+                "SG_PARTIDO": "AAA",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 550000,
+                "IDADE": 52,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "SAO PAULO",
                 "DS_CARGO": "Vereador",
@@ -72,6 +116,7 @@ def client():
             },
             {
                 "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "SAO PAULO",
                 "DS_CARGO": "Vereador",
@@ -84,6 +129,7 @@ def client():
             },
             {
                 "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "CAMPINAS",
                 "DS_CARGO": "Prefeito",
@@ -96,6 +142,7 @@ def client():
             },
             {
                 "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
                 "SG_UF": "SP",
                 "NM_UE": "CAMPINAS",
                 "DS_CARGO": "Vereador",
@@ -130,13 +177,13 @@ def test_filter_options_endpoint(client: TestClient):
     payload = response.json()
     assert payload["anos"] == [2022, 2024]
     assert payload["ufs"] == ["RJ", "SP"]
-    assert set(payload["cargos"]) == {"Deputado Estadual", "Prefeito", "Senador", "Vereador"}
+    assert set(payload["cargos"]) == {"Deputado Estadual", "Prefeito", "Presidente", "Senador", "Vereador"}
 
 
 def test_overview_with_filters(client: TestClient):
     response = client.get(
         "/v1/analytics/overview",
-        params={"ano": 2022, "uf": "SP", "cargo": "Deputado Estadual"},
+        params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -159,16 +206,54 @@ def test_overview_with_municipio_filter(client: TestClient):
     assert payload["total_votos_nominais"] == 218000
 
 
+def test_overview_with_turno_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/overview",
+        params={"ano": 2024, "turno": 2, "uf": "SP", "cargo": "Prefeito"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_registros"] == 1
+    assert payload["total_candidatos"] == 1
+    assert payload["total_eleitos"] == 1
+    assert payload["total_votos_nominais"] == 550000
+
+
 def test_top_candidates_respects_top_n(client: TestClient):
     response = client.get(
         "/v1/analytics/top-candidatos",
-        params={"ano": 2022, "uf": "SP", "cargo": "Deputado Estadual", "top_n": 1},
+        params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual", "top_n": 1},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["top_n"] == 1
     assert len(payload["items"]) == 1
     assert payload["items"][0]["candidato"] == "Candidato A"
+
+
+def test_top_candidates_with_turno_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"ano": 2024, "turno": 2, "uf": "SP", "cargo": "Prefeito", "top_n": 3},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidato"] == "Prefeito A"
+    assert payload["items"][0]["votos"] == 550000
+
+
+def test_top_candidates_aggregates_same_candidate_across_ufs(client: TestClient):
+    response = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"ano": 2022, "turno": 1, "cargo": "Presidente", "top_n": 5},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidato"] == "Presidente X"
+    assert payload["items"][0]["votos"] == 150000
+    assert payload["items"][0]["uf"] is None
 
 
 def test_top_candidates_rejects_above_limit(client: TestClient):
@@ -197,10 +282,20 @@ def test_distribution_with_municipio_filter(client: TestClient):
     assert items == {"Prefeito": 1.0, "Vereador": 1.0}
 
 
+def test_distribution_with_turno_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/distribuicao",
+        params={"group_by": "cargo", "ano": 2024, "turno": 2, "uf": "SP"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"] == [{"label": "Prefeito", "value": 1.0, "percentage": 100.0}]
+
+
 def test_candidates_search_with_filters_and_order(client: TestClient):
     response = client.get(
         "/v1/analytics/candidatos",
-        params={"query": "candidato", "ano": 2022, "uf": "SP", "cargo": "Deputado Estadual"},
+        params={"query": "candidato", "ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -287,7 +382,7 @@ def test_rate_limit_returns_429(client: TestClient):
 def test_time_series_endpoint(client: TestClient):
     response = client.get(
         "/v1/analytics/serie-temporal",
-        params={"metric": "votos_nominais", "uf": "SP", "cargo": "Deputado Estadual"},
+        params={"metric": "votos_nominais", "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -313,6 +408,7 @@ def test_ranking_endpoint(client: TestClient):
             "group_by": "partido",
             "metric": "votos_nominais",
             "ano": 2022,
+            "turno": 1,
             "uf": "SP",
             "cargo": "Deputado Estadual",
             "top_n": 2,
@@ -348,13 +444,30 @@ def test_ranking_eleitos_with_municipio_filter(client: TestClient):
     assert sum(item["value"] for item in payload["items"]) == 2
 
 
+def test_ranking_with_turno_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/ranking",
+        params={
+            "group_by": "cargo",
+            "metric": "registros",
+            "ano": 2024,
+            "turno": 2,
+            "uf": "SP",
+            "top_n": 10,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"] == [{"label": "Prefeito", "value": 1.0, "percentage": 100.0}]
+
+
 def test_uf_map_endpoint(client: TestClient):
     response = client.get("/v1/analytics/mapa-uf", params={"metric": "registros", "ano": 2022})
     assert response.status_code == 200
     payload = response.json()
     assert payload["metric"] == "registros"
     assert payload["items"][0]["uf"] == "SP"
-    assert payload["items"][0]["value"] == 2
+    assert payload["items"][0]["value"] == 3
 
 
 def test_time_series_invalid_metric_returns_400(client: TestClient):
@@ -401,3 +514,22 @@ def test_official_vacancies_grouped_by_municipio_non_municipal_cargo_returns_400
     )
     assert response.status_code == 400
     assert "group_by invalido" in response.json()["message"]
+
+
+def test_official_vacancies_with_turno_filter(client: TestClient):
+    response = client.get(
+        "/v1/analytics/vagas-oficiais",
+        params={"ano": 2024, "turno": 2, "uf": "SP", "group_by": "cargo"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_vagas_oficiais"] == 1
+    assert payload["items"] == [
+        {"ano": 2024, "uf": "SP", "municipio": None, "cargo": "Prefeito", "vagas_oficiais": 1}
+    ]
+
+
+def test_turno_validation_returns_422(client: TestClient):
+    response = client.get("/v1/analytics/overview", params={"ano": 2024, "turno": 3})
+    assert response.status_code == 422
+    assert response.json()["message"] == "Parametros de consulta invalidos."
