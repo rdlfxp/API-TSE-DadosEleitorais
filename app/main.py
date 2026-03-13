@@ -350,9 +350,17 @@ def analytics_age(
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    municipio: str | None = None,
     somente_eleitos: bool = True,
 ) -> AgeStatsResponse:
-    data = get_service().age_stats(ano=ano, turno=turno, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+    data = get_service().age_stats(
+        ano=ano,
+        turno=turno,
+        uf=uf,
+        cargo=cargo,
+        municipio=municipio,
+        somente_eleitos=somente_eleitos,
+    )
     return AgeStatsResponse(**data)
 
 

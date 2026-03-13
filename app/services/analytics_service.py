@@ -375,9 +375,17 @@ class AnalyticsService:
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = True,
     ) -> dict:
-        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        df = self._apply_filters(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
 
         col_data_nasc = self._pick_col(["DT_NASCIMENTO"])
         col_idade = self._pick_col(["IDADE"])
@@ -395,9 +403,10 @@ class AnalyticsService:
         if idade.empty:
             return {"media": None, "mediana": None, "minimo": None, "maximo": None, "desvio_padrao": None, "bins": []}
 
-        bins = [0, 29, 39, 49, 59, 69, 200]
-        labels = ["18-29", "30-39", "40-49", "50-59", "60-69", "70+"]
-        faixa = pd.cut(idade, bins=bins, labels=labels, include_lowest=True)
+        labels = ["20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89"]
+        idade_hist = idade[(idade >= 20) & (idade <= 89)]
+        bins = [20, 30, 40, 50, 60, 70, 80, 90]
+        faixa = pd.cut(idade_hist, bins=bins, labels=labels, right=False, include_lowest=True)
         counts = faixa.value_counts(sort=False)
         total = float(counts.sum()) or 1.0
         dist = [

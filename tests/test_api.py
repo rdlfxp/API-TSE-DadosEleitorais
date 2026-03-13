@@ -314,6 +314,59 @@ def test_distribution_with_turno_filter(client: TestClient):
     assert payload["items"] == [{"label": "Prefeito", "value": 1.0, "percentage": 100.0}]
 
 
+def test_age_endpoint_returns_200_for_all_candidates(client: TestClient):
+    response = client.get(
+        "/v1/analytics/idade",
+        params={"ano": 2024, "cargo": "vereador", "somente_eleitos": "false"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["media"] is not None
+    assert payload["bins"]
+
+
+def test_age_endpoint_returns_200_for_elected_with_all_filters(client: TestClient):
+    response = client.get(
+        "/v1/analytics/idade",
+        params={
+            "ano": 2024,
+            "uf": "SP",
+            "cargo": "vereador",
+            "turno": 1,
+            "municipio": "SAO PAULO",
+            "somente_eleitos": "true",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    labels = [item["label"] for item in payload["bins"]]
+    assert labels == ["20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89"]
+    by_label = {item["label"]: item["value"] for item in payload["bins"]}
+    assert by_label["40-49"] == 2.0
+
+
+def test_age_endpoint_sem_dados_returns_200_with_nulls_and_empty_bins(client: TestClient):
+    response = client.get(
+        "/v1/analytics/idade",
+        params={
+            "ano": 2024,
+            "uf": "SP",
+            "cargo": "prefeito",
+            "turno": 2,
+            "municipio": "Campinas",
+            "somente_eleitos": "true",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["bins"] == []
+    assert payload["media"] is None
+    assert payload["mediana"] is None
+    assert payload["minimo"] is None
+    assert payload["maximo"] is None
+    assert payload["desvio_padrao"] is None
+
+
 def test_candidates_search_with_filters_and_order(client: TestClient):
     response = client.get(
         "/v1/analytics/candidatos",
