@@ -386,9 +386,17 @@ class DuckDBAnalyticsService:
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        municipio: str | None = None,
         somente_eleitos: bool = True,
     ) -> dict:
-        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, somente_eleitos=somente_eleitos)
+        where, params = self._where(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
         col_idade = self._pick_col(["IDADE"])
         if not col_idade:
             return {"media": None, "mediana": None, "minimo": None, "maximo": None, "desvio_padrao": None, "bins": []}
@@ -408,24 +416,27 @@ class DuckDBAnalyticsService:
         if stats[0] is None:
             return {"media": None, "mediana": None, "minimo": None, "maximo": None, "desvio_padrao": None, "bins": []}
 
+        age_not_null = f"TRY_CAST({col_idade} AS DOUBLE) IS NOT NULL"
+        filtered_where = f"{where} AND {age_not_null}" if where else f"WHERE {age_not_null}"
         rows = self._rows(
             (
                 "SELECT faixa, COUNT(*) as value FROM ("
                 "  SELECT CASE "
-                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) <= 29 THEN '18-29' "
-                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) <= 39 THEN '30-39' "
-                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) <= 49 THEN '40-49' "
-                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) <= 59 THEN '50-59' "
-                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) <= 69 THEN '60-69' "
-                "    ELSE '70+' END AS faixa "
-                f"  FROM analytics {where} "
-                f"  WHERE TRY_CAST({col_idade} AS DOUBLE) IS NOT NULL"
-                ") t GROUP BY 1"
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 20 AND 29 THEN '20-29' "
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 30 AND 39 THEN '30-39' "
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 40 AND 49 THEN '40-49' "
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 50 AND 59 THEN '50-59' "
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 60 AND 69 THEN '60-69' "
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 70 AND 79 THEN '70-79' "
+                f"    WHEN TRY_CAST({col_idade} AS DOUBLE) BETWEEN 80 AND 89 THEN '80-89' "
+                "    ELSE NULL END AS faixa "
+                f"  FROM analytics {filtered_where}"
+                ") t WHERE faixa IS NOT NULL GROUP BY 1"
             ),
             params,
         )
         by_label = {str(r[0]): int(r[1]) for r in rows}
-        labels = ["18-29", "30-39", "40-49", "50-59", "60-69", "70+"]
+        labels = ["20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89"]
         total = float(sum(by_label.values()) or 1)
         bins = [
             {
