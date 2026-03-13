@@ -25,6 +25,24 @@ NATIONAL_CARGOS = {
     "VICE-PRESIDENTE",
 }
 
+COR_RACA_CATEGORY_ORDER = [
+    "BRANCA",
+    "PRETA",
+    "PARDA",
+    "AMARELA",
+    "INDIGENA",
+    "NAO_INFORMADO",
+]
+
+COR_RACA_CATEGORY_LABELS = {
+    "BRANCA": "Branca",
+    "PRETA": "Preta",
+    "PARDA": "Parda",
+    "AMARELA": "Amarela",
+    "INDIGENA": "Indígena",
+    "NAO_INFORMADO": "Não informado",
+}
+
 
 @dataclass
 class DuckDBAnalyticsService:
@@ -379,6 +397,95 @@ class DuckDBAnalyticsService:
             }
             for r in rows
         ]
+
+    def cor_raca_comparativo(
+        self,
+        ano: int | None = None,
+        turno: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+    ) -> dict:
+        col_cor_raca = self._pick_col(["DS_COR_RACA"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        if not col_cor_raca:
+            return {
+                "items": [
+                    {
+                        "categoria": COR_RACA_CATEGORY_LABELS[key],
+                        "candidatos": 0,
+                        "eleitos": 0,
+                        "percentual_candidatos": 0.0,
+                        "percentual_eleitos": 0.0,
+                    }
+                    for key in COR_RACA_CATEGORY_ORDER
+                ]
+            }
+
+        where, params = self._where(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=False,
+        )
+        eleito_expr = (
+            f"CASE WHEN UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%' THEN 1 ELSE 0 END"
+            if col_situacao
+            else "0"
+        )
+        categoria_expr = (
+            "CASE "
+            f"WHEN COALESCE(TRIM(CAST({col_cor_raca} AS VARCHAR)), '') = '' THEN 'NAO_INFORMADO' "
+            f"WHEN UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) IN "
+            "('N/A', 'NA', 'NULL', 'NULO', 'NAO INFORMADO', 'NÃO INFORMADO', "
+            "'NAO DIVULGAVEL', 'NÃO DIVULGÁVEL', 'NÃO DIVULGAVEL', "
+            "'NAO DECLARADO', 'NÃO DECLARADO', 'SEM INFORMACAO', 'SEM INFORMAÇÃO', 'IGNORADO') "
+            "THEN 'NAO_INFORMADO' "
+            f"WHEN UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) LIKE '%BRANCA%' THEN 'BRANCA' "
+            f"WHEN UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) LIKE '%PRETA%' "
+            f"  OR UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) LIKE '%NEGRA%' THEN 'PRETA' "
+            f"WHEN UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) LIKE '%PARDA%' THEN 'PARDA' "
+            f"WHEN UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) LIKE '%AMARELA%' THEN 'AMARELA' "
+            f"WHEN UPPER(TRIM(CAST({col_cor_raca} AS VARCHAR))) LIKE '%INDIG%' THEN 'INDIGENA' "
+            "ELSE 'NAO_INFORMADO' END"
+        )
+        rows = self._rows(
+            (
+                "SELECT "
+                f"{categoria_expr} AS categoria, "
+                "COUNT(*) AS candidatos, "
+                f"SUM({eleito_expr}) AS eleitos "
+                f"FROM analytics {where} "
+                "GROUP BY 1"
+            ),
+            params,
+        )
+        by_category = {
+            str(row[0]): {"candidatos": int(row[1] or 0), "eleitos": int(row[2] or 0)}
+            for row in rows
+        }
+        total_candidatos = int(sum(v["candidatos"] for v in by_category.values()))
+        total_eleitos = int(sum(v["eleitos"] for v in by_category.values()))
+
+        items: list[dict] = []
+        for key in COR_RACA_CATEGORY_ORDER:
+            values = by_category.get(key, {"candidatos": 0, "eleitos": 0})
+            candidatos = int(values["candidatos"])
+            eleitos = int(values["eleitos"])
+            items.append(
+                {
+                    "categoria": COR_RACA_CATEGORY_LABELS[key],
+                    "candidatos": candidatos,
+                    "eleitos": eleitos,
+                    "percentual_candidatos": round((candidatos / total_candidatos) * 100, 2)
+                    if total_candidatos
+                    else 0.0,
+                    "percentual_eleitos": round((eleitos / total_eleitos) * 100, 2) if total_eleitos else 0.0,
+                }
+            )
+        return {"items": items}
 
     def occupation_gender_distribution(
         self,

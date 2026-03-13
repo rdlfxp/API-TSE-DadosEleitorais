@@ -155,6 +155,7 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /v1/analytics/candidatos?query=candidato&ano=2022&uf=SP&cargo=Deputado%20Estadual&page=1&page_size=20` (`200`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=genero&ano=2022&uf=SP` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=status&ano=2022&uf=SP&cargo=Senador` (`200`, `400`, `422`, `503`)
+- `GET /v1/analytics/cor-raca-comparativo?ano=2022&uf=SP` (`200`, `422`, `503`)
 - `GET /v1/analytics/ocupacao-genero?ano=2022&uf=SP&somente_eleitos=false` (`200`, `422`, `503`)
 - `GET /v1/analytics/idade?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
 - `GET /v1/analytics/serie-temporal?metric=votos_nominais&uf=SP&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)

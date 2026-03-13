@@ -60,6 +60,18 @@ class GroupedDistributionResponse(BaseModel):
     items: list[SeriesItem]
 
 
+class CorRacaComparativoItem(BaseModel):
+    categoria: str
+    candidatos: int
+    eleitos: int
+    percentual_candidatos: float
+    percentual_eleitos: float
+
+
+class CorRacaComparativoResponse(BaseModel):
+    items: list[CorRacaComparativoItem] = Field(default_factory=list)
+
+
 class OccupationGenderItem(BaseModel):
     ocupacao: str
     masculino: int

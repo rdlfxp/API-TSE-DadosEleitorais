@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from app.services.analytics_service import AnalyticsService
+from app.services.duckdb_analytics_service import DuckDBAnalyticsService
 
 
 @pytest.fixture
@@ -59,3 +60,26 @@ def test_from_file_rejects_unsupported_extension(tmp_path):
             default_top_n=20,
             max_top_n=100,
         )
+
+
+def test_duckdb_cor_raca_comparativo_normaliza_nao_divulgavel(tmp_path):
+    df = pd.DataFrame(
+        [
+            {"DS_COR_RACA": "BRANCA", "DS_SIT_TOT_TURNO": "ELEITO"},
+            {"DS_COR_RACA": "NÃO DIVULGÁVEL", "DS_SIT_TOT_TURNO": "NAO ELEITO"},
+            {"DS_COR_RACA": "PRETA", "DS_SIT_TOT_TURNO": "ELEITO"},
+        ]
+    )
+    path = tmp_path / "analytics.csv"
+    df.to_csv(path, index=False)
+
+    service = DuckDBAnalyticsService.from_file(
+        file_path=str(path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+    payload = service.cor_raca_comparativo()
+    by_categoria = {item["categoria"]: item for item in payload["items"]}
+    assert by_categoria["Branca"]["candidatos"] == 1
+    assert by_categoria["Preta"]["candidatos"] == 1
+    assert by_categoria["Não informado"]["candidatos"] == 1

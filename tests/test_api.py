@@ -182,6 +182,19 @@ def client():
                 9: "MILITAR",
             }
         ),
+        DS_COR_RACA=df["SQ_CANDIDATO"].map(
+            {
+                1: "BRANCA",
+                2: "NÃO DIVULGÁVEL",
+                3: "PRETA",
+                4: "PARDA",
+                5: "PARDA",
+                6: "NÃO INFORMADO",
+                7: "INDÍGENA",
+                8: "AMARELA",
+                9: "PARDA",
+            }
+        ),
     )
     with TestClient(main_module.app) as test_client:
         main_module.service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
@@ -340,6 +353,34 @@ def test_distribution_with_turno_filter(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["items"] == [{"label": "Prefeito", "value": 1.0, "percentage": 100.0}]
+
+
+def test_cor_raca_comparativo_endpoint_normalizes_and_orders_categories(client: TestClient):
+    response = client.get("/v1/analytics/cor-raca-comparativo", params={"ano": 2022})
+    assert response.status_code == 200
+    payload = response.json()
+    categorias = [item["categoria"] for item in payload["items"]]
+    assert categorias == ["Branca", "Preta", "Parda", "Amarela", "Indígena", "Não informado"]
+    by_categoria = {item["categoria"]: item for item in payload["items"]}
+    assert by_categoria["Branca"]["candidatos"] == 1
+    assert by_categoria["Branca"]["eleitos"] == 1
+    assert by_categoria["Preta"]["candidatos"] == 1
+    assert by_categoria["Preta"]["eleitos"] == 1
+    assert by_categoria["Parda"]["candidatos"] == 2
+    assert by_categoria["Parda"]["eleitos"] == 0
+    assert by_categoria["Não informado"]["candidatos"] == 1
+    assert by_categoria["Não informado"]["eleitos"] == 0
+
+
+def test_cor_raca_comparativo_endpoint_respects_filters(client: TestClient):
+    response = client.get("/v1/analytics/cor-raca-comparativo", params={"ano": 2024, "uf": "SP", "municipio": "Campinas"})
+    assert response.status_code == 200
+    payload = response.json()
+    by_categoria = {item["categoria"]: item for item in payload["items"]}
+    assert by_categoria["Indígena"]["candidatos"] == 1
+    assert by_categoria["Indígena"]["eleitos"] == 1
+    assert by_categoria["Amarela"]["candidatos"] == 1
+    assert by_categoria["Amarela"]["eleitos"] == 1
 
 
 def test_occupation_gender_endpoint_with_filters(client: TestClient):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+import unicodedata
 
 import pandas as pd
 
@@ -23,6 +24,24 @@ MUNICIPAL_CARGOS = {
 NATIONAL_CARGOS = {
     "PRESIDENTE",
     "VICE-PRESIDENTE",
+}
+
+COR_RACA_CATEGORY_ORDER = [
+    "BRANCA",
+    "PRETA",
+    "PARDA",
+    "AMARELA",
+    "INDIGENA",
+    "NAO_INFORMADO",
+]
+
+COR_RACA_CATEGORY_LABELS = {
+    "BRANCA": "Branca",
+    "PRETA": "Preta",
+    "PARDA": "Parda",
+    "AMARELA": "Amarela",
+    "INDIGENA": "Indígena",
+    "NAO_INFORMADO": "Não informado",
 }
 
 
@@ -119,6 +138,35 @@ class AnalyticsService:
 
     def _normalize_text(self, series: pd.Series) -> pd.Series:
         return series.fillna("").astype(str).str.strip()
+
+    def _normalize_ascii_upper(self, text: str) -> str:
+        normalized = unicodedata.normalize("NFKD", text)
+        ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+        return ascii_text.upper().strip()
+
+    def _normalize_cor_raca_category(self, value: object) -> str:
+        text = self._normalize_ascii_upper(str(value or ""))
+        if not text or text in {"N/A", "NA", "NULL", "NULO"}:
+            return "NAO_INFORMADO"
+        if text in {
+            "NAO INFORMADO",
+            "NAO DIVULGAVEL",
+            "NAO DECLARADO",
+            "SEM INFORMACAO",
+            "IGNORADO",
+        }:
+            return "NAO_INFORMADO"
+        if "BRANCA" in text:
+            return "BRANCA"
+        if "PRETA" in text or "NEGRA" in text:
+            return "PRETA"
+        if "PARDA" in text:
+            return "PARDA"
+        if "AMARELA" in text:
+            return "AMARELA"
+        if "INDIGENA" in text:
+            return "INDIGENA"
+        return "NAO_INFORMADO"
 
     def _is_elected(self, series: pd.Series) -> pd.Series:
         normalized = self._normalize_text(series).str.upper()
@@ -368,6 +416,83 @@ class AnalyticsService:
                 }
             )
         return items
+
+    def cor_raca_comparativo(
+        self,
+        ano: int | None = None,
+        turno: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+    ) -> dict:
+        col_cor_raca = self._pick_col(["DS_COR_RACA"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        if not col_cor_raca:
+            return {
+                "items": [
+                    {
+                        "categoria": COR_RACA_CATEGORY_LABELS[key],
+                        "candidatos": 0,
+                        "eleitos": 0,
+                        "percentual_candidatos": 0.0,
+                        "percentual_eleitos": 0.0,
+                    }
+                    for key in COR_RACA_CATEGORY_ORDER
+                ]
+            }
+
+        df = self._apply_filters(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=False,
+        )
+        if df.empty:
+            return {
+                "items": [
+                    {
+                        "categoria": COR_RACA_CATEGORY_LABELS[key],
+                        "candidatos": 0,
+                        "eleitos": 0,
+                        "percentual_candidatos": 0.0,
+                        "percentual_eleitos": 0.0,
+                    }
+                    for key in COR_RACA_CATEGORY_ORDER
+                ]
+            }
+
+        categorias = df[col_cor_raca].apply(self._normalize_cor_raca_category)
+        candidatos = categorias.value_counts()
+        eleitos = (
+            categorias[self._is_elected(df[col_situacao])]
+            .value_counts()
+            if col_situacao
+            else pd.Series(dtype="int64")
+        )
+
+        total_candidatos = int(candidatos.sum() or 0)
+        total_eleitos = int(eleitos.sum() or 0)
+
+        items: list[dict] = []
+        for key in COR_RACA_CATEGORY_ORDER:
+            qtd_candidatos = int(candidatos.get(key, 0))
+            qtd_eleitos = int(eleitos.get(key, 0))
+            items.append(
+                {
+                    "categoria": COR_RACA_CATEGORY_LABELS[key],
+                    "candidatos": qtd_candidatos,
+                    "eleitos": qtd_eleitos,
+                    "percentual_candidatos": round((qtd_candidatos / total_candidatos) * 100, 2)
+                    if total_candidatos
+                    else 0.0,
+                    "percentual_eleitos": round((qtd_eleitos / total_eleitos) * 100, 2)
+                    if total_eleitos
+                    else 0.0,
+                }
+            )
+        return {"items": items}
 
     def occupation_gender_distribution(
         self,
