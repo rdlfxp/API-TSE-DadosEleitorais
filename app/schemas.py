@@ -60,6 +60,16 @@ class GroupedDistributionResponse(BaseModel):
     items: list[SeriesItem]
 
 
+class OccupationGenderItem(BaseModel):
+    ocupacao: str
+    masculino: int
+    feminino: int
+
+
+class OccupationGenderResponse(BaseModel):
+    items: list[OccupationGenderItem] = Field(default_factory=list)
+
+
 class AgeStatsResponse(BaseModel):
     media: float | None = None
     mediana: float | None = None

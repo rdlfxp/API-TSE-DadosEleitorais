@@ -369,6 +369,54 @@ class AnalyticsService:
             )
         return items
 
+    def occupation_gender_distribution(
+        self,
+        ano: int | None = None,
+        turno: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+        somente_eleitos: bool = False,
+    ) -> list[dict]:
+        col_ocupacao = self._pick_col(["DS_OCUPACAO"])
+        col_genero = self._pick_col(["DS_GENERO"])
+        if not col_ocupacao or not col_genero:
+            return []
+
+        df = self._apply_filters(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
+        if df.empty:
+            return []
+
+        prepared = pd.DataFrame(
+            {
+                "ocupacao": df[col_ocupacao].fillna("N/A").astype(str).str.strip().replace("", "N/A"),
+                "genero": df[col_genero].fillna("").astype(str).str.strip().str.upper(),
+            }
+        )
+        prepared = prepared.assign(
+            masculino=(prepared["genero"].str.startswith("MASC") | (prepared["genero"] == "M")),
+            feminino=(prepared["genero"].str.startswith("FEM") | (prepared["genero"] == "F")),
+        )
+
+        grouped = (
+            prepared.groupby("ocupacao", as_index=False)
+            .agg(masculino=("masculino", "sum"), feminino=("feminino", "sum"))
+            .astype({"masculino": int, "feminino": int})
+        )
+        grouped = grouped.sort_values(["masculino", "feminino", "ocupacao"], ascending=[False, False, True])
+
+        return [
+            {"ocupacao": str(row["ocupacao"]), "masculino": int(row["masculino"]), "feminino": int(row["feminino"])}
+            for _, row in grouped.iterrows()
+        ]
+
     def age_stats(
         self,
         ano: int | None = None,

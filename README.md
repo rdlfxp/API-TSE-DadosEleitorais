@@ -155,6 +155,7 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /v1/analytics/candidatos?query=candidato&ano=2022&uf=SP&cargo=Deputado%20Estadual&page=1&page_size=20` (`200`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=genero&ano=2022&uf=SP` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=status&ano=2022&uf=SP&cargo=Senador` (`200`, `400`, `422`, `503`)
+- `GET /v1/analytics/ocupacao-genero?ano=2022&uf=SP&somente_eleitos=false` (`200`, `422`, `503`)
 - `GET /v1/analytics/idade?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
 - `GET /v1/analytics/serie-temporal?metric=votos_nominais&uf=SP&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/ranking?group_by=partido&metric=votos_nominais&ano=2022&uf=SP&top_n=10` (`200`, `400`, `422`, `503`)
@@ -273,6 +274,19 @@ Erro `400`:
 ```json
 {
   "message": "group_by invalido ou coluna ausente no dataset"
+}
+```
+
+### `GET /ocupacao-genero?ano=2022&uf=SP`
+
+Resposta `200`:
+
+```json
+{
+  "items": [
+    { "ocupacao": "EMPRESARIO", "masculino": 21000, "feminino": 8300 },
+    { "ocupacao": "SERVIDOR PUBLICO MUNICIPAL", "masculino": 14000, "feminino": 15600 }
+  ]
 }
 ```
 

@@ -380,6 +380,51 @@ class DuckDBAnalyticsService:
             for r in rows
         ]
 
+    def occupation_gender_distribution(
+        self,
+        ano: int | None = None,
+        turno: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+        somente_eleitos: bool = False,
+    ) -> list[dict]:
+        col_ocupacao = self._pick_col(["DS_OCUPACAO"])
+        col_genero = self._pick_col(["DS_GENERO"])
+        if not col_ocupacao or not col_genero:
+            return []
+
+        where, params = self._where(
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+            somente_eleitos=somente_eleitos,
+        )
+        rows = self._rows(
+            (
+                "SELECT "
+                f"COALESCE(NULLIF(TRIM(CAST({col_ocupacao} AS VARCHAR)), ''), 'N/A') AS ocupacao, "
+                "SUM(CASE "
+                f"  WHEN UPPER(TRIM(CAST({col_genero} AS VARCHAR))) LIKE 'MASC%' "
+                f"    OR UPPER(TRIM(CAST({col_genero} AS VARCHAR))) = 'M' "
+                "  THEN 1 ELSE 0 END) AS masculino, "
+                "SUM(CASE "
+                f"  WHEN UPPER(TRIM(CAST({col_genero} AS VARCHAR))) LIKE 'FEM%' "
+                f"    OR UPPER(TRIM(CAST({col_genero} AS VARCHAR))) = 'F' "
+                "  THEN 1 ELSE 0 END) AS feminino "
+                f"FROM analytics {where} "
+                "GROUP BY 1 "
+                "ORDER BY masculino DESC, feminino DESC, ocupacao ASC"
+            ),
+            params,
+        )
+        return [
+            {"ocupacao": str(r[0]), "masculino": int(r[1] or 0), "feminino": int(r[2] or 0)}
+            for r in rows
+        ]
+
     def age_stats(
         self,
         ano: int | None = None,
