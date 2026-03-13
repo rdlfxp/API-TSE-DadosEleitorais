@@ -155,6 +155,34 @@ def client():
             },
         ]
     )
+    df = df.assign(
+        DS_GENERO=df["SQ_CANDIDATO"].map(
+            {
+                1: "MASCULINO",
+                2: "FEMININO",
+                3: "MASCULINO",
+                4: "MASCULINO",
+                5: "MASCULINO",
+                6: "FEMININO",
+                7: "FEMININO",
+                8: "MASCULINO",
+                9: "MASCULINO",
+            }
+        ),
+        DS_OCUPACAO=df["SQ_CANDIDATO"].map(
+            {
+                1: "EMPRESARIO",
+                2: "SERVIDOR PUBLICO MUNICIPAL",
+                3: "ADVOGADO",
+                4: "EMPRESARIO",
+                5: "SERVIDOR PUBLICO MUNICIPAL",
+                6: "SERVIDOR PUBLICO MUNICIPAL",
+                7: "ADVOGADO",
+                8: "EMPRESARIO",
+                9: "MILITAR",
+            }
+        ),
+    )
     with TestClient(main_module.app) as test_client:
         main_module.service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
         yield test_client
@@ -312,6 +340,29 @@ def test_distribution_with_turno_filter(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["items"] == [{"label": "Prefeito", "value": 1.0, "percentage": 100.0}]
+
+
+def test_occupation_gender_endpoint_with_filters(client: TestClient):
+    response = client.get(
+        "/v1/analytics/ocupacao-genero",
+        params={"ano": 2024, "uf": "SP", "cargo": "Vereador"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    by_job = {item["ocupacao"]: (item["masculino"], item["feminino"]) for item in payload["items"]}
+    assert by_job["SERVIDOR PUBLICO MUNICIPAL"] == (1, 1)
+    assert by_job["EMPRESARIO"] == (1, 0)
+
+
+def test_occupation_gender_endpoint_with_somente_eleitos(client: TestClient):
+    response = client.get(
+        "/v1/analytics/ocupacao-genero",
+        params={"ano": 2022, "somente_eleitos": "true"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    by_job = {item["ocupacao"]: (item["masculino"], item["feminino"]) for item in payload["items"]}
+    assert by_job == {"EMPRESARIO": (1, 0), "ADVOGADO": (1, 0)}
 
 
 def test_age_endpoint_returns_200_for_all_candidates(client: TestClient):

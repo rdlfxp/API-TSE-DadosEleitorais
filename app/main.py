@@ -18,6 +18,7 @@ from app.schemas import (
     FilterOptionsResponse,
     OfficialVacanciesResponse,
     GroupedDistributionResponse,
+    OccupationGenderResponse,
     OverviewResponse,
     RankingResponse,
     TimeSeriesResponse,
@@ -342,6 +343,26 @@ def analytics_distribution(
     if not items:
         raise HTTPException(status_code=400, detail="group_by invalido ou coluna ausente no dataset")
     return GroupedDistributionResponse(group_by=group_by, items=items)
+
+
+@app.get("/v1/analytics/ocupacao-genero", response_model=OccupationGenderResponse, responses=ERROR_RESPONSES)
+def analytics_occupation_gender(
+    ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    municipio: str | None = None,
+    somente_eleitos: bool = False,
+) -> OccupationGenderResponse:
+    items = get_service().occupation_gender_distribution(
+        ano=ano,
+        turno=turno,
+        uf=uf,
+        cargo=cargo,
+        municipio=municipio,
+        somente_eleitos=somente_eleitos,
+    )
+    return OccupationGenderResponse(items=items)
 
 
 @app.get("/v1/analytics/idade", response_model=AgeStatsResponse, responses=ERROR_RESPONSES)
