@@ -14,6 +14,7 @@ from app.config import settings
 from app.schemas import (
     AgeStatsResponse,
     CandidateSearchResponse,
+    CorRacaComparativoResponse,
     ErrorResponse,
     FilterOptionsResponse,
     OfficialVacanciesResponse,
@@ -343,6 +344,24 @@ def analytics_distribution(
     if not items:
         raise HTTPException(status_code=400, detail="group_by invalido ou coluna ausente no dataset")
     return GroupedDistributionResponse(group_by=group_by, items=items)
+
+
+@app.get("/v1/analytics/cor-raca-comparativo", response_model=CorRacaComparativoResponse, responses=ERROR_RESPONSES)
+def analytics_cor_raca_comparativo(
+    ano: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    municipio: str | None = None,
+) -> CorRacaComparativoResponse:
+    data = get_service().cor_raca_comparativo(
+        ano=ano,
+        turno=turno,
+        uf=uf,
+        cargo=cargo,
+        municipio=municipio,
+    )
+    return CorRacaComparativoResponse(**data)
 
 
 @app.get("/v1/analytics/ocupacao-genero", response_model=OccupationGenderResponse, responses=ERROR_RESPONSES)

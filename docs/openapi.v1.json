@@ -780,6 +780,150 @@
         }
       }
     },
+    "/v1/analytics/cor-raca-comparativo": {
+      "get": {
+        "summary": "Analytics Cor Raca Comparativo",
+        "operationId": "analytics_cor_raca_comparativo_v1_analytics_cor_raca_comparativo_get",
+        "parameters": [
+          {
+            "name": "ano",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ano"
+            }
+          },
+          {
+            "name": "turno",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Turno"
+            }
+          },
+          {
+            "name": "uf",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 2
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uf"
+            }
+          },
+          {
+            "name": "cargo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cargo"
+            }
+          },
+          {
+            "name": "municipio",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Municipio"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorRacaComparativoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/analytics/ocupacao-genero": {
       "get": {
         "summary": "Analytics Occupation Gender",
@@ -1922,6 +2066,52 @@
           "items"
         ],
         "title": "CandidateSearchResponse"
+      },
+      "CorRacaComparativoItem": {
+        "properties": {
+          "categoria": {
+            "type": "string",
+            "title": "Categoria"
+          },
+          "candidatos": {
+            "type": "integer",
+            "title": "Candidatos"
+          },
+          "eleitos": {
+            "type": "integer",
+            "title": "Eleitos"
+          },
+          "percentual_candidatos": {
+            "type": "number",
+            "title": "Percentual Candidatos"
+          },
+          "percentual_eleitos": {
+            "type": "number",
+            "title": "Percentual Eleitos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "categoria",
+          "candidatos",
+          "eleitos",
+          "percentual_candidatos",
+          "percentual_eleitos"
+        ],
+        "title": "CorRacaComparativoItem"
+      },
+      "CorRacaComparativoResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CorRacaComparativoItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "CorRacaComparativoResponse"
       },
       "ErrorResponse": {
         "properties": {
