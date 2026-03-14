@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
+import unicodedata
 
 import duckdb
 import pandas as pd
@@ -159,7 +160,11 @@ class DuckDBAnalyticsService:
 
     def _normalize_value(self, value: object, uppercase: bool = False) -> str:
         text = str(value or "").strip()
-        return text.upper() if uppercase else text
+        if not text:
+            return ""
+        normalized = unicodedata.normalize("NFKD", text)
+        ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+        return ascii_text.upper() if uppercase else ascii_text
 
     def _parse_int(self, value: object) -> int | None:
         try:
