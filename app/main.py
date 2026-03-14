@@ -18,6 +18,7 @@ from app.schemas import (
     ErrorResponse,
     FilterOptionsResponse,
     OfficialVacanciesResponse,
+    PolarizacaoResponse,
     GroupedDistributionResponse,
     OccupationGenderResponse,
     OverviewResponse,
@@ -506,3 +507,21 @@ def analytics_official_vacancies(
             ),
         )
     return OfficialVacanciesResponse(**data)
+
+
+@app.get("/v1/analytics/polarizacao", response_model=PolarizacaoResponse, responses=ERROR_RESPONSES)
+def analytics_polarizacao(
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    ano_governador: int | None = None,
+    turno_governador: int | None = Query(default=None, ge=1, le=2),
+    ano_municipal: int | None = None,
+    turno_municipal: int | None = Query(default=None, ge=1, le=2),
+) -> PolarizacaoResponse:
+    data = get_service().polarizacao(
+        uf=uf,
+        ano_governador=ano_governador,
+        turno_governador=turno_governador,
+        ano_municipal=ano_municipal,
+        turno_municipal=turno_municipal,
+    )
+    return PolarizacaoResponse(**data)

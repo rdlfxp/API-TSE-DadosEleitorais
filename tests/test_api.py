@@ -696,6 +696,137 @@ def test_official_vacancies_with_turno_filter(client: TestClient):
     ]
 
 
+def test_polarizacao_endpoint_returns_winners_and_municipal_breakdown(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 100,
+                "NM_CANDIDATO": "Gov SP A",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1000000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 101,
+                "NM_CANDIDATO": "Gov SP B",
+                "SG_PARTIDO": "PT",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 990000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 102,
+                "NM_CANDIDATO": "Gov RJ A",
+                "SG_PARTIDO": "PT",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1200000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 200,
+                "NM_CANDIDATO": "Pref SP A",
+                "SG_PARTIDO": "PT",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 500000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 201,
+                "NM_CANDIDATO": "Pref SP B",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 490000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 202,
+                "NM_CANDIDATO": "Pref Campinas A",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 300000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 203,
+                "NM_CANDIDATO": "Pref Campinas B",
+                "SG_PARTIDO": "PT",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 290000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "RJ",
+                "NM_UE": "NITEROI",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 204,
+                "NM_CANDIDATO": "Pref Niteroi A",
+                "SG_PARTIDO": "MDB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 210000,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        response = client.get(
+            "/v1/analytics/polarizacao",
+            params={"uf": "SP", "ano_governador": 2022, "ano_municipal": 2024},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    federal_by_uf = {item["uf"]: item for item in payload["federal"]}
+    assert federal_by_uf["SP"]["partido"] == "PL"
+    assert federal_by_uf["SP"]["espectro"] == "direita"
+
+    municipal_uf = payload["municipal_uf"]
+    assert len(municipal_uf) == 2
+    by_city = {item["municipio"]: item for item in municipal_uf}
+    assert by_city["SAO PAULO"]["partido"] == "PT"
+    assert by_city["SAO PAULO"]["votos"] == 500000
+    assert by_city["SAO PAULO"]["status"] == "ELEITO"
+    assert by_city["CAMPINAS"]["partido"] == "PL"
+
+    municipal_brasil_by_uf = {item["uf"]: item for item in payload["municipal_brasil"]}
+    assert municipal_brasil_by_uf["SP"]["espectro"] == "esquerda"
+    assert municipal_brasil_by_uf["SP"]["total_prefeitos"] == 2
+
+
 def test_turno_validation_returns_422(client: TestClient):
     response = client.get("/v1/analytics/overview", params={"ano": 2024, "turno": 3})
     assert response.status_code == 422
