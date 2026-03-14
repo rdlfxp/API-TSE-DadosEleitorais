@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 import unicodedata
@@ -67,6 +67,11 @@ PARTIDO_SPECTRUM_MAP = {
     "UNIAO BRASIL": "direita",
 }
 
+MUNICIPIO_ALIAS_MAP = {
+    "SANTA IZABEL DO PARA": "SANTA ISABEL DO PARA",
+    "MUNHOZ DE MELLO": "MUNHOZ DE MELO",
+}
+
 COR_RACA_CATEGORY_ORDER = [
     "BRANCA",
     "PRETA",
@@ -91,6 +96,8 @@ class AnalyticsService:
     dataframe: pd.DataFrame
     default_top_n: int
     max_top_n: int
+    _source_path: Path | None = field(default=None, init=False, repr=False)
+    _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_csv(
@@ -102,7 +109,9 @@ class AnalyticsService:
         encoding: str = "utf-8",
     ) -> "AnalyticsService":
         df = pd.read_csv(file_path, sep=separator, encoding=encoding, low_memory=False)
-        return cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
+        service = cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
+        service._source_path = Path(file_path)
+        return service
 
     @classmethod
     def from_file(
@@ -121,7 +130,9 @@ class AnalyticsService:
                 raise RuntimeError(
                     "Leitura parquet requer engine instalada (ex.: pyarrow)."
                 ) from exc
-            return cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
+            service = cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
+            service._source_path = Path(file_path)
+            return service
         if suffix == ".csv":
             return cls.from_csv(
                 file_path=file_path,
@@ -184,6 +195,57 @@ class AnalyticsService:
         normalized = unicodedata.normalize("NFKD", text)
         ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
         return ascii_text.upper().strip()
+
+    def _normalize_municipio_key(self, text: str | None) -> str:
+        key = self._normalize_ascii_upper(text or "")
+        if not key:
+            return ""
+        return MUNICIPIO_ALIAS_MAP.get(key, key)
+
+    def _official_prefeito_totals_by_uf(self, ano: int | None) -> dict[str, int]:
+        if ano is None:
+            return {}
+        if self._source_path is None:
+            return {}
+        if ano in self._official_prefeito_totals_cache:
+            return self._official_prefeito_totals_cache[ano]
+
+        project_root = self._source_path.parent.parent if self._source_path.parent.name == "curated" else self._source_path.parent
+        raw_path = project_root / "raw" / str(ano) / f"consulta_vagas_{ano}_BRASIL.csv"
+        if not raw_path.exists():
+            self._official_prefeito_totals_cache[ano] = {}
+            return {}
+
+        try:
+            vagas_df = pd.read_csv(
+                raw_path,
+                sep=";",
+                encoding="latin1",
+                usecols=["SG_UF", "NM_UE", "DS_CARGO", "QT_VAGA"],
+                low_memory=False,
+            )
+        except Exception:
+            self._official_prefeito_totals_cache[ano] = {}
+            return {}
+
+        df = vagas_df.assign(
+            _uf=self._normalize_text(vagas_df["SG_UF"]).str.upper().replace("", pd.NA),
+            _municipio=self._normalize_text(vagas_df["NM_UE"]),
+            _cargo=self._normalize_text(vagas_df["DS_CARGO"]).str.upper(),
+            _qt_vaga=pd.to_numeric(vagas_df["QT_VAGA"], errors="coerce").fillna(0),
+        )
+        df = df[(df["_cargo"] == "PREFEITO") & (df["_qt_vaga"] >= 1)]
+        df = df.dropna(subset=["_uf"]).copy()
+        if df.empty:
+            self._official_prefeito_totals_cache[ano] = {}
+            return {}
+
+        df = df.assign(_municipio_key=df["_municipio"].apply(self._normalize_municipio_key))
+        df = df[df["_municipio_key"] != ""]
+        totals = df.drop_duplicates(subset=["_uf", "_municipio_key"]).groupby("_uf").size().to_dict()
+        result = {str(uf): int(total) for uf, total in totals.items()}
+        self._official_prefeito_totals_cache[ano] = result
+        return result
 
     def _normalize_cor_raca_category(self, value: object) -> str:
         text = self._normalize_ascii_upper(str(value or ""))
@@ -976,6 +1038,9 @@ class AnalyticsService:
         municipal_brasil_items: list[dict] = []
         if return_municipal_brasil and not pref_winners.empty:
             total_prefeitos_por_uf = pref_winners.groupby("_uf")["_municipio"].count().to_dict()
+            official_prefeito_totals = self._official_prefeito_totals_by_uf(ano_municipal)
+            for uf_key, total_official in official_prefeito_totals.items():
+                total_prefeitos_por_uf[uf_key] = max(int(total_official), int(total_prefeitos_por_uf.get(uf_key, 0)))
             agg = (
                 pref_winners.groupby(["_uf", "_espectro"], as_index=False)
                 .agg(
