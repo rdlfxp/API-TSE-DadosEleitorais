@@ -143,3 +143,40 @@ class OfficialVacanciesResponse(BaseModel):
     group_by: str
     total_vagas_oficiais: int
     items: list[OfficialVacancyItem] = Field(default_factory=list)
+
+
+class PolarizacaoFederalItem(BaseModel):
+    uf: str
+    partido: str
+    espectro: str
+    votos: int
+    status: str | None = None
+    eleito: bool
+    ano: int | None = None
+    turno: int | None = None
+
+
+class PolarizacaoMunicipalBrasilItem(BaseModel):
+    uf: str
+    espectro: str
+    partido_representativo: str | None = None
+    total_prefeitos: int
+    ano: int | None = None
+
+
+class PolarizacaoMunicipalUFItem(BaseModel):
+    uf: str
+    municipio: str
+    partido: str
+    espectro: str
+    votos: int
+    status: str | None = None
+    eleito: bool
+    ano: int | None = None
+    turno: int | None = None
+
+
+class PolarizacaoResponse(BaseModel):
+    federal: list[PolarizacaoFederalItem] = Field(default_factory=list)
+    municipal_brasil: list[PolarizacaoMunicipalBrasilItem] = Field(default_factory=list)
+    municipal_uf: list[PolarizacaoMunicipalUFItem] = Field(default_factory=list)

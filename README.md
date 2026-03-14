@@ -162,6 +162,7 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /v1/analytics/ranking?group_by=partido&metric=votos_nominais&ano=2022&uf=SP&top_n=10` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/mapa-uf?metric=votos_nominais&ano=2022&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/vagas-oficiais?ano=2024&uf=SP&group_by=cargo` (`200`, `400`, `422`, `503`)
+- `GET /v1/analytics/polarizacao?uf=SP&ano_governador=2022&ano_municipal=2024` (`200`, `422`, `503`)
 
 `group_by` aceitos em `/distribuicao`: `status`, `genero`, `instrucao`, `cor_raca`, `estado_civil`, `ocupacao`, `cargo`, `uf`.
 `metric` aceitos em `/serie-temporal`, `/ranking`, `/mapa-uf`: `votos_nominais`, `candidatos`, `eleitos`, `registros`.
@@ -243,6 +244,49 @@ Resposta `200`:
       "uf": "SP",
       "votos": 123456,
       "situacao": "ELEITO"
+    }
+  ]
+}
+```
+
+### `GET /polarizacao?uf=SP&ano_governador=2022&ano_municipal=2024`
+
+Resposta `200`:
+
+```json
+{
+  "federal": [
+    {
+      "uf": "SP",
+      "partido": "PL",
+      "espectro": "direita",
+      "votos": 1000000,
+      "status": "ELEITO",
+      "eleito": true,
+      "ano": 2022,
+      "turno": 2
+    }
+  ],
+  "municipal_brasil": [
+    {
+      "uf": "SP",
+      "espectro": "esquerda",
+      "partido_representativo": "PT",
+      "total_prefeitos": 645,
+      "ano": 2024
+    }
+  ],
+  "municipal_uf": [
+    {
+      "uf": "SP",
+      "municipio": "SAO PAULO",
+      "partido": "PT",
+      "espectro": "esquerda",
+      "votos": 500000,
+      "status": "ELEITO",
+      "eleito": true,
+      "ano": 2024,
+      "turno": 2
     }
   ]
 }

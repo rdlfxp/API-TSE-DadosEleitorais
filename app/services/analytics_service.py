@@ -26,6 +26,51 @@ NATIONAL_CARGOS = {
     "VICE-PRESIDENTE",
 }
 
+PARTIDO_SPECTRUM_MAP = {
+    "PCDOB": "esquerda",
+    "PDT": "centro-esquerda",
+    "PMB": "direita",
+    "PMN": "centro",
+    "PP": "direita",
+    "PPS": "centro",
+    "PRD": "centro",
+    "PROS": "centro",
+    "PRTB": "direita",
+    "PSB": "centro-esquerda",
+    "PSC": "direita",
+    "PSD": "centro",
+    "PSDB": "centro",
+    "PSOL": "esquerda",
+    "PSTU": "extrema-esquerda",
+    "PT": "esquerda",
+    "PTB": "direita",
+    "PTC": "centro-direita",
+    "PTN": "centro-direita",
+    "PV": "centro-esquerda",
+    "REDE": "centro-esquerda",
+    "SD": "centro-direita",
+    "SOLIDARIEDADE": "centro-direita",
+    "UB": "centro-direita",
+    "UNIAO": "centro-direita",
+    "UNIÃO": "centro-direita",
+    "AVANTE": "centro-direita",
+    "CIDADANIA": "centro",
+    "DC": "centro-direita",
+    "DEMOCRATAS": "centro-direita",
+    "MDB": "centro",
+    "MOBILIZA": "centro",
+    "NOVO": "direita",
+    "PATRIOTA": "direita",
+    "PL": "direita",
+    "PODE": "centro-direita",
+    "PODEMOS": "centro-direita",
+    "PR": "centro-direita",
+    "PRB": "direita",
+    "PRP": "centro-direita",
+    "PSL": "direita",
+    "REPUBLICANOS": "direita",
+}
+
 COR_RACA_CATEGORY_ORDER = [
     "BRANCA",
     "PRETA",
@@ -179,6 +224,23 @@ class AnalyticsService:
         if cargo_up in NATIONAL_CARGOS:
             return "nacional"
         return "uf"
+
+    def _party_spectrum(self, partido: str | None) -> str:
+        norm = self._normalize_ascii_upper(partido or "")
+        if not norm:
+            return "indefinido"
+        return PARTIDO_SPECTRUM_MAP.get(norm, "indefinido")
+
+    def _extract_turno(self, series: pd.Series) -> pd.Series:
+        turno_num = pd.to_numeric(series, errors="coerce")
+        turno_text = (
+            series.astype(str)
+            .str.extract(r"(\d+)", expand=False)
+            .fillna("")
+            .str.strip()
+        )
+        turno_text_num = pd.to_numeric(turno_text, errors="coerce")
+        return turno_num.fillna(turno_text_num).fillna(0).astype(int)
 
     def filter_options(self) -> dict:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
@@ -784,6 +846,163 @@ class AnalyticsService:
                 }
             )
         return items
+
+    def polarizacao(
+        self,
+        uf: str | None = None,
+        ano_governador: int | None = None,
+        turno_governador: int | None = None,
+        ano_municipal: int | None = None,
+        turno_municipal: int | None = None,
+    ) -> dict:
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_partido = self._pick_col(["SG_PARTIDO"])
+        col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+
+        required = [col_uf, col_cargo, col_partido, col_votos, col_situacao]
+        if any(col is None for col in required):
+            return {"federal": [], "municipal_brasil": [], "municipal_uf": []}
+
+        base = self.dataframe.copy()
+        base = base.assign(
+            _uf=self._normalize_text(base[col_uf]).str.upper().replace("", pd.NA),
+            _cargo=self._normalize_text(base[col_cargo]),
+            _municipio=(
+                self._normalize_text(base[col_municipio]).replace("", pd.NA)
+                if col_municipio
+                else pd.Series([pd.NA] * len(base), index=base.index)
+            ),
+            _partido=self._normalize_text(base[col_partido]).str.upper().replace("", pd.NA),
+            _votos=pd.to_numeric(base[col_votos], errors="coerce").fillna(0).astype(int),
+            _situacao=self._normalize_text(base[col_situacao]),
+        )
+        base = base.dropna(subset=["_uf", "_partido"]).copy()
+        if base.empty:
+            return {"federal": [], "municipal_brasil": [], "municipal_uf": []}
+        base = base.assign(
+            _is_eleito=self._is_elected(base["_situacao"]),
+            _turno=(self._extract_turno(base[col_turno]) if col_turno else 0),
+            _ano=(
+                pd.to_numeric(base[col_ano], errors="coerce").astype("Int64")
+                if col_ano
+                else pd.Series([pd.NA] * len(base), index=base.index, dtype="Int64")
+            ),
+        )
+
+        uf_filter = (uf or "").upper().strip()
+        if uf_filter:
+            base = base[base["_uf"] == uf_filter]
+
+        def winner_rows(df: pd.DataFrame, unit_cols: list[str]) -> pd.DataFrame:
+            if df.empty:
+                return df
+            ranked = df.sort_values(unit_cols + ["_is_eleito", "_turno", "_votos"], ascending=[True] * len(unit_cols) + [False, False, False])
+            return ranked.drop_duplicates(subset=unit_cols, keep="first").copy()
+
+        df_gov = base[base["_cargo"].str.upper() == "GOVERNADOR"].copy()
+        if ano_governador is None and col_ano and not df_gov.empty:
+            anos = df_gov["_ano"].dropna()
+            if not anos.empty:
+                ano_governador = int(anos.max())
+        if ano_governador is not None:
+            df_gov = df_gov[df_gov["_ano"] == int(ano_governador)]
+        if turno_governador is not None:
+            df_gov = df_gov[df_gov["_turno"] == int(turno_governador)]
+        gov_winners = winner_rows(df_gov, ["_uf"])
+
+        federal_items = [
+            {
+                "uf": str(row["_uf"]),
+                "partido": str(row["_partido"]),
+                "espectro": self._party_spectrum(str(row["_partido"])),
+                "votos": int(row["_votos"]),
+                "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) else None,
+                "eleito": bool(row["_is_eleito"]),
+                "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
+                "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
+            }
+            for _, row in gov_winners.sort_values("_uf").iterrows()
+        ]
+
+        df_pref = base[base["_cargo"].str.upper() == "PREFEITO"].copy()
+        if col_municipio:
+            df_pref = df_pref.dropna(subset=["_municipio"])
+        else:
+            df_pref = df_pref.iloc[0:0]
+        if ano_municipal is None and col_ano and not df_pref.empty:
+            anos = df_pref["_ano"].dropna()
+            if not anos.empty:
+                ano_municipal = int(anos.max())
+        if ano_municipal is not None:
+            df_pref = df_pref[df_pref["_ano"] == int(ano_municipal)]
+        if turno_municipal is not None:
+            df_pref = df_pref[df_pref["_turno"] == int(turno_municipal)]
+
+        pref_winners = winner_rows(df_pref, ["_uf", "_municipio"])
+        if not pref_winners.empty:
+            pref_winners = pref_winners.assign(_espectro=pref_winners["_partido"].apply(self._party_spectrum))
+        else:
+            pref_winners = pref_winners.assign(_espectro=pd.Series(dtype="object"))
+
+        municipal_uf_items = [
+            {
+                "uf": str(row["_uf"]),
+                "municipio": str(row["_municipio"]),
+                "partido": str(row["_partido"]),
+                "espectro": str(row["_espectro"]),
+                "votos": int(row["_votos"]),
+                "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) else None,
+                "eleito": bool(row["_is_eleito"]),
+                "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
+                "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
+            }
+            for _, row in pref_winners.sort_values(["_uf", "_municipio"]).iterrows()
+        ]
+
+        municipal_brasil_items: list[dict] = []
+        if not pref_winners.empty:
+            total_prefeitos_por_uf = pref_winners.groupby("_uf")["_municipio"].count().to_dict()
+            agg = (
+                pref_winners.groupby(["_uf", "_espectro"], as_index=False)
+                .agg(
+                    total_prefeitos=("_municipio", "count"),
+                    votos_total=("_votos", "sum"),
+                )
+                .sort_values(["_uf", "total_prefeitos", "votos_total", "_espectro"], ascending=[True, False, False, True])
+            )
+            winners_by_uf = agg.drop_duplicates(subset=["_uf"], keep="first")
+            partido_rep = (
+                pref_winners.groupby(["_uf", "_partido"], as_index=False)
+                .size()
+                .rename(columns={"size": "total"})
+                .sort_values(["_uf", "total", "_partido"], ascending=[True, False, True])
+                .drop_duplicates(subset=["_uf"], keep="first")
+                .set_index("_uf")
+            )
+            for _, row in winners_by_uf.sort_values("_uf").iterrows():
+                uf_key = str(row["_uf"])
+                municipal_brasil_items.append(
+                    {
+                        "uf": uf_key,
+                        "espectro": str(row["_espectro"]),
+                        "partido_representativo": (
+                            str(partido_rep.loc[uf_key]["_partido"]) if uf_key in partido_rep.index else None
+                        ),
+                        "total_prefeitos": int(total_prefeitos_por_uf.get(uf_key, 0)),
+                        "ano": int(ano_municipal) if ano_municipal is not None else None,
+                    }
+                )
+
+        return {
+            "federal": federal_items,
+            "municipal_brasil": municipal_brasil_items,
+            "municipal_uf": municipal_uf_items,
+        }
 
     def search_candidates(
         self,

@@ -1881,6 +1881,152 @@
           }
         }
       }
+    },
+    "/v1/analytics/polarizacao": {
+      "get": {
+        "summary": "Analytics Polarizacao",
+        "operationId": "analytics_polarizacao_v1_analytics_polarizacao_get",
+        "parameters": [
+          {
+            "name": "uf",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 2
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uf"
+            }
+          },
+          {
+            "name": "ano_governador",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ano Governador"
+            }
+          },
+          {
+            "name": "turno_governador",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Turno Governador"
+            }
+          },
+          {
+            "name": "ano_municipal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ano Municipal"
+            }
+          },
+          {
+            "name": "turno_municipal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Turno Municipal"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolarizacaoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2337,6 +2483,215 @@
           "total_registros"
         ],
         "title": "OverviewResponse"
+      },
+      "PolarizacaoFederalItem": {
+        "properties": {
+          "uf": {
+            "type": "string",
+            "title": "Uf"
+          },
+          "partido": {
+            "type": "string",
+            "title": "Partido"
+          },
+          "espectro": {
+            "type": "string",
+            "title": "Espectro"
+          },
+          "votos": {
+            "type": "integer",
+            "title": "Votos"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "eleito": {
+            "type": "boolean",
+            "title": "Eleito"
+          },
+          "ano": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ano"
+          },
+          "turno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uf",
+          "partido",
+          "espectro",
+          "votos",
+          "eleito"
+        ],
+        "title": "PolarizacaoFederalItem"
+      },
+      "PolarizacaoMunicipalBrasilItem": {
+        "properties": {
+          "uf": {
+            "type": "string",
+            "title": "Uf"
+          },
+          "espectro": {
+            "type": "string",
+            "title": "Espectro"
+          },
+          "partido_representativo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partido Representativo"
+          },
+          "total_prefeitos": {
+            "type": "integer",
+            "title": "Total Prefeitos"
+          },
+          "ano": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ano"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uf",
+          "espectro",
+          "total_prefeitos"
+        ],
+        "title": "PolarizacaoMunicipalBrasilItem"
+      },
+      "PolarizacaoMunicipalUFItem": {
+        "properties": {
+          "uf": {
+            "type": "string",
+            "title": "Uf"
+          },
+          "municipio": {
+            "type": "string",
+            "title": "Municipio"
+          },
+          "partido": {
+            "type": "string",
+            "title": "Partido"
+          },
+          "espectro": {
+            "type": "string",
+            "title": "Espectro"
+          },
+          "votos": {
+            "type": "integer",
+            "title": "Votos"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "eleito": {
+            "type": "boolean",
+            "title": "Eleito"
+          },
+          "ano": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ano"
+          },
+          "turno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uf",
+          "municipio",
+          "partido",
+          "espectro",
+          "votos",
+          "eleito"
+        ],
+        "title": "PolarizacaoMunicipalUFItem"
+      },
+      "PolarizacaoResponse": {
+        "properties": {
+          "federal": {
+            "items": {
+              "$ref": "#/components/schemas/PolarizacaoFederalItem"
+            },
+            "type": "array",
+            "title": "Federal"
+          },
+          "municipal_brasil": {
+            "items": {
+              "$ref": "#/components/schemas/PolarizacaoMunicipalBrasilItem"
+            },
+            "type": "array",
+            "title": "Municipal Brasil"
+          },
+          "municipal_uf": {
+            "items": {
+              "$ref": "#/components/schemas/PolarizacaoMunicipalUFItem"
+            },
+            "type": "array",
+            "title": "Municipal Uf"
+          }
+        },
+        "type": "object",
+        "title": "PolarizacaoResponse"
       },
       "RankingItem": {
         "properties": {
