@@ -827,6 +827,82 @@ def test_polarizacao_endpoint_returns_winners_and_municipal_breakdown(client: Te
     assert municipal_brasil_by_uf["SP"]["total_prefeitos"] == 2
 
 
+def test_polarizacao_supports_legacy_map_mode_and_ano(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1000000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SG_PARTIDO": "PT",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 500000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "RJ",
+                "NM_UE": "NITEROI",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SG_PARTIDO": "MDB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 210000,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        federal = client.get(
+            "/v1/analytics/polarizacao",
+            params={"ano": 2022, "map_mode": "stateByGovernor"},
+        )
+        municipal_brasil = client.get(
+            "/v1/analytics/polarizacao",
+            params={"ano": 2024, "map_mode": "municipalityByMayor"},
+        )
+        municipal_uf = client.get(
+            "/v1/analytics/polarizacao",
+            params={"ano": 2024, "uf": "SP", "map_mode": "municipalityByMayor"},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert federal.status_code == 200
+    federal_payload = federal.json()
+    assert len(federal_payload["federal"]) == 1
+    assert federal_payload["municipal_brasil"] == []
+    assert federal_payload["municipal_uf"] == []
+    assert federal_payload["federal"][0]["ano"] == 2022
+
+    assert municipal_brasil.status_code == 200
+    municipal_brasil_payload = municipal_brasil.json()
+    assert municipal_brasil_payload["federal"] == []
+    assert len(municipal_brasil_payload["municipal_brasil"]) == 2
+    assert municipal_brasil_payload["municipal_uf"] == []
+    assert all(item["ano"] == 2024 for item in municipal_brasil_payload["municipal_brasil"])
+
+    assert municipal_uf.status_code == 200
+    municipal_uf_payload = municipal_uf.json()
+    assert municipal_uf_payload["federal"] == []
+    assert municipal_uf_payload["municipal_brasil"] == []
+    assert len(municipal_uf_payload["municipal_uf"]) == 1
+    assert municipal_uf_payload["municipal_uf"][0]["municipio"] == "SAO PAULO"
+    assert municipal_uf_payload["municipal_uf"][0]["ano"] == 2024
+
+
 def test_turno_validation_returns_422(client: TestClient):
     response = client.get("/v1/analytics/overview", params={"ano": 2024, "turno": 3})
     assert response.status_code == 422

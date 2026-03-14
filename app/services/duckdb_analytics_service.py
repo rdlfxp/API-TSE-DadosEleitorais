@@ -846,6 +846,7 @@ class DuckDBAnalyticsService:
         turno_governador: int | None = None,
         ano_municipal: int | None = None,
         turno_municipal: int | None = None,
+        map_mode: str | None = None,
     ) -> dict:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
@@ -860,154 +861,186 @@ class DuckDBAnalyticsService:
         if any(col is None for col in required):
             return {"federal": [], "municipal_brasil": [], "municipal_uf": []}
 
-        select_cols = [
-            f"CAST({col_uf} AS VARCHAR) AS uf",
-            f"CAST({col_cargo} AS VARCHAR) AS cargo",
-            (f"CAST({col_municipio} AS VARCHAR) AS municipio" if col_municipio else "NULL AS municipio"),
-            f"CAST({col_partido} AS VARCHAR) AS partido",
-            f"CAST({col_situacao} AS VARCHAR) AS situacao",
-            f"COALESCE(TRY_CAST({col_votos} AS BIGINT), 0) AS votos",
-            (f"TRY_CAST({col_ano} AS BIGINT) AS ano" if col_ano else "NULL AS ano"),
-            (f"CAST({col_turno} AS VARCHAR) AS turno" if col_turno else "NULL AS turno"),
-        ]
-        rows = self._rows(f"SELECT {', '.join(select_cols)} FROM analytics")
-
-        parsed: list[dict] = []
+        mode = (map_mode or "").strip().lower()
+        should_build_federal = mode in ("", "statebygovernor")
+        should_build_municipal = mode in ("", "municipalitybymayor")
         target_uf = self._normalize_value(uf, uppercase=True) if uf else ""
-        for row in rows:
-            row_uf = self._normalize_value(row[0], uppercase=True)
-            row_cargo = self._normalize_value(row[1])
-            row_municipio = self._normalize_value(row[2])
-            row_partido = self._normalize_value(row[3], uppercase=True)
-            row_situacao = self._normalize_value(row[4])
-            row_votos = self._parse_int(row[5]) or 0
-            row_ano = self._parse_int(row[6])
-            row_turno = self._parse_turno(row[7])
-            if not row_uf or not row_partido:
-                continue
-            if target_uf and row_uf != target_uf:
-                continue
-            parsed.append(
+        return_municipal_uf = mode == "" or (mode == "municipalitybymayor" and bool(target_uf))
+        return_municipal_brasil = mode == "" or (mode == "municipalitybymayor" and not bool(target_uf))
+
+        uf_expr = f"UPPER(TRIM(CAST({col_uf} AS VARCHAR)))"
+        cargo_expr = f"UPPER(TRIM(CAST({col_cargo} AS VARCHAR)))"
+        partido_expr = f"UPPER(TRIM(CAST({col_partido} AS VARCHAR)))"
+        situacao_expr = f"TRIM(CAST({col_situacao} AS VARCHAR))"
+        votos_expr = f"COALESCE(TRY_CAST({col_votos} AS BIGINT), 0)"
+        ano_expr = f"TRY_CAST({col_ano} AS BIGINT)" if col_ano else "NULL"
+        turno_expr = (
+            "COALESCE("
+            f"TRY_CAST({col_turno} AS BIGINT), "
+            f"TRY_CAST(regexp_extract(CAST({col_turno} AS VARCHAR), '(\\d+)', 1) AS BIGINT), "
+            "0)"
+            if col_turno
+            else "0"
+        )
+        municipio_expr = (
+            f"NULLIF(TRIM(CAST({col_municipio} AS VARCHAR)), '')"
+            if col_municipio
+            else "NULL"
+        )
+        eleito_expr = f"CASE WHEN UPPER({situacao_expr}) LIKE 'ELEITO%' THEN 1 ELSE 0 END"
+
+        base_clauses = [f"{uf_expr} <> ''", f"{partido_expr} <> ''"]
+        base_params: list[object] = []
+        if target_uf:
+            base_clauses.append(f"{uf_expr} = ?")
+            base_params.append(target_uf)
+
+        def _winner_rows(
+            cargo: str,
+            partition_cols: list[str],
+            ano_param: int | None,
+            turno_param: int | None,
+            require_municipio: bool = False,
+        ) -> tuple[list[tuple], int | None]:
+            filters = list(base_clauses)
+            params = list(base_params)
+            filters.append(f"{cargo_expr} = ?")
+            params.append(cargo)
+            if require_municipio:
+                filters.append(f"{municipio_expr} IS NOT NULL")
+
+            resolved_ano = ano_param
+            if resolved_ano is None and col_ano:
+                max_ano = self._scalar(
+                    f"SELECT MAX({ano_expr}) FROM analytics WHERE {' AND '.join(filters)}",
+                    params,
+                )
+                resolved_ano = int(max_ano) if max_ano is not None else None
+            if resolved_ano is not None:
+                filters.append(f"{ano_expr} = ?")
+                params.append(int(resolved_ano))
+            if turno_param is not None:
+                filters.append(f"{turno_expr} = ?")
+                params.append(int(turno_param))
+
+            where_sql = " AND ".join(filters)
+            partition_sql = ", ".join(partition_cols)
+            rows = self._rows(
+                (
+                    "SELECT uf, municipio, partido, situacao, votos, ano, turno, eleito "
+                    "FROM ("
+                    "  SELECT "
+                    f"  {uf_expr} AS uf, "
+                    f"  {municipio_expr} AS municipio, "
+                    f"  {partido_expr} AS partido, "
+                    f"  {situacao_expr} AS situacao, "
+                    f"  {votos_expr} AS votos, "
+                    f"  {ano_expr} AS ano, "
+                    f"  {turno_expr} AS turno, "
+                    f"  {eleito_expr} AS eleito, "
+                    "  ROW_NUMBER() OVER ("
+                    f"    PARTITION BY {partition_sql} "
+                    f"    ORDER BY {eleito_expr} DESC, {turno_expr} DESC, {votos_expr} DESC"
+                    "  ) AS rn "
+                    "  FROM analytics "
+                    f"  WHERE {where_sql}"
+                    ") t "
+                    "WHERE rn = 1 "
+                    "ORDER BY uf, municipio"
+                ),
+                params,
+            )
+            return rows, resolved_ano
+
+        federal_items: list[dict] = []
+        if should_build_federal:
+            gov_rows, resolved_ano_gov = _winner_rows(
+                cargo="GOVERNADOR",
+                partition_cols=[uf_expr],
+                ano_param=ano_governador,
+                turno_param=turno_governador,
+            )
+            federal_items = [
                 {
-                    "uf": row_uf,
-                    "cargo": row_cargo,
-                    "municipio": row_municipio,
-                    "partido": row_partido,
-                    "situacao": row_situacao,
-                    "votos": row_votos,
-                    "ano": row_ano,
-                    "turno": row_turno,
-                    "eleito": row_situacao.upper().startswith("ELEITO"),
+                    "uf": str(r[0]),
+                    "partido": str(r[2]),
+                    "espectro": self._party_spectrum(str(r[2])),
+                    "votos": int(r[4] or 0),
+                    "status": str(r[3]) if r[3] else None,
+                    "eleito": bool(r[7]),
+                    "ano": int(r[5]) if r[5] is not None else (int(resolved_ano_gov) if resolved_ano_gov is not None else None),
+                    "turno": int(r[6]) if r[6] is not None else None,
                 }
+                for r in gov_rows
+            ]
+
+        municipal_uf_items: list[dict] = []
+        municipal_brasil_items: list[dict] = []
+        if should_build_municipal:
+            pref_rows, resolved_ano_mun = _winner_rows(
+                cargo="PREFEITO",
+                partition_cols=[uf_expr, municipio_expr],
+                ano_param=ano_municipal,
+                turno_param=turno_municipal,
+                require_municipio=True,
             )
 
-        def pick_winners(items: list[dict], key_fn):
-            winners: dict[str, dict] = {}
-            for item in items:
-                key = key_fn(item)
-                current = winners.get(key)
-                rank = (1 if item["eleito"] else 0, item["turno"], item["votos"])
-                if current is None:
-                    winners[key] = item
-                    continue
-                current_rank = (1 if current["eleito"] else 0, current["turno"], current["votos"])
-                if rank > current_rank:
-                    winners[key] = item
-            return winners
+            if return_municipal_uf:
+                municipal_uf_items = [
+                    {
+                        "uf": str(r[0]),
+                        "municipio": str(r[1]),
+                        "partido": str(r[2]),
+                        "espectro": self._party_spectrum(str(r[2])),
+                        "votos": int(r[4] or 0),
+                        "status": str(r[3]) if r[3] else None,
+                        "eleito": bool(r[7]),
+                        "ano": int(r[5]) if r[5] is not None else (int(resolved_ano_mun) if resolved_ano_mun is not None else None),
+                        "turno": int(r[6]) if r[6] is not None else None,
+                    }
+                    for r in pref_rows
+                ]
 
-        gov_rows = [r for r in parsed if self._normalize_value(r["cargo"], uppercase=True) == "GOVERNADOR"]
-        if ano_governador is None:
-            anos = [r["ano"] for r in gov_rows if r["ano"] is not None]
-            ano_governador = max(anos) if anos else None
-        if ano_governador is not None:
-            gov_rows = [r for r in gov_rows if r["ano"] == int(ano_governador)]
-        if turno_governador is not None:
-            gov_rows = [r for r in gov_rows if r["turno"] == int(turno_governador)]
-        gov_winners = pick_winners(gov_rows, key_fn=lambda item: item["uf"])
-        federal_items = []
-        for uf_key in sorted(gov_winners.keys()):
-            item = gov_winners[uf_key]
-            federal_items.append(
-                {
-                    "uf": item["uf"],
-                    "partido": item["partido"],
-                    "espectro": self._party_spectrum(item["partido"]),
-                    "votos": int(item["votos"]),
-                    "status": item["situacao"] or None,
-                    "eleito": bool(item["eleito"]),
-                    "ano": int(item["ano"]) if item["ano"] is not None else None,
-                    "turno": int(item["turno"]) if item["turno"] is not None else None,
-                }
-            )
+            if return_municipal_brasil and pref_rows:
+                spectrum_count: dict[tuple[str, str], dict[str, int]] = {}
+                party_count: dict[tuple[str, str], int] = {}
+                total_prefeitos_por_uf: dict[str, int] = {}
+                for row in pref_rows:
+                    uf_key = str(row[0])
+                    partido_key = str(row[2])
+                    votos = int(row[4] or 0)
+                    espectro = self._party_spectrum(partido_key)
+                    spectrum_key = (uf_key, espectro)
+                    entry = spectrum_count.get(spectrum_key, {"total_prefeitos": 0, "votos_total": 0})
+                    entry["total_prefeitos"] += 1
+                    entry["votos_total"] += votos
+                    spectrum_count[spectrum_key] = entry
+                    party_key = (uf_key, partido_key)
+                    party_count[party_key] = party_count.get(party_key, 0) + 1
+                    total_prefeitos_por_uf[uf_key] = total_prefeitos_por_uf.get(uf_key, 0) + 1
 
-        pref_rows = [
-            r
-            for r in parsed
-            if col_municipio and self._normalize_value(r["cargo"], uppercase=True) == "PREFEITO" and r["municipio"]
-        ]
-        if ano_municipal is None:
-            anos = [r["ano"] for r in pref_rows if r["ano"] is not None]
-            ano_municipal = max(anos) if anos else None
-        if ano_municipal is not None:
-            pref_rows = [r for r in pref_rows if r["ano"] == int(ano_municipal)]
-        if turno_municipal is not None:
-            pref_rows = [r for r in pref_rows if r["turno"] == int(turno_municipal)]
-        pref_winners = pick_winners(pref_rows, key_fn=lambda item: f"{item['uf']}|{item['municipio']}")
+                by_uf: dict[str, list[tuple[str, dict[str, int]]]] = {}
+                for (uf_key, espectro), values in spectrum_count.items():
+                    by_uf.setdefault(uf_key, []).append((espectro, values))
 
-        municipal_uf_items = []
-        for key in sorted(pref_winners.keys()):
-            item = pref_winners[key]
-            municipal_uf_items.append(
-                {
-                    "uf": item["uf"],
-                    "municipio": item["municipio"],
-                    "partido": item["partido"],
-                    "espectro": self._party_spectrum(item["partido"]),
-                    "votos": int(item["votos"]),
-                    "status": item["situacao"] or None,
-                    "eleito": bool(item["eleito"]),
-                    "ano": int(item["ano"]) if item["ano"] is not None else None,
-                    "turno": int(item["turno"]) if item["turno"] is not None else None,
-                }
-            )
-
-        spectrum_count: dict[tuple[str, str], dict[str, int]] = {}
-        party_count: dict[tuple[str, str], int] = {}
-        total_prefeitos_por_uf: dict[str, int] = {}
-        for item in pref_winners.values():
-            spect = self._party_spectrum(item["partido"])
-            spectrum_key = (item["uf"], spect)
-            entry = spectrum_count.get(spectrum_key, {"total_prefeitos": 0, "votos_total": 0})
-            entry["total_prefeitos"] += 1
-            entry["votos_total"] += int(item["votos"])
-            spectrum_count[spectrum_key] = entry
-            party_key = (item["uf"], item["partido"])
-            party_count[party_key] = party_count.get(party_key, 0) + 1
-            total_prefeitos_por_uf[item["uf"]] = total_prefeitos_por_uf.get(item["uf"], 0) + 1
-
-        by_uf: dict[str, list[tuple[str, dict[str, int]]]] = {}
-        for (uf_key, espectro), values in spectrum_count.items():
-            by_uf.setdefault(uf_key, []).append((espectro, values))
-
-        municipal_brasil_items = []
-        for uf_key in sorted(by_uf.keys()):
-            best = sorted(
-                by_uf[uf_key],
-                key=lambda item: (-item[1]["total_prefeitos"], -item[1]["votos_total"], item[0]),
-            )[0]
-            party_options = sorted(
-                [(party, total) for (uf_party, party), total in party_count.items() if uf_party == uf_key],
-                key=lambda item: (-item[1], item[0]),
-            )
-            municipal_brasil_items.append(
-                {
-                    "uf": uf_key,
-                    "espectro": best[0],
-                    "partido_representativo": party_options[0][0] if party_options else None,
-                    "total_prefeitos": int(total_prefeitos_por_uf.get(uf_key, 0)),
-                    "ano": int(ano_municipal) if ano_municipal is not None else None,
-                }
-            )
+                for uf_key in sorted(by_uf.keys()):
+                    best = sorted(
+                        by_uf[uf_key],
+                        key=lambda item: (-item[1]["total_prefeitos"], -item[1]["votos_total"], item[0]),
+                    )[0]
+                    party_options = sorted(
+                        [(party, total) for (uf_party, party), total in party_count.items() if uf_party == uf_key],
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                    municipal_brasil_items.append(
+                        {
+                            "uf": uf_key,
+                            "espectro": best[0],
+                            "partido_representativo": party_options[0][0] if party_options else None,
+                            "total_prefeitos": int(total_prefeitos_por_uf.get(uf_key, 0)),
+                            "ano": int(resolved_ano_mun) if resolved_ano_mun is not None else None,
+                        }
+                    )
 
         return {
             "federal": federal_items,

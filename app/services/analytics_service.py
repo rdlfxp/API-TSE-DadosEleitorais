@@ -854,6 +854,7 @@ class AnalyticsService:
         turno_governador: int | None = None,
         ano_municipal: int | None = None,
         turno_municipal: int | None = None,
+        map_mode: str | None = None,
     ) -> dict:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
@@ -904,44 +905,54 @@ class AnalyticsService:
             ranked = df.sort_values(unit_cols + ["_is_eleito", "_turno", "_votos"], ascending=[True] * len(unit_cols) + [False, False, False])
             return ranked.drop_duplicates(subset=unit_cols, keep="first").copy()
 
-        df_gov = base[base["_cargo"].str.upper() == "GOVERNADOR"].copy()
-        if ano_governador is None and col_ano and not df_gov.empty:
-            anos = df_gov["_ano"].dropna()
-            if not anos.empty:
-                ano_governador = int(anos.max())
-        if ano_governador is not None:
-            df_gov = df_gov[df_gov["_ano"] == int(ano_governador)]
-        if turno_governador is not None:
-            df_gov = df_gov[df_gov["_turno"] == int(turno_governador)]
-        gov_winners = winner_rows(df_gov, ["_uf"])
+        mode = (map_mode or "").strip().lower()
+        should_build_federal = mode in ("", "statebygovernor")
+        should_build_municipal = mode in ("", "municipalitybymayor")
+        return_municipal_uf = mode == "" or (mode == "municipalitybymayor" and bool(uf_filter))
+        return_municipal_brasil = mode == "" or (mode == "municipalitybymayor" and not bool(uf_filter))
 
-        federal_items = [
-            {
-                "uf": str(row["_uf"]),
-                "partido": str(row["_partido"]),
-                "espectro": self._party_spectrum(str(row["_partido"])),
-                "votos": int(row["_votos"]),
-                "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) else None,
-                "eleito": bool(row["_is_eleito"]),
-                "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
-                "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
-            }
-            for _, row in gov_winners.sort_values("_uf").iterrows()
-        ]
+        federal_items: list[dict] = []
+        if should_build_federal:
+            df_gov = base[base["_cargo"].str.upper() == "GOVERNADOR"].copy()
+            if ano_governador is None and col_ano and not df_gov.empty:
+                anos = df_gov["_ano"].dropna()
+                if not anos.empty:
+                    ano_governador = int(anos.max())
+            if ano_governador is not None:
+                df_gov = df_gov[df_gov["_ano"] == int(ano_governador)]
+            if turno_governador is not None:
+                df_gov = df_gov[df_gov["_turno"] == int(turno_governador)]
+            gov_winners = winner_rows(df_gov, ["_uf"])
 
-        df_pref = base[base["_cargo"].str.upper() == "PREFEITO"].copy()
-        if col_municipio:
-            df_pref = df_pref.dropna(subset=["_municipio"])
-        else:
-            df_pref = df_pref.iloc[0:0]
-        if ano_municipal is None and col_ano and not df_pref.empty:
-            anos = df_pref["_ano"].dropna()
-            if not anos.empty:
-                ano_municipal = int(anos.max())
-        if ano_municipal is not None:
-            df_pref = df_pref[df_pref["_ano"] == int(ano_municipal)]
-        if turno_municipal is not None:
-            df_pref = df_pref[df_pref["_turno"] == int(turno_municipal)]
+            federal_items = [
+                {
+                    "uf": str(row["_uf"]),
+                    "partido": str(row["_partido"]),
+                    "espectro": self._party_spectrum(str(row["_partido"])),
+                    "votos": int(row["_votos"]),
+                    "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) else None,
+                    "eleito": bool(row["_is_eleito"]),
+                    "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
+                    "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
+                }
+                for _, row in gov_winners.sort_values("_uf").iterrows()
+            ]
+
+        df_pref = base.iloc[0:0]
+        if should_build_municipal:
+            df_pref = base[base["_cargo"].str.upper() == "PREFEITO"].copy()
+            if col_municipio:
+                df_pref = df_pref.dropna(subset=["_municipio"])
+            else:
+                df_pref = df_pref.iloc[0:0]
+            if ano_municipal is None and col_ano and not df_pref.empty:
+                anos = df_pref["_ano"].dropna()
+                if not anos.empty:
+                    ano_municipal = int(anos.max())
+            if ano_municipal is not None:
+                df_pref = df_pref[df_pref["_ano"] == int(ano_municipal)]
+            if turno_municipal is not None:
+                df_pref = df_pref[df_pref["_turno"] == int(turno_municipal)]
 
         pref_winners = winner_rows(df_pref, ["_uf", "_municipio"])
         if not pref_winners.empty:
@@ -949,23 +960,25 @@ class AnalyticsService:
         else:
             pref_winners = pref_winners.assign(_espectro=pd.Series(dtype="object"))
 
-        municipal_uf_items = [
-            {
-                "uf": str(row["_uf"]),
-                "municipio": str(row["_municipio"]),
-                "partido": str(row["_partido"]),
-                "espectro": str(row["_espectro"]),
-                "votos": int(row["_votos"]),
-                "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) else None,
-                "eleito": bool(row["_is_eleito"]),
-                "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
-                "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
-            }
-            for _, row in pref_winners.sort_values(["_uf", "_municipio"]).iterrows()
-        ]
+        municipal_uf_items = []
+        if return_municipal_uf:
+            municipal_uf_items = [
+                {
+                    "uf": str(row["_uf"]),
+                    "municipio": str(row["_municipio"]),
+                    "partido": str(row["_partido"]),
+                    "espectro": str(row["_espectro"]),
+                    "votos": int(row["_votos"]),
+                    "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) else None,
+                    "eleito": bool(row["_is_eleito"]),
+                    "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
+                    "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
+                }
+                for _, row in pref_winners.sort_values(["_uf", "_municipio"]).iterrows()
+            ]
 
         municipal_brasil_items: list[dict] = []
-        if not pref_winners.empty:
+        if return_municipal_brasil and not pref_winners.empty:
             total_prefeitos_por_uf = pref_winners.groupby("_uf")["_municipio"].count().to_dict()
             agg = (
                 pref_winners.groupby(["_uf", "_espectro"], as_index=False)
