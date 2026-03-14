@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 
 import duckdb
+import pandas as pd
 
 
 ELEITO_LABELS = {
@@ -92,6 +93,8 @@ class DuckDBAnalyticsService:
     max_top_n: int
     _query_lock: Lock
     _columns: set[str]
+    _source_path: Path | None = field(default=None, init=False, repr=False)
+    _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_file(
@@ -123,13 +126,15 @@ class DuckDBAnalyticsService:
             raise ValueError("Formato de analytics nao suportado. Use .csv ou .parquet.")
 
         cols = {str(v[0]).upper() for v in conn.execute("DESCRIBE analytics").fetchall()}
-        return cls(
+        service = cls(
             conn=conn,
             default_top_n=default_top_n,
             max_top_n=max_top_n,
             _query_lock=Lock(),
             _columns=cols,
         )
+        service._source_path = path
+        return service
 
     @property
     def row_count(self) -> int:
@@ -180,6 +185,54 @@ class DuckDBAnalyticsService:
         if not norm:
             return "indefinido"
         return PARTIDO_SPECTRUM_MAP.get(norm, "indefinido")
+
+    def _official_prefeito_totals_by_uf(self, ano: int | None) -> dict[str, int]:
+        if ano is None:
+            return {}
+        if self._source_path is None:
+            return {}
+        if ano in self._official_prefeito_totals_cache:
+            return self._official_prefeito_totals_cache[ano]
+
+        project_root = self._source_path.parent.parent if self._source_path.parent.name == "curated" else self._source_path.parent
+        raw_path = project_root / "raw" / str(ano) / f"consulta_vagas_{ano}_BRASIL.csv"
+        if not raw_path.exists():
+            self._official_prefeito_totals_cache[ano] = {}
+            return {}
+
+        try:
+            vagas_df = pd.read_csv(
+                raw_path,
+                sep=";",
+                encoding="latin1",
+                usecols=["SG_UF", "NM_UE", "DS_CARGO", "QT_VAGA"],
+                low_memory=False,
+            )
+        except Exception:
+            self._official_prefeito_totals_cache[ano] = {}
+            return {}
+
+        df = vagas_df.assign(
+            _uf=vagas_df["SG_UF"].fillna("").astype(str).str.upper().str.strip(),
+            _municipio=vagas_df["NM_UE"].fillna("").astype(str).str.upper().str.strip(),
+            _cargo=vagas_df["DS_CARGO"].fillna("").astype(str).str.upper().str.strip(),
+            _qt_vaga=pd.to_numeric(vagas_df["QT_VAGA"], errors="coerce").fillna(0),
+        )
+        df = df[(df["_cargo"] == "PREFEITO") & (df["_qt_vaga"] >= 1)]
+        df = df[(df["_uf"] != "") & (df["_municipio"] != "")]
+        if df.empty:
+            self._official_prefeito_totals_cache[ano] = {}
+            return {}
+
+        result = (
+            df.drop_duplicates(subset=["_uf", "_municipio"])
+            .groupby("_uf")
+            .size()
+            .astype(int)
+            .to_dict()
+        )
+        self._official_prefeito_totals_cache[ano] = result
+        return result
 
     def _where(
         self,
@@ -1014,6 +1067,11 @@ class DuckDBAnalyticsService:
                     party_key = (uf_key, partido_key)
                     party_count[party_key] = party_count.get(party_key, 0) + 1
                     total_prefeitos_por_uf[uf_key] = total_prefeitos_por_uf.get(uf_key, 0) + 1
+                official_prefeito_totals = self._official_prefeito_totals_by_uf(resolved_ano_mun)
+                for uf_key, total_official in official_prefeito_totals.items():
+                    total_prefeitos_por_uf[uf_key] = max(
+                        int(total_official), int(total_prefeitos_por_uf.get(uf_key, 0))
+                    )
 
                 by_uf: dict[str, list[tuple[str, dict[str, int]]]] = {}
                 for (uf_key, espectro), values in spectrum_count.items():
