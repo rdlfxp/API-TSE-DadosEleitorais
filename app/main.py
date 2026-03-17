@@ -4,17 +4,22 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import settings
 from app.schemas import (
     AgeStatsResponse,
+    CandidateSummaryResponse,
+    CompareResponse,
     CandidateSearchResponse,
     CorRacaComparativoResponse,
+    ElectorateProfileResponse,
     ErrorResponse,
     FilterOptionsResponse,
     OfficialVacanciesResponse,
@@ -26,6 +31,9 @@ from app.schemas import (
     TimeSeriesResponse,
     TopCandidatesResponse,
     UFMapResponse,
+    VoteDistributionResponse,
+    VoteHistoryResponse,
+    ZoneFidelityResponse,
 )
 from app.services.analytics_service import AnalyticsService
 from app.services.duckdb_analytics_service import DuckDBAnalyticsService
@@ -130,6 +138,33 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    compare_op = (
+        openapi_schema.get("paths", {})
+        .get("/v1/candidates/compare", {})
+        .get("get", {})
+    )
+    for param in compare_op.get("parameters", []):
+        if param.get("name") == "candidate_ids" and param.get("in") == "query":
+            param["style"] = "form"
+            param["explode"] = False
+            schema = param.get("schema", {})
+            if isinstance(schema, dict):
+                schema.pop("openapi_extra", None)
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 def get_service() -> AnalyticsService | DuckDBAnalyticsService:
@@ -318,6 +353,101 @@ def analytics_candidates_search(
         page_size=page_size,
     )
     return CandidateSearchResponse(**data)
+
+
+@app.get("/v1/candidates/{candidate_id}/summary", response_model=CandidateSummaryResponse, responses=ERROR_RESPONSES)
+def candidate_summary(
+    candidate_id: str,
+    year: int | None = None,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+) -> CandidateSummaryResponse:
+    data = get_service().candidate_summary(candidate_id=candidate_id, year=year, state=state, office=office)
+    return CandidateSummaryResponse(**data)
+
+
+@app.get("/v1/candidates/{candidate_id}/vote-history", response_model=VoteHistoryResponse, responses=ERROR_RESPONSES)
+def candidate_vote_history(
+    candidate_id: str,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+) -> VoteHistoryResponse:
+    data = get_service().candidate_vote_history(candidate_id=candidate_id, state=state, office=office)
+    return VoteHistoryResponse(**data)
+
+
+@app.get("/v1/candidates/{candidate_id}/electorate-profile", response_model=ElectorateProfileResponse, responses=ERROR_RESPONSES)
+def candidate_electorate_profile(
+    candidate_id: str,
+    year: int | None = None,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+    municipality: str | None = None,
+) -> ElectorateProfileResponse:
+    data = get_service().candidate_electorate_profile(
+        candidate_id=candidate_id,
+        year=year,
+        state=state,
+        office=office,
+        municipality=municipality,
+    )
+    return ElectorateProfileResponse(**data)
+
+
+@app.get("/v1/candidates/{candidate_id}/vote-distribution", response_model=VoteDistributionResponse, responses=ERROR_RESPONSES)
+def candidate_vote_distribution(
+    candidate_id: str,
+    level: Literal["macroregiao", "uf", "municipio", "zona"],
+    year: int | None = None,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+) -> VoteDistributionResponse:
+    data = get_service().candidate_vote_distribution(
+        candidate_id=candidate_id,
+        level=level,
+        year=year,
+        state=state,
+        office=office,
+    )
+    return VoteDistributionResponse(**data)
+
+
+@app.get("/v1/candidates/{candidate_id}/zone-fidelity", response_model=ZoneFidelityResponse, responses=ERROR_RESPONSES)
+def candidate_zone_fidelity(
+    candidate_id: str,
+    year: int | None = None,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+    include_geometry: bool = False,
+) -> ZoneFidelityResponse:
+    data = get_service().candidate_zone_fidelity(
+        candidate_id=candidate_id,
+        year=year,
+        state=state,
+        office=office,
+        include_geometry=include_geometry,
+    )
+    return ZoneFidelityResponse(**data)
+
+
+@app.get("/v1/candidates/compare", response_model=CompareResponse, responses=ERROR_RESPONSES)
+def candidates_compare(
+    candidate_ids: list[str] = Query(
+        ...,
+        description="IDs de candidatos (CSV: 1,2 ou repetido: ?candidate_ids=1&candidate_ids=2)",
+        openapi_extra={"style": "form", "explode": False},
+    ),
+    year: int | None = None,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+) -> CompareResponse:
+    parsed_ids: list[str] = []
+    for value in candidate_ids:
+        parsed_ids.extend([token.strip() for token in str(value).split(",") if token.strip()])
+    if len(parsed_ids) < 2 or len(parsed_ids) > 4:
+        raise HTTPException(status_code=400, detail="candidate_ids deve conter de 2 a 4 IDs.")
+    data = get_service().candidates_compare(candidate_ids=parsed_ids, year=year, state=state, office=office)
+    return CompareResponse(**data)
 
 
 @app.get("/v1/analytics/distribuicao", response_model=GroupedDistributionResponse, responses=ERROR_RESPONSES)

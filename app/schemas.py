@@ -180,3 +180,112 @@ class PolarizacaoResponse(BaseModel):
     federal: list[PolarizacaoFederalItem] = Field(default_factory=list)
     municipal_brasil: list[PolarizacaoMunicipalBrasilItem] = Field(default_factory=list)
     municipal_uf: list[PolarizacaoMunicipalUFItem] = Field(default_factory=list)
+
+
+class CandidateLatestElection(BaseModel):
+    year: int
+    votes: int
+    vote_share: float
+    state_rank: int | None = None
+
+
+class CandidateSummaryResponse(BaseModel):
+    candidate_id: str
+    name: str
+    number: str | None = None
+    party: str | None = None
+    coalition: str | None = None
+    office: str | None = None
+    state: str | None = None
+    mandates: int
+    status: str | None = None
+    latest_election: CandidateLatestElection
+
+
+class VoteHistoryItem(BaseModel):
+    year: int
+    votes: int
+    vote_share: float
+    status: str | None = None
+
+
+class VoteHistoryResponse(BaseModel):
+    candidate_id: str
+    items: list[VoteHistoryItem] = Field(default_factory=list)
+
+
+class GenderProfile(BaseModel):
+    male_share: float
+    female_share: float
+
+
+class AgeBandsProfile(BaseModel):
+    a18_34: float
+    a35_59: float
+    a60_plus: float
+
+
+class ElectorateProfileResponse(BaseModel):
+    candidate_id: str
+    gender: GenderProfile
+    age_bands: AgeBandsProfile
+    dominant_education: str
+    dominant_income_band: str
+    urban_concentration: float
+
+
+class VoteDistributionItem(BaseModel):
+    key: str
+    label: str
+    votes: int
+    vote_share: float
+
+
+class VoteDistributionResponse(BaseModel):
+    candidate_id: str
+    level: str
+    items: list[VoteDistributionItem] = Field(default_factory=list)
+
+
+class ZoneFidelityItem(BaseModel):
+    zone_id: str
+    zone_name: str
+    city: str | None = None
+    votes: int
+    retention: float
+    lat: float
+    lng: float
+    geometry: object | None = None
+
+
+class ZoneFidelityResponse(BaseModel):
+    candidate_id: str
+    items: list[ZoneFidelityItem] = Field(default_factory=list)
+
+
+class CompareContext(BaseModel):
+    year: int | None = None
+    state: str | None = None
+    office: str | None = None
+
+
+class CompareCandidateItem(BaseModel):
+    candidate_id: str
+    name: str
+    party: str | None = None
+    votes: int
+    vote_share: float
+    retention: float
+    state_rank: int | None = None
+
+
+class CompareDeltaItem(BaseModel):
+    metric: str
+    best_candidate_id: str
+    gap_to_second: float
+
+
+class CompareResponse(BaseModel):
+    context: CompareContext
+    candidates: list[CompareCandidateItem] = Field(default_factory=list)
+    deltas: list[CompareDeltaItem] = Field(default_factory=list)

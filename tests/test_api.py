@@ -195,6 +195,84 @@ def client():
                 9: "PARDA",
             }
         ),
+        DS_GRAU_INSTRUCAO=df["SQ_CANDIDATO"].map(
+            {
+                1: "SUPERIOR COMPLETO",
+                2: "ENSINO MEDIO COMPLETO",
+                3: "SUPERIOR COMPLETO",
+                4: "SUPERIOR COMPLETO",
+                5: "ENSINO MEDIO COMPLETO",
+                6: "SUPERIOR COMPLETO",
+                7: "SUPERIOR COMPLETO",
+                8: "ENSINO MEDIO COMPLETO",
+                9: "SUPERIOR COMPLETO",
+            }
+        ),
+        DS_FAIXA_RENDA=df["SQ_CANDIDATO"].map(
+            {
+                1: "5-10 SM",
+                2: "2-5 SM",
+                3: "10+ SM",
+                4: "10+ SM",
+                5: "2-5 SM",
+                6: "2-5 SM",
+                7: "5-10 SM",
+                8: "2-5 SM",
+                9: "10+ SM",
+            }
+        ),
+        NR_ZONA=df["SQ_CANDIDATO"].map(
+            {
+                1: "001",
+                2: "001",
+                3: "010",
+                4: "100",
+                5: "110",
+                6: "111",
+                7: "120",
+                8: "121",
+                9: "200",
+            }
+        ),
+        NM_ZONA=df["SQ_CANDIDATO"].map(
+            {
+                1: "Zona 1",
+                2: "Zona 1",
+                3: "Zona 10",
+                4: "Zona 100",
+                5: "Zona 110",
+                6: "Zona 111",
+                7: "Zona 120",
+                8: "Zona 121",
+                9: "Zona 200",
+            }
+        ),
+        LATITUDE=df["SQ_CANDIDATO"].map(
+            {
+                1: -23.5505,
+                2: -23.5505,
+                3: -22.9068,
+                4: -23.5505,
+                5: -23.5505,
+                6: -23.5510,
+                7: -22.9099,
+                8: -22.9100,
+                9: -23.5505,
+            }
+        ),
+        LONGITUDE=df["SQ_CANDIDATO"].map(
+            {
+                1: -46.6333,
+                2: -46.6333,
+                3: -43.1729,
+                4: -46.6333,
+                5: -46.6333,
+                6: -46.6340,
+                7: -47.0626,
+                8: -47.0625,
+                9: -46.6333,
+            }
+        ),
     )
     with TestClient(main_module.app) as test_client:
         main_module.service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
@@ -502,6 +580,153 @@ def test_candidates_search_with_municipio_filter(client: TestClient):
     payload = response.json()
     assert payload["total"] == 1
     assert payload["items"][0]["candidato"] == "Vereador C"
+
+
+def test_candidate_summary_endpoint(client: TestClient):
+    response = client.get("/v1/candidates/1/summary", params={"year": 2022, "state": "SP", "office": "Deputado Estadual"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "1"
+    assert payload["name"] == "Candidato A"
+    assert payload["party"] == "AAA"
+    assert payload["latest_election"]["votes"] == 12000
+    assert payload["latest_election"]["state_rank"] == 1
+
+
+def test_candidate_vote_history_endpoint(client: TestClient):
+    response = client.get("/v1/candidates/4/vote-history", params={"state": "SP", "office": "Prefeito"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["year"] == 2024
+    assert payload["items"][0]["votes"] == 1050000
+    assert payload["items"][0]["status"] == "ELEITO"
+
+
+def test_candidate_electorate_profile_endpoint(client: TestClient):
+    response = client.get(
+        "/v1/candidates/6/electorate-profile",
+        params={"year": 2024, "state": "SP", "office": "Vereador"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "6"
+    assert payload["gender"]["female_share"] == 100.0
+    assert payload["age_bands"]["a35_59"] == 100.0
+    assert payload["dominant_education"] == "SUPERIOR COMPLETO"
+    assert payload["dominant_income_band"] == "2-5 SM"
+
+
+def test_candidate_vote_distribution_endpoint(client: TestClient):
+    response = client.get(
+        "/v1/candidates/9/vote-distribution",
+        params={"level": "uf", "year": 2022, "office": "Presidente"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "9"
+    assert payload["level"] == "uf"
+    by_uf = {item["key"]: item for item in payload["items"]}
+    assert by_uf["SP"]["votes"] == 70000
+    assert by_uf["RJ"]["votes"] == 80000
+
+
+def test_candidate_zone_fidelity_endpoint(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/zone-fidelity",
+        params={"year": 2024, "state": "SP", "office": "Prefeito"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["zone_id"] == "100"
+    assert payload["items"][0]["votes"] == 1050000
+
+
+def test_candidates_compare_endpoint(client: TestClient):
+    response = client.get(
+        "/v1/candidates/compare",
+        params=[("candidate_ids", "1"), ("candidate_ids", "2"), ("year", 2022), ("state", "SP"), ("office", "Deputado Estadual")],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["context"]["year"] == 2022
+    assert len(payload["candidates"]) == 2
+    by_id = {item["candidate_id"]: item for item in payload["candidates"]}
+    assert by_id["1"]["votes"] == 12000
+    assert by_id["2"]["votes"] == 8000
+    metric_map = {item["metric"]: item for item in payload["deltas"]}
+    assert metric_map["votes"]["best_candidate_id"] == "1"
+    assert metric_map["votes"]["gap_to_second"] == 4000.0
+
+
+def test_candidates_compare_endpoint_accepts_csv_format(client: TestClient):
+    response = client.get(
+        "/v1/candidates/compare",
+        params={"candidate_ids": "1,2", "year": 2022, "state": "SP", "office": "Deputado Estadual"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["candidates"]) == 2
+
+
+def test_candidates_compare_openapi_uses_form_and_explode_false(client: TestClient):
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    payload = response.json()
+    params = payload["paths"]["/v1/candidates/compare"]["get"]["parameters"]
+    candidate_ids_param = next(item for item in params if item["name"] == "candidate_ids")
+    assert candidate_ids_param["style"] == "form"
+    assert candidate_ids_param["explode"] is False
+
+
+def test_candidate_zone_fidelity_retention_uses_previous_election_and_geometry_fallback(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2020,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 99,
+                "NM_CANDIDATO": "Candidato Z",
+                "NR_ZONA": "700",
+                "NM_ZONA": "Zona 700",
+                "NM_UE": "SAO PAULO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1000,
+                "LATITUDE": -23.55,
+                "LONGITUDE": -46.63,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 99,
+                "NM_CANDIDATO": "Candidato Z",
+                "NR_ZONA": "700",
+                "NM_ZONA": "Zona 700",
+                "NM_UE": "SAO PAULO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 900,
+                "LATITUDE": -23.55,
+                "LONGITUDE": -46.63,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        response = client.get(
+            "/v1/candidates/99/zone-fidelity",
+            params={"year": 2024, "state": "SP", "office": "Prefeito", "include_geometry": "true"},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["retention"] == 90.0
+    assert payload["items"][0]["geometry"]["type"] == "Point"
 
 
 def test_service_unavailable_returns_503(client: TestClient):
