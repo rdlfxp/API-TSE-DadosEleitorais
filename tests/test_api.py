@@ -294,7 +294,7 @@ def test_filter_options_endpoint(client: TestClient):
     response = client.get("/v1/analytics/filtros")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["anos"] == [2022, 2024]
+    assert payload["anos"] == [2018, 2020, 2022, 2024]
     assert payload["ufs"] == ["RJ", "SP"]
     assert set(payload["cargos"]) == {"Deputado Estadual", "Prefeito", "Presidente", "Senador", "Vereador"}
 
@@ -384,6 +384,9 @@ def test_top_candidates_rejects_above_limit(client: TestClient):
     assert response.status_code == 422
     payload = response.json()
     assert payload["message"] == "Parametros de consulta invalidos."
+    assert payload["traceId"]
+    assert payload["code"] == "VALIDATION_ERROR"
+    assert payload["retryable"] is False
 
 
 def test_top_candidates_pagination_returns_distinct_pages(client: TestClient):
