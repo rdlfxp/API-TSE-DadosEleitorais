@@ -382,6 +382,20 @@ def test_top_candidates_aggregates_same_candidate_across_ufs(client: TestClient)
     assert payload["items"][0]["uf"] is None
 
 
+def test_top_candidates_filters_by_partido(client: TestClient):
+    response = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual", "partido": "BBB"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidate_id"] == "2"
+    assert payload["items"][0]["partido"] == "BBB"
+    assert payload["items"][0]["candidato"] == "Candidato B"
+
+
 def test_top_candidates_rejects_above_limit(client: TestClient):
     response = client.get("/v1/analytics/top-candidatos", params={"top_n": 101})
     assert response.status_code == 422

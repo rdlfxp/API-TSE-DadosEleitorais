@@ -339,6 +339,22 @@
             }
           },
           {
+            "name": "partido",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Partido"
+            }
+          },
+          {
             "name": "municipio",
             "in": "query",
             "required": false,
