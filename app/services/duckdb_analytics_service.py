@@ -2285,7 +2285,6 @@ class DuckDBAnalyticsService:
         col_uf = self._pick_col(["SG_UF"])
         col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_numero = self._pick_col(["NR_CANDIDATO"])
-        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
