@@ -3286,6 +3286,10 @@
       },
       "CandidateSearchItem": {
         "properties": {
+          "candidate_id": {
+            "type": "string",
+            "title": "Candidate Id"
+          },
           "candidato": {
             "type": "string",
             "title": "Candidato"
@@ -3352,6 +3356,7 @@
         },
         "type": "object",
         "required": [
+          "candidate_id",
           "candidato",
           "votos"
         ],
@@ -4462,6 +4467,10 @@
       },
       "TopCandidateItem": {
         "properties": {
+          "candidate_id": {
+            "type": "string",
+            "title": "Candidate Id"
+          },
           "candidato": {
             "type": "string",
             "title": "Candidato"
@@ -4517,6 +4526,7 @@
         },
         "type": "object",
         "required": [
+          "candidate_id",
           "candidato",
           "votos"
         ],
