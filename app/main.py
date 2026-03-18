@@ -547,15 +547,61 @@ def analytics_top_candidates(
     return TopCandidatesResponse(**data)
 
 
-@app.get("/v1/analytics/candidatos", response_model=CandidateSearchResponse, responses=ERROR_RESPONSES)
-def analytics_candidates_search(
+@app.get("/v1/analytics/candidatos/search", response_model=CandidateSearchResponse, responses=ERROR_RESPONSES)
+def analytics_candidates_text_search(
     request: Request,
-    query: str = Query(..., min_length=2, description="Busca por nome do candidato"),
-    ano: int | None = None,
+    q: str = Query(..., min_length=2, description="Busca textual por nome do candidato"),
+    ano: int = Query(...),
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
-    municipio: str | None = None,
+    partido: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> CandidateSearchResponse:
+    filters = {
+        "q": q,
+        "ano": ano,
+        "turno": turno,
+        "uf": uf,
+        "cargo": cargo,
+        "partido": partido,
+        "page": page,
+        "page_size": page_size,
+    }
+    data = _run_analytics_query(
+        request=request,
+        endpoint="/v1/analytics/candidatos/search",
+        filters=filters,
+        operation=lambda: get_service().search_candidates(
+            q=q,
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            partido=partido,
+            page=page,
+            page_size=page_size,
+        ),
+        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+    )
+    return CandidateSearchResponse(**data)
+
+
+@app.get(
+    "/v1/analytics/candidatos",
+    response_model=CandidateSearchResponse,
+    responses=ERROR_RESPONSES,
+    deprecated=True,
+)
+def analytics_candidates_search_legacy(
+    request: Request,
+    query: str = Query(..., min_length=2, description="Parametro legado. Use q em /v1/analytics/candidatos/search"),
+    ano: int = Query(...),
+    turno: int | None = Query(default=None, ge=1, le=2),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    partido: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateSearchResponse:
@@ -565,7 +611,7 @@ def analytics_candidates_search(
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
-        "municipio": municipio,
+        "partido": partido,
         "page": page,
         "page_size": page_size,
     }
@@ -574,12 +620,12 @@ def analytics_candidates_search(
         endpoint="/v1/analytics/candidatos",
         filters=filters,
         operation=lambda: get_service().search_candidates(
-            query=query,
+            q=query,
             ano=ano,
             turno=turno,
             uf=uf,
             cargo=cargo,
-            municipio=municipio,
+            partido=partido,
             page=page,
             page_size=page_size,
         ),

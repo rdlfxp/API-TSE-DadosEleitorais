@@ -561,8 +561,8 @@ def test_age_endpoint_sem_dados_returns_200_with_nulls_and_empty_bins(client: Te
 
 def test_candidates_search_with_filters_and_order(client: TestClient):
     response = client.get(
-        "/v1/analytics/candidatos",
-        params={"query": "candidato", "ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
+        "/v1/analytics/candidatos/search",
+        params={"q": "candidato", "ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -577,8 +577,8 @@ def test_candidates_search_with_filters_and_order(client: TestClient):
 
 def test_candidates_search_pagination(client: TestClient):
     response = client.get(
-        "/v1/analytics/candidatos",
-        params={"query": "candidato", "ano": 2022, "page": 2, "page_size": 1},
+        "/v1/analytics/candidatos/search",
+        params={"q": "candidato", "ano": 2022, "page": 2, "page_size": 1},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -590,22 +590,35 @@ def test_candidates_search_pagination(client: TestClient):
 
 
 def test_candidates_search_query_validation(client: TestClient):
-    response = client.get("/v1/analytics/candidatos", params={"query": "a"})
+    response = client.get("/v1/analytics/candidatos/search", params={"q": "a", "ano": 2024})
     assert response.status_code == 422
     payload = response.json()
     assert payload["message"] == "Parametros de consulta invalidos."
 
 
-def test_candidates_search_with_municipio_filter(client: TestClient):
+def test_candidates_search_with_partido_filter(client: TestClient):
     response = client.get(
-        "/v1/analytics/candidatos",
-        params={"query": "vereador", "ano": 2024, "uf": "SP", "municipio": "Campinas"},
+        "/v1/analytics/candidatos/search",
+        params={"q": "vereador", "ano": 2024, "uf": "SP", "partido": "EEE"},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
     assert payload["items"][0]["candidate_id"] == "8"
     assert payload["items"][0]["candidato"] == "Vereador C"
+    assert payload["items"][0]["numero"] == "8"
+
+
+def test_candidates_search_legacy_route_keeps_query_param(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos",
+        params={"query": "candidato", "ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["items"][0]["candidate_id"] == "1"
+    assert payload["items"][1]["candidate_id"] == "2"
 
 
 def test_candidate_summary_endpoint(client: TestClient):

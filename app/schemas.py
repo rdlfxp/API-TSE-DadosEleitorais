@@ -46,13 +46,12 @@ class CandidateSearchItem(BaseModel):
     partido: str | None = None
     cargo: str | None = None
     uf: str | None = None
-    ano: int | None = None
-    votos: int
+    numero: str | None = None
+    votos: int | None = None
     situacao: str | None = None
 
 
 class CandidateSearchResponse(BaseModel):
-    query: str
     page: int
     page_size: int
     total: int
