@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 from pathlib import Path
 from threading import Lock
 import unicodedata
@@ -120,6 +121,9 @@ UF_TO_MACROREGIAO = {
     "TO": "Norte",
 }
 
+SUPPORTED_ANALYTICS_YEARS = {2018, 2020, 2022, 2024}
+logger = logging.getLogger("api.meucandidato")
+
 
 @dataclass
 class DuckDBAnalyticsService:
@@ -140,6 +144,7 @@ class DuckDBAnalyticsService:
         max_top_n: int,
         separator: str = ",",
         encoding: str = "utf-8",
+        create_indexes: bool = True,
     ) -> "DuckDBAnalyticsService":
         path = Path(file_path)
         if not path.exists():
@@ -151,11 +156,11 @@ class DuckDBAnalyticsService:
         delim = separator.replace("'", "''")
         if suffix == ".parquet":
             conn.execute(
-                f"CREATE OR REPLACE VIEW analytics AS SELECT * FROM read_parquet('{source_path}')"
+                f"CREATE OR REPLACE TABLE analytics AS SELECT * FROM read_parquet('{source_path}')"
             )
         elif suffix == ".csv":
             conn.execute(
-                "CREATE OR REPLACE VIEW analytics AS "
+                "CREATE OR REPLACE TABLE analytics AS "
                 f"SELECT * FROM read_csv_auto('{source_path}', delim='{delim}', header=true, ignore_errors=true)"
             )
         else:
@@ -170,7 +175,47 @@ class DuckDBAnalyticsService:
             _columns=cols,
         )
         service._source_path = path
+        if create_indexes:
+            service._create_indexes()
         return service
+
+    def _create_index(self, index_name: str, columns: list[str]) -> None:
+        try:
+            self.conn.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON analytics ({', '.join(columns)})")
+            logger.info(
+                json.dumps(
+                    {"event": "duckdb_index_created", "index_name": index_name, "columns": columns},
+                    ensure_ascii=False,
+                )
+            )
+        except Exception as exc:
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "duckdb_index_skipped",
+                        "index_name": index_name,
+                        "columns": columns,
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    def _create_indexes(self) -> None:
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+
+        if col_ano and col_uf and col_cargo and col_votos:
+            self._create_index("idx_analytics_ano_uf_cargo_votos", [col_ano, col_uf, col_cargo, col_votos])
+        if col_ano and col_uf and col_cargo:
+            self._create_index("idx_analytics_ano_uf_cargo", [col_ano, col_uf, col_cargo])
+        if col_ano and col_cargo:
+            self._create_index("idx_analytics_ano_cargo", [col_ano, col_cargo])
+        if col_votos:
+            self._create_index("idx_analytics_votos", [col_votos])
 
     @property
     def row_count(self) -> int:
@@ -497,7 +542,8 @@ class DuckDBAnalyticsService:
             )
             cargos = [str(r[0]) for r in rows if r[0] is not None]
 
-        return {"anos": anos, "ufs": ufs, "cargos": cargos}
+        years = sorted(set(anos).union(SUPPORTED_ANALYTICS_YEARS))
+        return {"anos": years, "ufs": ufs, "cargos": cargos}
 
     def overview(
         self,
@@ -616,18 +662,28 @@ class DuckDBAnalyticsService:
             "WHERE candidate_key IS NOT NULL AND candidate_key <> '' "
             "GROUP BY candidate_key"
         )
-        total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
-        total_pages = (total + effective_page_size - 1) // effective_page_size
-
         rows = self._rows(
             (
-                "SELECT candidato, partido, cargo, uf, votos, situacao "
-                f"FROM ({grouped_sql}) g "
-                "ORDER BY votos DESC "
-                "LIMIT ? OFFSET ?"
+                "WITH grouped AS ("
+                f"  {grouped_sql}"
+                "), ranked AS ("
+                "  SELECT "
+                "  candidato, partido, cargo, uf, votos, situacao, "
+                "  ROW_NUMBER() OVER (ORDER BY votos DESC, candidato ASC) AS rn, "
+                "  COUNT(*) OVER () AS total_rows "
+                "  FROM grouped"
+                ") "
+                "SELECT candidato, partido, cargo, uf, votos, situacao, total_rows "
+                "FROM ranked "
+                "WHERE rn > ? AND rn <= ? "
+                "ORDER BY rn"
             ),
-            params + [effective_page_size, offset],
+            params + [offset, offset + effective_page_size],
         )
+        total = int(rows[0][6] or 0) if rows else 0
+        if total == 0 and page > 1:
+            total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
+        total_pages = (total + effective_page_size - 1) // effective_page_size if total else 0
 
         return {
             "top_n": effective_page_size,

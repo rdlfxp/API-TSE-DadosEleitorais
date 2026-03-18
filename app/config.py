@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_window_seconds: int = 60
     rate_limit_max_requests_per_ip: int = 120
+    analytics_cache_ttl_seconds: int = 60
+    analytics_top_candidates_cache_ttl_seconds: int = 45
+    duckdb_create_indexes: bool = True
 
 
 settings = Settings()

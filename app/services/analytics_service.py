@@ -94,6 +94,8 @@ COR_RACA_CATEGORY_LABELS = {
     "NAO_INFORMADO": "Não informado",
 }
 
+SUPPORTED_ANALYTICS_YEARS = {2018, 2020, 2022, 2024}
+
 UF_TO_MACROREGIAO = {
     "AC": "Norte",
     "AL": "Nordeste",
@@ -519,7 +521,8 @@ class AnalyticsService:
                 .tolist()
             )
 
-        return {"anos": anos, "ufs": ufs, "cargos": cargos}
+        years = sorted(set(anos).union(SUPPORTED_ANALYTICS_YEARS))
+        return {"anos": years, "ufs": ufs, "cargos": cargos}
 
     def overview(
         self,

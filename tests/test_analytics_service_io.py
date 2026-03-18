@@ -32,7 +32,7 @@ def test_from_file_loads_csv(tmp_path, sample_df: pd.DataFrame):
     )
 
     assert len(service.dataframe) == 1
-    assert service.filter_options()["anos"] == [2022]
+    assert service.filter_options()["anos"] == [2018, 2020, 2022, 2024]
 
 
 def test_from_file_loads_parquet(tmp_path, sample_df: pd.DataFrame):
