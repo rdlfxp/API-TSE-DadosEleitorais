@@ -101,7 +101,10 @@ async def lifespan(_: FastAPI):
                 max_top_n=settings.max_top_n,
                 separator=settings.analytics_separator,
                 encoding=settings.analytics_encoding,
+                materialize_table=settings.duckdb_materialize_table,
                 create_indexes=settings.duckdb_create_indexes,
+                memory_limit_mb=settings.duckdb_memory_limit_mb,
+                threads=settings.duckdb_threads,
             )
         else:
             service = AnalyticsService.from_file(
@@ -117,6 +120,10 @@ async def lifespan(_: FastAPI):
                     "event": "startup_data_loaded",
                     "path": str(selected_path),
                     "engine": settings.analytics_engine.lower(),
+                    "duckdb_materialize_table": bool(settings.duckdb_materialize_table),
+                    "duckdb_create_indexes": bool(settings.duckdb_create_indexes),
+                    "duckdb_memory_limit_mb": int(settings.duckdb_memory_limit_mb),
+                    "duckdb_threads": int(settings.duckdb_threads),
                     "rows": (
                         int(len(service.dataframe))
                         if isinstance(service, AnalyticsService)
