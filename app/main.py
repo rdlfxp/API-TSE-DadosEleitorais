@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.config import settings
 from app.schemas import (
     AgeStatsResponse,
+    CandidateVoteMapResponse,
     CandidateSummaryResponse,
     CompareResponse,
     CandidateSearchResponse,
@@ -639,6 +640,26 @@ def candidate_vote_distribution(
         office=office,
     )
     return VoteDistributionResponse(**data)
+
+
+@app.get("/v1/candidates/{candidate_id}/vote-map", response_model=CandidateVoteMapResponse, responses=ERROR_RESPONSES)
+def candidate_vote_map(
+    candidate_id: str,
+    level: Literal["auto", "municipio", "zona"] = "auto",
+    year: int | None = None,
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    office: str | None = None,
+    municipality: str | None = None,
+) -> CandidateVoteMapResponse:
+    data = get_service().candidate_vote_map(
+        candidate_id=candidate_id,
+        level=level,
+        year=year,
+        state=state,
+        office=office,
+        municipality=municipality,
+    )
+    return CandidateVoteMapResponse(**data)
 
 
 @app.get("/v1/candidates/{candidate_id}/zone-fidelity", response_model=ZoneFidelityResponse, responses=ERROR_RESPONSES)

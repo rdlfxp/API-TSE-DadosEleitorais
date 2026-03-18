@@ -1186,6 +1186,166 @@
         }
       }
     },
+    "/v1/candidates/{candidate_id}/vote-map": {
+      "get": {
+        "summary": "Candidate Vote Map",
+        "operationId": "candidate_vote_map_v1_candidates__candidate_id__vote_map_get",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "auto",
+                "municipio",
+                "zona"
+              ],
+              "type": "string",
+              "default": "auto",
+              "title": "Level"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 2
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "office",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Office"
+            }
+          },
+          {
+            "name": "municipality",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Municipality"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateVoteMapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/candidates/{candidate_id}/zone-fidelity": {
       "get": {
         "summary": "Candidate Zone Fidelity",
@@ -3330,6 +3490,163 @@
           "latest_election"
         ],
         "title": "CandidateSummaryResponse"
+      },
+      "CandidateVoteMapPoint": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "votes": {
+            "type": "integer",
+            "title": "Votes"
+          },
+          "vote_share": {
+            "type": "number",
+            "title": "Vote Share"
+          },
+          "tier": {
+            "type": "integer",
+            "title": "Tier"
+          },
+          "color_rgb": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Color Rgb"
+          },
+          "marker_size": {
+            "type": "integer",
+            "title": "Marker Size"
+          },
+          "cluster_size": {
+            "type": "integer",
+            "title": "Cluster Size"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          },
+          "uf": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uf"
+          },
+          "municipio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Municipio"
+          },
+          "zona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zona"
+          },
+          "tooltip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tooltip"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "votes",
+          "vote_share",
+          "tier",
+          "color_rgb",
+          "marker_size",
+          "cluster_size"
+        ],
+        "title": "CandidateVoteMapPoint"
+      },
+      "CandidateVoteMapResponse": {
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "title": "Candidate Id"
+          },
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "quantile_q1": {
+            "type": "integer",
+            "title": "Quantile Q1"
+          },
+          "quantile_q2": {
+            "type": "integer",
+            "title": "Quantile Q2"
+          },
+          "total_votes": {
+            "type": "integer",
+            "title": "Total Votes"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateVoteMapPoint"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "level",
+          "quantile_q1",
+          "quantile_q2",
+          "total_votes"
+        ],
+        "title": "CandidateVoteMapResponse"
       },
       "CompareCandidateItem": {
         "properties": {

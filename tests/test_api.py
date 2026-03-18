@@ -648,6 +648,38 @@ def test_candidate_zone_fidelity_endpoint(client: TestClient):
     assert payload["items"][0]["votes"] == 1050000
 
 
+def test_candidate_vote_map_endpoint_auto_uses_zona_for_municipal_office(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"year": 2024, "state": "SP", "office": "Prefeito"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert payload["level"] == "zona"
+    assert payload["total_votes"] == 1050000
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["zona"] == "100"
+    assert payload["items"][0]["votes"] == 1050000
+    assert payload["items"][0]["tier"] == 0
+
+
+def test_candidate_vote_map_endpoint_municipio_level(client: TestClient):
+    response = client.get(
+        "/v1/candidates/9/vote-map",
+        params={"level": "municipio", "year": 2022, "office": "Presidente"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "9"
+    assert payload["level"] == "municipio"
+    by_city = {item["municipio"]: item["votes"] for item in payload["items"]}
+    assert by_city["SAO PAULO"] == 70000
+    assert by_city["RIO DE JANEIRO"] == 80000
+    assert payload["quantile_q1"] >= 70000
+    assert payload["quantile_q2"] >= payload["quantile_q1"]
+
+
 def test_candidates_compare_endpoint(client: TestClient):
     response = client.get(
         "/v1/candidates/compare",

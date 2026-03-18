@@ -479,6 +479,39 @@ class AnalyticsService:
             return {"type": "Point", "coordinates": [float(lng), float(lat)]}
         return None
 
+    def _geometry_centroid(self, geometry: object) -> tuple[float | None, float | None]:
+        if not isinstance(geometry, dict):
+            return None, None
+
+        geom_type = str(geometry.get("type") or "").strip().upper()
+        coords = geometry.get("coordinates")
+        if geom_type == "POINT" and isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            try:
+                return float(coords[1]), float(coords[0])
+            except (TypeError, ValueError):
+                return None, None
+
+        points: list[tuple[float, float]] = []
+
+        def collect(value: object) -> None:
+            if isinstance(value, (list, tuple)):
+                if len(value) >= 2:
+                    try:
+                        points.append((float(value[1]), float(value[0])))
+                        return
+                    except (TypeError, ValueError):
+                        pass
+                for item in value:
+                    collect(item)
+
+        collect(coords)
+        if not points:
+            return None, None
+
+        lat = sum(p[0] for p in points) / len(points)
+        lng = sum(p[1] for p in points) / len(points)
+        return float(lat), float(lng)
+
     def filter_options(self) -> dict:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_uf = self._pick_col(["SG_UF"])
@@ -1618,6 +1651,206 @@ class AnalyticsService:
             for _, row in agg.iterrows()
         ]
         return {"candidate_id": self._candidate_output_id(candidate_rows, candidate_id), "level": level_key, "items": items}
+
+    def candidate_vote_map(
+        self,
+        candidate_id: str,
+        level: str = "auto",
+        year: int | None = None,
+        state: str | None = None,
+        office: str | None = None,
+        municipality: str | None = None,
+    ) -> dict:
+        requested_level = (level or "auto").strip().lower()
+        if requested_level not in {"auto", "municipio", "zona"}:
+            requested_level = "auto"
+
+        scoped = self._apply_filters(ano=year, uf=state, cargo=office, municipio=municipality)
+        candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        if candidate_rows.empty or not col_votes:
+            return {
+                "candidate_id": str(candidate_id),
+                "level": "municipio" if requested_level == "auto" else requested_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        col_uf = self._pick_col(["SG_UF"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_zona = self._pick_col(["NR_ZONA", "CD_ZONA", "SQ_ZONA"])
+        col_lat = self._pick_col(["LATITUDE", "LAT", "VL_LATITUDE"])
+        col_lng = self._pick_col(["LONGITUDE", "LON", "LNG", "VL_LONGITUDE"])
+
+        resolved_level = requested_level
+        if resolved_level == "auto":
+            if office:
+                resolved_level = "zona" if self._cargo_scope(office) == "municipio" else "municipio"
+            elif col_cargo:
+                cargo_norm = self._normalize_text(candidate_rows[col_cargo]).apply(self._normalize_ascii_upper)
+                municipal_mask = cargo_norm.isin(MUNICIPAL_CARGOS)
+                if municipal_mask.any() and (~municipal_mask).any():
+                    votes_series = pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0)
+                    municipal_votes = float(votes_series[municipal_mask].sum())
+                    other_votes = float(votes_series[~municipal_mask].sum())
+                    resolved_level = "zona" if municipal_votes >= other_votes else "municipio"
+                else:
+                    resolved_level = "zona" if municipal_mask.any() else "municipio"
+            else:
+                resolved_level = "municipio"
+
+        if resolved_level == "zona" and not col_zona:
+            resolved_level = "municipio"
+        if resolved_level == "municipio" and not col_municipio:
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": resolved_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        normalized = candidate_rows.assign(
+            _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
+            _uf=(
+                self._normalize_text(candidate_rows[col_uf]).str.upper().replace("", pd.NA)
+                if col_uf
+                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+            ),
+            _municipio=(
+                self._normalize_text(candidate_rows[col_municipio]).replace("", pd.NA)
+                if col_municipio
+                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+            ),
+            _zona=(
+                self._normalize_text(candidate_rows[col_zona]).replace("", pd.NA)
+                if col_zona
+                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+            ),
+            _lat=(
+                pd.to_numeric(candidate_rows[col_lat], errors="coerce")
+                if col_lat
+                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+            ),
+            _lng=(
+                pd.to_numeric(candidate_rows[col_lng], errors="coerce")
+                if col_lng
+                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+            ),
+        )
+
+        if resolved_level == "municipio":
+            normalized = normalized.dropna(subset=["_municipio"]).copy()
+            normalized = normalized.assign(
+                _key=normalized["_municipio"].astype(str),
+                _label=normalized["_municipio"].astype(str),
+            )
+            grouped = (
+                normalized.groupby(["_key", "_label", "_uf", "_municipio"], as_index=False)
+                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"))
+                .sort_values("votes", ascending=False)
+            )
+        else:
+            normalized = normalized.dropna(subset=["_zona"]).copy()
+            normalized = normalized.assign(
+                _key=(
+                    normalized["_uf"].fillna("N/A").astype(str)
+                    + "|"
+                    + normalized["_municipio"].fillna("N/A").astype(str)
+                    + "|"
+                    + normalized["_zona"].fillna("N/A").astype(str)
+                ),
+                _label=(
+                    normalized["_municipio"].fillna("N/A").astype(str)
+                    + " - Zona "
+                    + normalized["_zona"].fillna("N/A").astype(str)
+                ),
+            )
+            grouped = (
+                normalized.groupby(["_key", "_label", "_uf", "_municipio", "_zona"], as_index=False)
+                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"))
+                .sort_values("votes", ascending=False)
+            )
+
+            for idx, row in grouped.iterrows():
+                if pd.notna(row["lat"]) and pd.notna(row["lng"]):
+                    continue
+                geometry = self._resolve_zone_geometry(
+                    zone_id=str(row["_zona"]),
+                    city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
+                    uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
+                    lat=float("nan"),
+                    lng=float("nan"),
+                )
+                lat, lng = self._geometry_centroid(geometry)
+                if lat is not None and lng is not None:
+                    grouped.at[idx, "lat"] = lat
+                    grouped.at[idx, "lng"] = lng
+
+        if grouped.empty:
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": resolved_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        votes = grouped["votes"].astype(float)
+        q1 = int(votes.quantile(0.33))
+        q2 = int(votes.quantile(0.66))
+        if q2 < q1:
+            q2 = q1
+
+        tiers = {
+            0: {"rgb": [34, 197, 94], "marker_size": 32, "cluster_size": 40},
+            1: {"rgb": [250, 204, 21], "marker_size": 34, "cluster_size": 52},
+            2: {"rgb": [239, 68, 68], "marker_size": 42, "cluster_size": 60},
+        }
+
+        total_votes = int(votes.sum())
+        total_votes_safe = float(total_votes) if total_votes > 0 else 1.0
+        items: list[dict] = []
+        for _, row in grouped.sort_values("votes", ascending=False).iterrows():
+            row_votes = int(row["votes"])
+            tier = 0 if row_votes <= q1 else (1 if row_votes <= q2 else 2)
+            cfg = tiers[tier]
+            label = str(row["_label"])
+            tooltip_votes = f"{row_votes:,}".replace(",", ".")
+            items.append(
+                {
+                    "key": str(row["_key"]),
+                    "label": label,
+                    "votes": row_votes,
+                    "vote_share": round((row_votes / total_votes_safe) * 100, 4),
+                    "tier": tier,
+                    "color_rgb": cfg["rgb"],
+                    "marker_size": cfg["marker_size"],
+                    "cluster_size": cfg["cluster_size"],
+                    "lat": float(row["lat"]) if pd.notna(row["lat"]) else None,
+                    "lng": float(row["lng"]) if pd.notna(row["lng"]) else None,
+                    "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
+                    "municipio": (
+                        str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None
+                    ),
+                    "zona": str(row["_zona"]) if "_zona" in row.index and pd.notna(row["_zona"]) else None,
+                    "tooltip": f"{label} — {tooltip_votes} votos",
+                }
+            )
+
+        return {
+            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "level": resolved_level,
+            "quantile_q1": q1,
+            "quantile_q2": q2,
+            "total_votes": total_votes,
+            "items": items,
+        }
 
     def candidate_zone_fidelity(
         self,

@@ -298,6 +298,14 @@ class DuckDBAnalyticsService:
             return "indefinido"
         return PARTIDO_SPECTRUM_MAP.get(norm, "indefinido")
 
+    def _cargo_scope(self, cargo: str | None) -> str:
+        cargo_up = self._normalize_value(cargo or "", uppercase=True)
+        if cargo_up in MUNICIPAL_CARGOS:
+            return "municipio"
+        if cargo_up in NATIONAL_CARGOS:
+            return "nacional"
+        return "uf"
+
     def _is_elected_series(self, series: pd.Series) -> pd.Series:
         return series.fillna("").astype(str).str.strip().str.upper().str.startswith("ELEITO")
 
@@ -534,6 +542,39 @@ class DuckDBAnalyticsService:
         if pd.notna(lat) and pd.notna(lng):
             return {"type": "Point", "coordinates": [float(lng), float(lat)]}
         return None
+
+    def _geometry_centroid(self, geometry: object) -> tuple[float | None, float | None]:
+        if not isinstance(geometry, dict):
+            return None, None
+
+        geom_type = str(geometry.get("type") or "").strip().upper()
+        coords = geometry.get("coordinates")
+        if geom_type == "POINT" and isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            try:
+                return float(coords[1]), float(coords[0])
+            except (TypeError, ValueError):
+                return None, None
+
+        points: list[tuple[float, float]] = []
+
+        def collect(value: object) -> None:
+            if isinstance(value, (list, tuple)):
+                if len(value) >= 2:
+                    try:
+                        points.append((float(value[1]), float(value[0])))
+                        return
+                    except (TypeError, ValueError):
+                        pass
+                for item in value:
+                    collect(item)
+
+        collect(coords)
+        if not points:
+            return None, None
+
+        lat = sum(p[0] for p in points) / len(points)
+        lng = sum(p[1] for p in points) / len(points)
+        return float(lat), float(lng)
 
     def filter_options(self) -> dict:
         anos: list[int] = []
@@ -1738,6 +1779,244 @@ class DuckDBAnalyticsService:
             for _, row in agg.iterrows()
         ]
         return {"candidate_id": self._candidate_output_id(candidate_rows, candidate_id), "level": level_key, "items": items}
+
+    def candidate_vote_map(
+        self,
+        candidate_id: str,
+        level: str = "auto",
+        year: int | None = None,
+        state: str | None = None,
+        office: str | None = None,
+        municipality: str | None = None,
+    ) -> dict:
+        requested_level = (level or "auto").strip().lower()
+        if requested_level not in {"auto", "municipio", "zona"}:
+            requested_level = "auto"
+
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        if not col_votes:
+            return {
+                "candidate_id": str(candidate_id),
+                "level": "municipio" if requested_level == "auto" else requested_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        col_uf = self._pick_col(["SG_UF"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_zona = self._pick_col(["NR_ZONA", "CD_ZONA", "SQ_ZONA"])
+        col_lat = self._pick_col(["LATITUDE", "LAT", "VL_LATITUDE"])
+        col_lng = self._pick_col(["LONGITUDE", "LON", "LNG", "VL_LONGITUDE"])
+
+        where, params = self._where(ano=year, uf=state, cargo=office, municipio=municipality)
+        candidate_norm = str(candidate_id or "").strip()
+        candidate_upper = candidate_norm.upper()
+        candidate_clauses: list[str] = []
+        candidate_params: list[str] = []
+        if self._has("SQ_CANDIDATO"):
+            candidate_clauses.append("TRIM(CAST(SQ_CANDIDATO AS VARCHAR)) = ?")
+            candidate_params.append(candidate_norm)
+        if self._has("NR_CANDIDATO"):
+            candidate_clauses.append("TRIM(CAST(NR_CANDIDATO AS VARCHAR)) = ?")
+            candidate_params.append(candidate_norm)
+        if self._has("NM_CANDIDATO"):
+            candidate_clauses.append("UPPER(TRIM(CAST(NM_CANDIDATO AS VARCHAR))) = ?")
+            candidate_params.append(candidate_upper)
+        if self._has("NM_URNA_CANDIDATO"):
+            candidate_clauses.append("UPPER(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR))) = ?")
+            candidate_params.append(candidate_upper)
+        if not candidate_clauses:
+            return {
+                "candidate_id": str(candidate_id),
+                "level": "municipio" if requested_level == "auto" else requested_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        candidate_where = f"{where} {'AND' if where else 'WHERE'} ({' OR '.join(candidate_clauses)})"
+        query_params = params + candidate_params
+        votes_expr = f"COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0)"
+
+        resolved_level = requested_level
+        if resolved_level == "auto":
+            if office:
+                resolved_level = "zona" if self._cargo_scope(office) == "municipio" else "municipio"
+            elif col_cargo:
+                municipal_cargos_sql = ", ".join(
+                    "'" + cargo.replace("'", "''") + "'" for cargo in sorted(MUNICIPAL_CARGOS)
+                )
+                municipal_votes, total_votes_tmp = self._rows(
+                    (
+                        "SELECT "
+                        f"COALESCE(SUM(CASE WHEN UPPER(TRIM(CAST({col_cargo} AS VARCHAR))) IN ({municipal_cargos_sql}) "
+                        f"THEN {votes_expr} ELSE 0 END), 0) AS municipal_votes, "
+                        f"COALESCE(SUM({votes_expr}), 0) AS total_votes "
+                        f"FROM analytics {candidate_where}"
+                    ),
+                    query_params,
+                )[0]
+                municipal_votes = float(municipal_votes or 0.0)
+                total_votes_tmp = float(total_votes_tmp or 0.0)
+                if municipal_votes > 0 and municipal_votes >= (total_votes_tmp - municipal_votes):
+                    resolved_level = "zona"
+                else:
+                    resolved_level = "municipio"
+            else:
+                resolved_level = "municipio"
+
+        if resolved_level == "zona" and not col_zona:
+            resolved_level = "municipio"
+        if resolved_level == "municipio" and not col_municipio:
+            return {
+                "candidate_id": str(candidate_id),
+                "level": resolved_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        uf_expr = f"NULLIF(UPPER(TRIM(CAST({col_uf} AS VARCHAR))), '')" if col_uf else "NULL"
+        municipio_expr = f"NULLIF(TRIM(CAST({col_municipio} AS VARCHAR)), '')" if col_municipio else "NULL"
+        zona_expr = f"NULLIF(TRIM(CAST({col_zona} AS VARCHAR)), '')" if col_zona else "NULL"
+        lat_expr = f"TRY_CAST({col_lat} AS DOUBLE)" if col_lat else "NULL"
+        lng_expr = f"TRY_CAST({col_lng} AS DOUBLE)" if col_lng else "NULL"
+
+        if resolved_level == "municipio":
+            grouped = self._df(
+                (
+                    "SELECT "
+                    f"{municipio_expr} AS _key, "
+                    f"{municipio_expr} AS _label, "
+                    f"{uf_expr} AS _uf, "
+                    f"{municipio_expr} AS _municipio, "
+                    "NULL AS _zona, "
+                    f"SUM({votes_expr}) AS votes, "
+                    f"AVG({lat_expr}) AS lat, "
+                    f"AVG({lng_expr}) AS lng "
+                    f"FROM analytics {candidate_where} "
+                    f"AND {municipio_expr} IS NOT NULL "
+                    "GROUP BY 1, 2, 3, 4, 5 "
+                    "ORDER BY votes DESC"
+                ),
+                query_params,
+            )
+        else:
+            grouped = self._df(
+                (
+                    "SELECT "
+                    f"COALESCE({uf_expr}, 'N/A') || '|' || COALESCE({municipio_expr}, 'N/A') || '|' || COALESCE({zona_expr}, 'N/A') AS _key, "
+                    f"COALESCE({municipio_expr}, 'N/A') || ' - Zona ' || COALESCE({zona_expr}, 'N/A') AS _label, "
+                    f"{uf_expr} AS _uf, "
+                    f"{municipio_expr} AS _municipio, "
+                    f"{zona_expr} AS _zona, "
+                    f"SUM({votes_expr}) AS votes, "
+                    f"AVG({lat_expr}) AS lat, "
+                    f"AVG({lng_expr}) AS lng "
+                    f"FROM analytics {candidate_where} "
+                    f"AND {zona_expr} IS NOT NULL "
+                    "GROUP BY 1, 2, 3, 4, 5 "
+                    "ORDER BY votes DESC"
+                ),
+                query_params,
+            )
+
+            for idx, row in grouped.iterrows():
+                if pd.notna(row["lat"]) and pd.notna(row["lng"]):
+                    continue
+                geometry = self._resolve_zone_geometry(
+                    zone_id=str(row["_zona"]),
+                    city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
+                    uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
+                    lat=float("nan"),
+                    lng=float("nan"),
+                )
+                lat, lng = self._geometry_centroid(geometry)
+                if lat is not None and lng is not None:
+                    grouped.at[idx, "lat"] = lat
+                    grouped.at[idx, "lng"] = lng
+
+        candidate_id_exprs = []
+        if self._has("SQ_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(SQ_CANDIDATO AS VARCHAR)), '')")
+        if self._has("NR_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(NR_CANDIDATO AS VARCHAR)), '')")
+        if self._has("NM_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_CANDIDATO AS VARCHAR)), '')")
+        if self._has("NM_URNA_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR)), '')")
+        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["?"]) + ")"
+        candidate_id_row = self._rows(
+            f"SELECT {candidate_select_expr} AS candidate_id FROM analytics {candidate_where} LIMIT 1",
+            query_params + [str(candidate_id)],
+        )
+        resolved_candidate_id = str(candidate_id_row[0][0]) if candidate_id_row else str(candidate_id)
+
+        if grouped.empty:
+            return {
+                "candidate_id": resolved_candidate_id,
+                "level": resolved_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
+
+        votes = grouped["votes"].astype(float)
+        q1 = int(votes.quantile(0.33))
+        q2 = int(votes.quantile(0.66))
+        if q2 < q1:
+            q2 = q1
+
+        tiers = {
+            0: {"rgb": [34, 197, 94], "marker_size": 32, "cluster_size": 40},
+            1: {"rgb": [250, 204, 21], "marker_size": 34, "cluster_size": 52},
+            2: {"rgb": [239, 68, 68], "marker_size": 42, "cluster_size": 60},
+        }
+
+        total_votes = int(votes.sum())
+        total_votes_safe = float(total_votes) if total_votes > 0 else 1.0
+        items: list[dict] = []
+        for _, row in grouped.sort_values("votes", ascending=False).iterrows():
+            row_votes = int(row["votes"])
+            tier = 0 if row_votes <= q1 else (1 if row_votes <= q2 else 2)
+            cfg = tiers[tier]
+            label = str(row["_label"])
+            tooltip_votes = f"{row_votes:,}".replace(",", ".")
+            items.append(
+                {
+                    "key": str(row["_key"]),
+                    "label": label,
+                    "votes": row_votes,
+                    "vote_share": round((row_votes / total_votes_safe) * 100, 4),
+                    "tier": tier,
+                    "color_rgb": cfg["rgb"],
+                    "marker_size": cfg["marker_size"],
+                    "cluster_size": cfg["cluster_size"],
+                    "lat": float(row["lat"]) if pd.notna(row["lat"]) else None,
+                    "lng": float(row["lng"]) if pd.notna(row["lng"]) else None,
+                    "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
+                    "municipio": (
+                        str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None
+                    ),
+                    "zona": str(row["_zona"]) if "_zona" in row.index and pd.notna(row["_zona"]) else None,
+                    "tooltip": f"{label} — {tooltip_votes} votos",
+                }
+            )
+
+        return {
+            "candidate_id": resolved_candidate_id,
+            "level": resolved_level,
+            "quantile_q1": q1,
+            "quantile_q2": q2,
+            "total_votes": total_votes,
+            "items": items,
+        }
 
     def candidate_zone_fidelity(
         self,
