@@ -642,6 +642,9 @@ class AnalyticsService:
             }
 
         agg_spec: dict[str, str] = {"_votos": "sum", col_candidato: "first"}
+        col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        if col_candidate_id:
+            agg_spec[col_candidate_id] = "first"
         if col_partido:
             agg_spec[col_partido] = "first"
         if col_cargo:
@@ -675,6 +678,11 @@ class AnalyticsService:
         for _, row in grouped.iterrows():
             out.append(
                 {
+                    "candidate_id": (
+                        str(row[col_candidate_id])
+                        if col_candidate_id and pd.notna(row[col_candidate_id]) and str(row[col_candidate_id]).strip()
+                        else str(row["_candidate_key"])
+                    ),
                     "candidato": str(row[col_candidato]),
                     "partido": str(row[col_partido]) if col_partido else None,
                     "cargo": str(row[col_cargo]) if col_cargo else None,
@@ -2117,6 +2125,7 @@ class AnalyticsService:
         df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
 
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
@@ -2169,6 +2178,11 @@ class AnalyticsService:
         for _, row in sliced.iterrows():
             items.append(
                 {
+                    "candidate_id": (
+                        str(row[col_candidate_id])
+                        if col_candidate_id and pd.notna(row[col_candidate_id]) and str(row[col_candidate_id]).strip()
+                        else self._candidate_output_id(pd.DataFrame([row]), str(row[col_candidato]))
+                    ),
                     "candidato": str(row[col_candidato]),
                     "partido": str(row[col_partido]) if col_partido else None,
                     "cargo": str(row[col_cargo]) if col_cargo else None,

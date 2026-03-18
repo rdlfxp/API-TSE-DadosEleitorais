@@ -351,6 +351,7 @@ def test_top_candidates_respects_top_n(client: TestClient):
     assert payload["total"] == 2
     assert payload["total_pages"] == 2
     assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidate_id"] == "1"
     assert payload["items"][0]["candidato"] == "Candidato A"
 
 
@@ -362,6 +363,7 @@ def test_top_candidates_with_turno_filter(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidate_id"] == "4"
     assert payload["items"][0]["candidato"] == "Prefeito A"
     assert payload["items"][0]["votos"] == 550000
 
@@ -374,6 +376,7 @@ def test_top_candidates_aggregates_same_candidate_across_ufs(client: TestClient)
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidate_id"] == "9"
     assert payload["items"][0]["candidato"] == "Presidente X"
     assert payload["items"][0]["votos"] == 150000
     assert payload["items"][0]["uf"] is None
@@ -402,6 +405,8 @@ def test_top_candidates_pagination_returns_distinct_pages(client: TestClient):
     assert page_2.status_code == 200
     p1 = page_1.json()
     p2 = page_2.json()
+    assert p1["items"][0]["candidate_id"] == "1"
+    assert p2["items"][0]["candidate_id"] == "2"
     assert p1["items"][0]["candidato"] == "Candidato A"
     assert p2["items"][0]["candidato"] == "Candidato B"
     assert p1["items"] != p2["items"]
@@ -550,6 +555,8 @@ def test_candidates_search_with_filters_and_order(client: TestClient):
     assert payload["total"] == 2
     assert payload["total_pages"] == 1
     assert len(payload["items"]) == 2
+    assert payload["items"][0]["candidate_id"] == "1"
+    assert payload["items"][1]["candidate_id"] == "2"
     assert payload["items"][0]["candidato"] == "Candidato A"
     assert payload["items"][1]["candidato"] == "Candidato B"
 
@@ -565,6 +572,7 @@ def test_candidates_search_pagination(client: TestClient):
     assert payload["total_pages"] == 3
     assert payload["page"] == 2
     assert len(payload["items"]) == 1
+    assert payload["items"][0]["candidate_id"] == "1"
 
 
 def test_candidates_search_query_validation(client: TestClient):
@@ -582,6 +590,7 @@ def test_candidates_search_with_municipio_filter(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
+    assert payload["items"][0]["candidate_id"] == "8"
     assert payload["items"][0]["candidato"] == "Vereador C"
 
 

@@ -703,6 +703,11 @@ class DuckDBAnalyticsService:
             if col_candidate_key
             else f"LOWER(TRIM(CAST({col_candidato} AS VARCHAR)))"
         )
+        candidate_id_expr = (
+            f"COALESCE(NULLIF(TRIM(CAST({col_candidate_key} AS VARCHAR)), ''), LOWER(TRIM(CAST({col_candidato} AS VARCHAR))))"
+            if col_candidate_key
+            else f"LOWER(TRIM(CAST({col_candidato} AS VARCHAR)))"
+        )
         candidato_expr = f"COALESCE(NULLIF(TRIM(CAST({col_candidato} AS VARCHAR)), ''), 'N/A')"
         partido_expr = f"{'CAST(' + col_partido + ' AS VARCHAR)' if col_partido else 'NULL'}"
         cargo_expr = f"{'CAST(' + col_cargo + ' AS VARCHAR)' if col_cargo else 'NULL'}"
@@ -710,6 +715,7 @@ class DuckDBAnalyticsService:
         uf_norm_expr = f"{'NULLIF(UPPER(TRIM(CAST(' + col_uf + ' AS VARCHAR))), \'\')' if col_uf else 'NULL'}"
         grouped_sql = (
             "SELECT "
+            "MIN(candidate_id) AS candidate_id, "
             "MIN(candidato) AS candidato, "
             "MIN(partido) AS partido, "
             "MIN(cargo) AS cargo, "
@@ -719,6 +725,7 @@ class DuckDBAnalyticsService:
             "FROM ("
             "  SELECT "
             f"  {key_expr} AS candidate_key, "
+            f"  {candidate_id_expr} AS candidate_id, "
             f"  {candidato_expr} AS candidato, "
             f"  {partido_expr} AS partido, "
             f"  {cargo_expr} AS cargo, "
@@ -736,19 +743,19 @@ class DuckDBAnalyticsService:
                 f"  {grouped_sql}"
                 "), ranked AS ("
                 "  SELECT "
-                "  candidato, partido, cargo, uf, votos, situacao, "
+                "  candidate_id, candidato, partido, cargo, uf, votos, situacao, "
                 "  ROW_NUMBER() OVER (ORDER BY votos DESC, candidato ASC) AS rn, "
                 "  COUNT(*) OVER () AS total_rows "
                 "  FROM grouped"
                 ") "
-                "SELECT candidato, partido, cargo, uf, votos, situacao, total_rows "
+                "SELECT candidate_id, candidato, partido, cargo, uf, votos, situacao, total_rows "
                 "FROM ranked "
                 "WHERE rn > ? AND rn <= ? "
                 "ORDER BY rn"
             ),
             params + [offset, offset + effective_page_size],
         )
-        total = int(rows[0][6] or 0) if rows else 0
+        total = int(rows[0][7] or 0) if rows else 0
         if total == 0 and page > 1:
             total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
         total_pages = (total + effective_page_size - 1) // effective_page_size if total else 0
@@ -761,12 +768,13 @@ class DuckDBAnalyticsService:
             "total_pages": total_pages,
             "items": [
                 {
-                    "candidato": r[0] or "",
-                    "partido": r[1],
-                    "cargo": r[2],
-                    "uf": r[3],
-                    "votos": int(r[4] or 0),
-                    "situacao": r[5],
+                    "candidate_id": r[0] or "",
+                    "candidato": r[1] or "",
+                    "partido": r[2],
+                    "cargo": r[3],
+                    "uf": r[4],
+                    "votos": int(r[5] or 0),
+                    "situacao": r[6],
                 }
                 for r in rows
             ],
@@ -2266,6 +2274,7 @@ class DuckDBAnalyticsService:
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
+        col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
@@ -2285,6 +2294,7 @@ class DuckDBAnalyticsService:
         rows = self._rows(
             (
                 "SELECT "
+                f"{'NULLIF(TRIM(CAST(' + col_candidate_id + ' AS VARCHAR)), \'\')' if col_candidate_id else 'NULL'} AS candidate_id, "
                 f"CAST({col_candidato} AS VARCHAR) AS candidato, "
                 f"{'CAST(' + col_partido + ' AS VARCHAR)' if col_partido else 'NULL'} AS partido, "
                 f"{'CAST(' + col_cargo + ' AS VARCHAR)' if col_cargo else 'NULL'} AS cargo, "
@@ -2303,13 +2313,14 @@ class DuckDBAnalyticsService:
         total_pages = (total + page_size - 1) // page_size
         items = [
             {
-                "candidato": r[0] or "",
-                "partido": r[1],
-                "cargo": r[2],
-                "uf": r[3],
-                "ano": int(r[4]) if r[4] is not None else None,
-                "votos": int(r[5] or 0),
-                "situacao": r[6],
+                "candidate_id": (r[0] or (r[1] or "")),
+                "candidato": r[1] or "",
+                "partido": r[2],
+                "cargo": r[3],
+                "uf": r[4],
+                "ano": int(r[5]) if r[5] is not None else None,
+                "votos": int(r[6] or 0),
+                "situacao": r[7],
             }
             for r in rows
         ]
