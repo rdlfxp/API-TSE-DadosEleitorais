@@ -26,7 +26,10 @@ class Settings(BaseSettings):
     rate_limit_max_requests_per_ip: int = 120
     analytics_cache_ttl_seconds: int = 60
     analytics_top_candidates_cache_ttl_seconds: int = 45
-    duckdb_create_indexes: bool = True
+    duckdb_materialize_table: bool = False
+    duckdb_create_indexes: bool = False
+    duckdb_memory_limit_mb: int = 384
+    duckdb_threads: int = 1
 
 
 settings = Settings()

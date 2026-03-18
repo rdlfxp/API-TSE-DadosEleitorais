@@ -144,27 +144,54 @@ class DuckDBAnalyticsService:
         max_top_n: int,
         separator: str = ",",
         encoding: str = "utf-8",
+        materialize_table: bool = False,
         create_indexes: bool = True,
+        memory_limit_mb: int | None = None,
+        threads: int | None = None,
     ) -> "DuckDBAnalyticsService":
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(path)
 
         conn = duckdb.connect(database=":memory:")
+        if memory_limit_mb is not None and int(memory_limit_mb) > 0:
+            try:
+                conn.execute(f"SET memory_limit='{int(memory_limit_mb)}MB'")
+            except Exception:
+                pass
+        if threads is not None and int(threads) > 0:
+            try:
+                conn.execute(f"SET threads TO {int(threads)}")
+            except Exception:
+                pass
+
         suffix = path.suffix.lower()
         source_path = str(path).replace("'", "''")
         delim = separator.replace("'", "''")
-        if suffix == ".parquet":
-            conn.execute(
-                f"CREATE OR REPLACE TABLE analytics AS SELECT * FROM read_parquet('{source_path}')"
-            )
-        elif suffix == ".csv":
-            conn.execute(
-                "CREATE OR REPLACE TABLE analytics AS "
-                f"SELECT * FROM read_csv_auto('{source_path}', delim='{delim}', header=true, ignore_errors=true)"
-            )
+        if materialize_table:
+            if suffix == ".parquet":
+                conn.execute(
+                    f"CREATE OR REPLACE TABLE analytics AS SELECT * FROM read_parquet('{source_path}')"
+                )
+            elif suffix == ".csv":
+                conn.execute(
+                    "CREATE OR REPLACE TABLE analytics AS "
+                    f"SELECT * FROM read_csv_auto('{source_path}', delim='{delim}', header=true, ignore_errors=true)"
+                )
+            else:
+                raise ValueError("Formato de analytics nao suportado. Use .csv ou .parquet.")
         else:
-            raise ValueError("Formato de analytics nao suportado. Use .csv ou .parquet.")
+            if suffix == ".parquet":
+                conn.execute(
+                    f"CREATE OR REPLACE VIEW analytics AS SELECT * FROM read_parquet('{source_path}')"
+                )
+            elif suffix == ".csv":
+                conn.execute(
+                    "CREATE OR REPLACE VIEW analytics AS "
+                    f"SELECT * FROM read_csv_auto('{source_path}', delim='{delim}', header=true, ignore_errors=true)"
+                )
+            else:
+                raise ValueError("Formato de analytics nao suportado. Use .csv ou .parquet.")
 
         cols = {str(v[0]).upper() for v in conn.execute("DESCRIBE analytics").fetchall()}
         service = cls(
@@ -175,7 +202,7 @@ class DuckDBAnalyticsService:
             _columns=cols,
         )
         service._source_path = path
-        if create_indexes:
+        if create_indexes and materialize_table:
             service._create_indexes()
         return service
 
