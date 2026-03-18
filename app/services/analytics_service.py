@@ -192,6 +192,7 @@ class AnalyticsService:
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        partido: str | None = None,
         municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> pd.DataFrame:
@@ -200,6 +201,7 @@ class AnalyticsService:
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_partido = self._pick_col(["SG_PARTIDO"])
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
@@ -219,6 +221,8 @@ class AnalyticsService:
             df = df[df[col_uf].astype(str).str.upper() == uf.upper()]
         if cargo and col_cargo:
             df = df[df[col_cargo].astype(str).str.lower() == cargo.lower()]
+        if partido and col_partido:
+            df = df[df[col_partido].astype(str).str.upper().str.strip() == partido.upper().strip()]
         if municipio and col_municipio:
             df = df[df[col_municipio].astype(str).str.upper().str.strip() == municipio.upper().strip()]
         if somente_eleitos and col_situacao:
@@ -594,12 +598,13 @@ class AnalyticsService:
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        partido: str | None = None,
         municipio: str | None = None,
         top_n: int | None = None,
         page: int = 1,
         page_size: int | None = None,
     ) -> dict:
-        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido, municipio=municipio)
         col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_candidato = self._pick_col(["NM_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])

@@ -363,6 +363,7 @@ class DuckDBAnalyticsService:
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        partido: str | None = None,
         municipio: str | None = None,
         somente_eleitos: bool = False,
     ) -> tuple[str, list]:
@@ -373,6 +374,7 @@ class DuckDBAnalyticsService:
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_partido = self._pick_col(["SG_PARTIDO"])
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
@@ -395,6 +397,9 @@ class DuckDBAnalyticsService:
         if cargo and col_cargo:
             clauses.append(f"LOWER(TRIM(CAST({col_cargo} AS VARCHAR))) = ?")
             params.append(cargo.lower())
+        if partido and col_partido:
+            clauses.append(f"UPPER(TRIM(CAST({col_partido} AS VARCHAR))) = ?")
+            params.append(partido.upper().strip())
         if municipio and col_municipio:
             clauses.append(f"UPPER(TRIM(CAST({col_municipio} AS VARCHAR))) = ?")
             params.append(municipio.upper().strip())
@@ -672,6 +677,7 @@ class DuckDBAnalyticsService:
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
+        partido: str | None = None,
         municipio: str | None = None,
         top_n: int | None = None,
         page: int = 1,
@@ -695,7 +701,7 @@ class DuckDBAnalyticsService:
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
-        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido, municipio=municipio)
         offset = (page - 1) * effective_page_size
 
         key_expr = (

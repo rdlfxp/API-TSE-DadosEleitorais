@@ -79,7 +79,7 @@ async def lifespan(_: FastAPI):
 
     if not selected_path.exists():
         downloaded_path = ensure_local_analytics_from_r2(
-            preferred_csv_path=file_path,
+            preferred_path=file_path,
             prefer_parquet=settings.prefer_parquet_if_available,
         )
         if downloaded_path is not None:
@@ -497,6 +497,7 @@ def analytics_top_candidates(
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
+    partido: str | None = None,
     municipio: str | None = None,
     top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
     page: int = Query(default=1, ge=1),
@@ -508,6 +509,7 @@ def analytics_top_candidates(
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
+        "partido": partido,
         "municipio": municipio,
         "top_n": top_n,
         "page": page,
@@ -533,6 +535,7 @@ def analytics_top_candidates(
             turno=turno,
             uf=uf,
             cargo=cargo,
+            partido=partido,
             municipio=municipio,
             top_n=top_n,
             page=page,
