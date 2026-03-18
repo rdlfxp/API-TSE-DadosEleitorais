@@ -79,8 +79,8 @@ async def lifespan(_: FastAPI):
 
     if not selected_path.exists():
         downloaded_path = ensure_local_analytics_from_r2(
-            preferred_path=file_path,
-            prefer_parquet=settings.prefer_parquet_if_available,
+            file_path,
+            settings.prefer_parquet_if_available,
         )
         if downloaded_path is not None:
             selected_path = downloaded_path
