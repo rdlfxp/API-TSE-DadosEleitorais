@@ -250,6 +250,32 @@ class VoteDistributionResponse(BaseModel):
     items: list[VoteDistributionItem] = Field(default_factory=list)
 
 
+class CandidateVoteMapPoint(BaseModel):
+    key: str
+    label: str
+    votes: int
+    vote_share: float
+    tier: int
+    color_rgb: list[int]
+    marker_size: int
+    cluster_size: int
+    lat: float | None = None
+    lng: float | None = None
+    uf: str | None = None
+    municipio: str | None = None
+    zona: str | None = None
+    tooltip: str | None = None
+
+
+class CandidateVoteMapResponse(BaseModel):
+    candidate_id: str
+    level: str
+    quantile_q1: int
+    quantile_q2: int
+    total_votes: int
+    items: list[CandidateVoteMapPoint] = Field(default_factory=list)
+
+
 class ZoneFidelityItem(BaseModel):
     zone_id: str
     zone_name: str
