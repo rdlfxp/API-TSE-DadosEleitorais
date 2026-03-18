@@ -22,6 +22,7 @@ class OverviewResponse(BaseModel):
 
 
 class TopCandidateItem(BaseModel):
+    candidate_id: str
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -40,6 +41,7 @@ class TopCandidatesResponse(BaseModel):
 
 
 class CandidateSearchItem(BaseModel):
+    candidate_id: str
     candidato: str
     partido: str | None = None
     cargo: str | None = None
