@@ -2118,88 +2118,115 @@ class AnalyticsService:
 
     def search_candidates(
         self,
-        query: str,
-        ano: int | None = None,
+        q: str,
+        ano: int,
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
-        municipio: str | None = None,
+        partido: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
-        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+        df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido)
 
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_numero = self._pick_col(["NR_CANDIDATO"])
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
-        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
         )
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
         if not col_candidato:
-            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
-        q = query.strip().lower()
-        if not q:
-            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+        query = str(q or "").strip()
+        if not query:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+        q_norm = self._normalize_ascii_upper(query).lower()
+        if not q_norm:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
-        names = df[col_candidato].fillna("").astype(str).str.strip()
-        names_lc = names.str.lower()
+        names = self._normalize_text(df[col_candidato])
+        names_norm = names.apply(self._normalize_ascii_upper).str.lower()
 
-        contains = names_lc.str.contains(q, regex=False)
+        contains = names_norm.str.contains(q_norm, regex=False)
         matched = contains
         if not matched.any():
-            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
         ranked = df.loc[matched].copy()
-        name_match_lc = names_lc.loc[matched]
+        name_match_norm = names_norm.loc[matched]
         score = (
-            (name_match_lc == q).astype(int) * 3
-            + (name_match_lc.str.startswith(q)).astype(int) * 2
-            + (name_match_lc.str.contains(q, regex=False)).astype(int)
+            (name_match_norm == q_norm).astype(int) * 3
+            + (name_match_norm.str.startswith(q_norm)).astype(int) * 2
+            + (name_match_norm.str.contains(q_norm, regex=False)).astype(int)
         )
+        has_votos = bool(col_votos)
         if col_votos:
             votos = pd.to_numeric(ranked[col_votos], errors="coerce").fillna(0).astype("int64")
         else:
-            votos = 0
-        ranked = ranked.assign(_score=score, _votos=votos)
-
-        ranked = ranked.sort_values(
-            by=["_score", "_votos", col_candidato],
-            ascending=[False, False, True],
+            votos = pd.Series(0, index=ranked.index, dtype="int64")
+        ranked = ranked.assign(
+            _score=score,
+            _votos=votos,
+            _candidate_id=(
+                self._normalize_text(ranked[col_candidate_id]).replace("", pd.NA)
+                if col_candidate_id
+                else self._normalize_text(ranked[col_candidato]).replace("", pd.NA)
+            ),
+            _candidato=self._normalize_text(ranked[col_candidato]),
+            _partido=self._normalize_text(ranked[col_partido]).replace("", pd.NA) if col_partido else pd.NA,
+            _cargo=self._normalize_text(ranked[col_cargo]).replace("", pd.NA) if col_cargo else pd.NA,
+            _uf=self._normalize_text(ranked[col_uf]).str.upper().replace("", pd.NA) if col_uf else pd.NA,
+            _numero=self._normalize_text(ranked[col_numero]).replace("", pd.NA) if col_numero else pd.NA,
+            _situacao=self._normalize_text(ranked[col_situacao]).replace("", pd.NA) if col_situacao else pd.NA,
         )
 
-        total = int(len(ranked))
+        grouped = (
+            ranked.groupby(
+                ["_candidate_id", "_candidato", "_partido", "_cargo", "_uf", "_numero", "_situacao"],
+                dropna=False,
+                as_index=False,
+            )
+            .agg(_score=("_score", "max"), _votos=("_votos", "sum"))
+            .sort_values(by=["_score", "_votos", "_candidato"], ascending=[False, False, True])
+        )
+
+        total = int(len(grouped))
         total_pages = (total + page_size - 1) // page_size
         start = (page - 1) * page_size
         end = start + page_size
-        sliced = ranked.iloc[start:end]
+        sliced = grouped.iloc[start:end]
 
         items: list[dict] = []
         for _, row in sliced.iterrows():
+            candidate_id_raw = (
+                row["_candidate_id"]
+                if pd.notna(row["_candidate_id"]) and str(row["_candidate_id"]).strip()
+                else row["_candidato"]
+            )
+            candidate_id = str(candidate_id_raw).strip() if pd.notna(candidate_id_raw) else ""
+            if not candidate_id:
+                continue
+            numero_raw = row["_numero"] if pd.notna(row["_numero"]) and str(row["_numero"]).strip() else candidate_id
             items.append(
                 {
-                    "candidate_id": (
-                        str(row[col_candidate_id])
-                        if col_candidate_id and pd.notna(row[col_candidate_id]) and str(row[col_candidate_id]).strip()
-                        else self._candidate_output_id(pd.DataFrame([row]), str(row[col_candidato]))
-                    ),
-                    "candidato": str(row[col_candidato]),
-                    "partido": str(row[col_partido]) if col_partido else None,
-                    "cargo": str(row[col_cargo]) if col_cargo else None,
-                    "uf": str(row[col_uf]) if col_uf else None,
-                    "ano": int(row[col_ano]) if col_ano and pd.notna(row[col_ano]) else None,
-                    "votos": int(row["_votos"]),
-                    "situacao": str(row[col_situacao]) if col_situacao else None,
+                    "candidate_id": candidate_id,
+                    "candidato": (str(row["_candidato"]) if pd.notna(row["_candidato"]) else ""),
+                    "partido": (str(row["_partido"]) if pd.notna(row["_partido"]) else None),
+                    "cargo": (str(row["_cargo"]) if pd.notna(row["_cargo"]) else None),
+                    "uf": (str(row["_uf"]) if pd.notna(row["_uf"]) else None),
+                    "numero": (str(numero_raw) if pd.notna(numero_raw) else None),
+                    "votos": int(row["_votos"]) if has_votos else None,
+                    "situacao": (str(row["_situacao"]) if pd.notna(row["_situacao"]) else None),
                 }
             )
 
         return {
-            "query": query,
             "page": page,
             "page_size": page_size,
             "total": total,

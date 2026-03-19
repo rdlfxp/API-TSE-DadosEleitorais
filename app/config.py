@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "MeuCandidato Analytics API"
     app_version: str = "1.0.0"
     analytics_engine: str = "duckdb"
-    analytics_data_path: str = "data/curated/analytics.csv"
+    analytics_data_path: str = "data/curated/analytics.parquet"
     analytics_encoding: str = "utf-8"
     analytics_separator: str = ","
     prefer_parquet_if_available: bool = True
@@ -26,10 +26,13 @@ class Settings(BaseSettings):
     rate_limit_max_requests_per_ip: int = 120
     analytics_cache_ttl_seconds: int = 60
     analytics_top_candidates_cache_ttl_seconds: int = 45
+    analytics_cache_max_entries: int = 1024
     duckdb_materialize_table: bool = False
     duckdb_create_indexes: bool = False
     duckdb_memory_limit_mb: int = 384
     duckdb_threads: int = 1
+    r2_connect_timeout_seconds: int = 5
+    r2_read_timeout_seconds: int = 30
 
 
 settings = Settings()

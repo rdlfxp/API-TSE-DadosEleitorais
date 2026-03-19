@@ -54,6 +54,7 @@ METRICS = {
     "last_request_duration_ms": 0.0,
 }
 RATE_LIMIT_COUNTERS: dict[tuple[str, int], int] = {}
+RATE_LIMIT_LAST_CLEANUP_BUCKET = -1
 ANALYTICS_CACHE_LOCK = Lock()
 ANALYTICS_CACHE: dict[str, tuple[float, Any]] = {}
 
@@ -115,6 +116,12 @@ async def lifespan(_: FastAPI):
                 separator=settings.analytics_separator,
                 encoding=settings.analytics_encoding,
             )
+        if isinstance(service, AnalyticsService):
+            rows_loaded: int | None = int(len(service.dataframe))
+        elif settings.duckdb_materialize_table:
+            rows_loaded = int(service.row_count)
+        else:
+            rows_loaded = None
         logger.info(
             json.dumps(
                 {
@@ -125,11 +132,7 @@ async def lifespan(_: FastAPI):
                     "duckdb_create_indexes": bool(settings.duckdb_create_indexes),
                     "duckdb_memory_limit_mb": int(settings.duckdb_memory_limit_mb),
                     "duckdb_threads": int(settings.duckdb_threads),
-                    "rows": (
-                        int(len(service.dataframe))
-                        if isinstance(service, AnalyticsService)
-                        else int(service.row_count)
-                    ),
+                    "rows": rows_loaded,
                 },
                 ensure_ascii=False,
             )
@@ -227,19 +230,32 @@ def _cache_get(cache_key: str, allow_stale: bool = False) -> Any | None:
     now = time.time()
     with ANALYTICS_CACHE_LOCK:
         cached = ANALYTICS_CACHE.get(cache_key)
-    if cached is None:
+        if cached is None:
+            return None
+        expires_at, payload = cached
+        if allow_stale or expires_at >= now:
+            return payload
+        ANALYTICS_CACHE.pop(cache_key, None)
         return None
-    expires_at, payload = cached
-    if allow_stale or expires_at >= now:
-        return payload
-    return None
+
+
+def _cache_prune_locked(now: float) -> None:
+    expired_keys = [key for key, (expires_at, _) in ANALYTICS_CACHE.items() if expires_at < now]
+    for key in expired_keys:
+        ANALYTICS_CACHE.pop(key, None)
 
 
 def _cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> None:
     if ttl_seconds <= 0:
         return
+    max_entries = max(1, int(settings.analytics_cache_max_entries))
+    now = time.time()
     with ANALYTICS_CACHE_LOCK:
-        ANALYTICS_CACHE[cache_key] = (time.time() + ttl_seconds, payload)
+        _cache_prune_locked(now)
+        if len(ANALYTICS_CACHE) >= max_entries:
+            for key, _ in sorted(ANALYTICS_CACHE.items(), key=lambda item: item[1][0])[: len(ANALYTICS_CACHE) - max_entries + 1]:
+                ANALYTICS_CACHE.pop(key, None)
+        ANALYTICS_CACHE[cache_key] = (now + ttl_seconds, payload)
 
 
 def _run_analytics_query(
@@ -306,6 +322,7 @@ def _run_analytics_query(
 
 @app.middleware("http")
 async def observability_middleware(request: Request, call_next):
+    global RATE_LIMIT_LAST_CLEANUP_BUCKET
     request_id = request.headers.get("X-Request-Id", str(uuid4()))
     request.state.trace_id = request_id
     started_at = time.perf_counter()
@@ -324,9 +341,11 @@ async def observability_middleware(request: Request, call_next):
             RATE_LIMIT_COUNTERS[key] = RATE_LIMIT_COUNTERS.get(key, 0) + 1
             if RATE_LIMIT_COUNTERS[key] > limit:
                 blocked = True
-            expired = [k for k in RATE_LIMIT_COUNTERS if k[1] < bucket - 1]
-            for old in expired:
-                RATE_LIMIT_COUNTERS.pop(old, None)
+            if RATE_LIMIT_LAST_CLEANUP_BUCKET != bucket:
+                expired = [k for k in RATE_LIMIT_COUNTERS if k[1] < bucket - 1]
+                for old in expired:
+                    RATE_LIMIT_COUNTERS.pop(old, None)
+                RATE_LIMIT_LAST_CLEANUP_BUCKET = bucket
 
         if blocked:
             with METRICS_LOCK:
@@ -367,19 +386,20 @@ async def observability_middleware(request: Request, call_next):
         elif status_code >= 500:
             METRICS["requests_5xx_total"] += 1
 
-    logger.info(
-        json.dumps(
-            {
-                "event": "http_request",
-                "request_id": request_id,
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": status_code,
-                "duration_ms": duration_ms,
-            },
-            ensure_ascii=False,
+    if request.url.path not in {"/health", "/metrics"}:
+        logger.info(
+            json.dumps(
+                {
+                    "event": "http_request",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                },
+                ensure_ascii=False,
+            )
         )
-    )
     return response
 
 
@@ -547,15 +567,61 @@ def analytics_top_candidates(
     return TopCandidatesResponse(**data)
 
 
-@app.get("/v1/analytics/candidatos", response_model=CandidateSearchResponse, responses=ERROR_RESPONSES)
-def analytics_candidates_search(
+@app.get("/v1/analytics/candidatos/search", response_model=CandidateSearchResponse, responses=ERROR_RESPONSES)
+def analytics_candidates_text_search(
     request: Request,
-    query: str = Query(..., min_length=2, description="Busca por nome do candidato"),
-    ano: int | None = None,
+    q: str = Query(..., min_length=2, description="Busca textual por nome do candidato"),
+    ano: int = Query(...),
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
-    municipio: str | None = None,
+    partido: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> CandidateSearchResponse:
+    filters = {
+        "q": q,
+        "ano": ano,
+        "turno": turno,
+        "uf": uf,
+        "cargo": cargo,
+        "partido": partido,
+        "page": page,
+        "page_size": page_size,
+    }
+    data = _run_analytics_query(
+        request=request,
+        endpoint="/v1/analytics/candidatos/search",
+        filters=filters,
+        operation=lambda: get_service().search_candidates(
+            q=q,
+            ano=ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            partido=partido,
+            page=page,
+            page_size=page_size,
+        ),
+        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+    )
+    return CandidateSearchResponse(**data)
+
+
+@app.get(
+    "/v1/analytics/candidatos",
+    response_model=CandidateSearchResponse,
+    responses=ERROR_RESPONSES,
+    deprecated=True,
+)
+def analytics_candidates_search_legacy(
+    request: Request,
+    query: str = Query(..., min_length=2, description="Parametro legado. Use q em /v1/analytics/candidatos/search"),
+    ano: int = Query(...),
+    turno: int | None = Query(default=None, ge=1, le=2),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
+    partido: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateSearchResponse:
@@ -565,7 +631,7 @@ def analytics_candidates_search(
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
-        "municipio": municipio,
+        "partido": partido,
         "page": page,
         "page_size": page_size,
     }
@@ -574,12 +640,12 @@ def analytics_candidates_search(
         endpoint="/v1/analytics/candidatos",
         filters=filters,
         operation=lambda: get_service().search_candidates(
-            query=query,
+            q=query,
             ano=ano,
             turno=turno,
             uf=uf,
             cargo=cargo,
-            municipio=municipio,
+            partido=partido,
             page=page,
             page_size=page_size,
         ),

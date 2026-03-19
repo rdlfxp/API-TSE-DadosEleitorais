@@ -2260,79 +2260,115 @@ class DuckDBAnalyticsService:
 
     def search_candidates(
         self,
-        query: str,
-        ano: int | None = None,
+        q: str,
+        ano: int,
         turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
-        municipio: str | None = None,
+        partido: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         if not col_candidato:
-            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
-        q = query.strip().lower()
-        if not q:
-            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+        query = str(q or "").strip()
+        if not query:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+        q_norm = self._normalize_value(query).lower()
+        if not q_norm:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
         col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
-        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_numero = self._pick_col(["NR_CANDIDATO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
-        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
-        pattern = f"%{q}%"
-        filter_sql = (
-            f"{where} {'AND' if where else 'WHERE'} LOWER(TRIM(CAST({col_candidato} AS VARCHAR))) LIKE ?"
+        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido)
+        normalized_name_expr = (
+            f"LOWER(TRIM(TRANSLATE(CAST({col_candidato} AS VARCHAR), "
+            "'ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇçÑñ', "
+            "'AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCcNn')))"
         )
+        pattern = f"%{q_norm}%"
+        filter_sql = f"{where} {'AND' if where else 'WHERE'} {normalized_name_expr} LIKE ?"
         base_params = params + [pattern]
 
-        total = int(self._scalar(f"SELECT COUNT(*) FROM analytics {filter_sql}", base_params) or 0)
+        total = int(
+            self._scalar(
+                (
+                    "SELECT COUNT(*) "
+                    "FROM ("
+                    "  SELECT "
+                    f"    COALESCE({'NULLIF(TRIM(CAST(' + col_candidate_id + ' AS VARCHAR)), \'\'),' if col_candidate_id else ''}"
+                    f"{normalized_name_expr}) AS candidate_id "
+                    f"  FROM analytics {filter_sql} "
+                    "  GROUP BY 1"
+                    ") t"
+                ),
+                base_params,
+            )
+            or 0
+        )
         if total == 0:
-            return {"query": query, "page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
         offset = (page - 1) * page_size
         rows = self._rows(
             (
                 "SELECT "
-                f"{'NULLIF(TRIM(CAST(' + col_candidate_id + ' AS VARCHAR)), \'\')' if col_candidate_id else 'NULL'} AS candidate_id, "
-                f"CAST({col_candidato} AS VARCHAR) AS candidato, "
-                f"{'CAST(' + col_partido + ' AS VARCHAR)' if col_partido else 'NULL'} AS partido, "
-                f"{'CAST(' + col_cargo + ' AS VARCHAR)' if col_cargo else 'NULL'} AS cargo, "
-                f"{'CAST(' + col_uf + ' AS VARCHAR)' if col_uf else 'NULL'} AS uf, "
-                f"{'TRY_CAST(' + col_ano + ' AS BIGINT)' if col_ano else 'NULL'} AS ano, "
-                f"{'COALESCE(TRY_CAST(' + col_votos + ' AS BIGINT), 0)' if col_votos else '0'} AS votos, "
-                f"{'CAST(' + col_situacao + ' AS VARCHAR)' if col_situacao else 'NULL'} AS situacao, "
-                f"CASE WHEN LOWER(TRIM(CAST({col_candidato} AS VARCHAR))) = ? THEN 3 "
-                f"     WHEN LOWER(TRIM(CAST({col_candidato} AS VARCHAR))) LIKE ? THEN 2 ELSE 1 END AS score "
-                f"FROM analytics {filter_sql} "
-                "ORDER BY score DESC, votos DESC, candidato ASC LIMIT ? OFFSET ?"
+                "  candidate_id, "
+                "  candidato, "
+                "  partido, "
+                "  cargo, "
+                "  uf, "
+                "  numero, "
+                "  situacao, "
+                "  votos, "
+                "  score "
+                "FROM ("
+                "  SELECT "
+                f"    COALESCE({'NULLIF(TRIM(CAST(' + col_candidate_id + ' AS VARCHAR)), \'\'),' if col_candidate_id else ''}"
+                f"{normalized_name_expr}) AS candidate_id, "
+                f"    MIN(TRIM(CAST({col_candidato} AS VARCHAR))) AS candidato, "
+                f"    {'MIN(NULLIF(TRIM(CAST(' + col_partido + ' AS VARCHAR)), \'\'))' if col_partido else 'NULL'} AS partido, "
+                f"    {'MIN(NULLIF(TRIM(CAST(' + col_cargo + ' AS VARCHAR)), \'\'))' if col_cargo else 'NULL'} AS cargo, "
+                f"    {'MIN(NULLIF(UPPER(TRIM(CAST(' + col_uf + ' AS VARCHAR))), \'\'))' if col_uf else 'NULL'} AS uf, "
+                f"    {'MIN(NULLIF(TRIM(CAST(' + col_numero + ' AS VARCHAR)), \'\'))' if col_numero else 'NULL'} AS numero, "
+                f"    {'MIN(NULLIF(TRIM(CAST(' + col_situacao + ' AS VARCHAR)), \'\'))' if col_situacao else 'NULL'} AS situacao, "
+                f"    {'SUM(COALESCE(TRY_CAST(' + col_votos + ' AS BIGINT), 0))' if col_votos else 'NULL'} AS votos, "
+                f"    MAX(CASE WHEN {normalized_name_expr} = ? THEN 3 "
+                f"             WHEN {normalized_name_expr} LIKE ? THEN 2 "
+                "             ELSE 1 END) AS score "
+                f"  FROM analytics {filter_sql} "
+                "  GROUP BY 1"
+                ") ranked "
+                "ORDER BY score DESC, COALESCE(votos, 0) DESC, candidato ASC LIMIT ? OFFSET ?"
             ),
-            [q, f"{q}%"] + base_params + [page_size, offset],
+            [q_norm, f"{q_norm}%"] + base_params + [page_size, offset],
         )
 
         total_pages = (total + page_size - 1) // page_size
         items = [
             {
-                "candidate_id": (r[0] or (r[1] or "")),
+                "candidate_id": str(r[0] or ""),
                 "candidato": r[1] or "",
                 "partido": r[2],
                 "cargo": r[3],
                 "uf": r[4],
-                "ano": int(r[5]) if r[5] is not None else None,
-                "votos": int(r[6] or 0),
-                "situacao": r[7],
+                "numero": (str(r[5]) if r[5] is not None and str(r[5]).strip() else str(r[0] or "")),
+                "situacao": r[6],
+                "votos": (int(r[7]) if r[7] is not None else None),
             }
             for r in rows
+            if str(r[0] or "").strip()
         ]
 
         return {
-            "query": query,
             "page": page,
             "page_size": page_size,
             "total": total,
