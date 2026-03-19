@@ -2212,6 +2212,7 @@ class AnalyticsService:
             candidate_id = str(candidate_id_raw).strip() if pd.notna(candidate_id_raw) else ""
             if not candidate_id:
                 continue
+            numero_raw = row["_numero"] if pd.notna(row["_numero"]) and str(row["_numero"]).strip() else candidate_id
             items.append(
                 {
                     "candidate_id": candidate_id,
@@ -2219,7 +2220,7 @@ class AnalyticsService:
                     "partido": (str(row["_partido"]) if pd.notna(row["_partido"]) else None),
                     "cargo": (str(row["_cargo"]) if pd.notna(row["_cargo"]) else None),
                     "uf": (str(row["_uf"]) if pd.notna(row["_uf"]) else None),
-                    "numero": (str(row["_numero"]) if pd.notna(row["_numero"]) else None),
+                    "numero": (str(numero_raw) if pd.notna(numero_raw) else None),
                     "votos": int(row["_votos"]) if has_votos else None,
                     "situacao": (str(row["_situacao"]) if pd.notna(row["_situacao"]) else None),
                 }

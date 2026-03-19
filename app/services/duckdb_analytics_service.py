@@ -2360,7 +2360,7 @@ class DuckDBAnalyticsService:
                 "partido": r[2],
                 "cargo": r[3],
                 "uf": r[4],
-                "numero": r[5],
+                "numero": (str(r[5]) if r[5] is not None and str(r[5]).strip() else str(r[0] or "")),
                 "situacao": r[6],
                 "votos": (int(r[7]) if r[7] is not None else None),
             }
