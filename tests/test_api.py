@@ -698,6 +698,7 @@ def test_candidate_vote_map_endpoint_auto_uses_zona_for_municipal_office(client:
     assert payload["items"][0]["zona"] == "100"
     assert payload["items"][0]["votes"] == 1050000
     assert payload["items"][0]["tier"] == 0
+    assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
 
 
 def test_candidate_vote_map_endpoint_municipio_level(client: TestClient):
@@ -798,6 +799,45 @@ def test_candidate_zone_fidelity_retention_uses_previous_election_and_geometry_f
     payload = response.json()
     assert payload["items"][0]["retention"] == 90.0
     assert payload["items"][0]["geometry"]["type"] == "Point"
+    assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
+
+
+def test_candidate_zone_fidelity_include_geometry_uses_zone_centroid_when_lat_lng_missing(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 123,
+                "NM_CANDIDATO": "Candidato Geo",
+                "NR_ZONA": "701",
+                "NM_ZONA": "Zona 701",
+                "NM_UE": "SAO PAULO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1500,
+            }
+        ]
+    )
+    original_service = main_module.service
+    try:
+        service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        service._resolve_zone_geometry = lambda **_: {  # type: ignore[method-assign]
+            "type": "Polygon",
+            "coordinates": [[[-46.70, -23.60], [-46.60, -23.60], [-46.60, -23.50], [-46.70, -23.50], [-46.70, -23.60]]],
+        }
+        main_module.service = service
+        response = client.get(
+            "/v1/candidates/123/zone-fidelity",
+            params={"year": 2024, "state": "SP", "office": "Prefeito", "include_geometry": "true"},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["geometry"]["type"] == "Polygon"
+    assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
 
 
 def test_service_unavailable_returns_503(client: TestClient):
