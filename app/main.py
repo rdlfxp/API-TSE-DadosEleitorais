@@ -335,10 +335,22 @@ def _configure_cache_headers(
         f"public, max-age=60, s-maxage={edge_ttl_seconds}, "
         "stale-while-revalidate=60, stale-if-error=300"
     )
-    response.headers["Vary"] = "Accept-Encoding"
-    body = getattr(response, "body", None)
-    if isinstance(body, (bytes, bytearray)):
-        etag_hash = hashlib.sha256(body).hexdigest()[:16]
+    existing_vary = str(response.headers.get("Vary", "")).strip()
+    if existing_vary:
+        vary_values = {value.strip() for value in existing_vary.split(",") if value.strip()}
+        vary_values.add("Accept-Encoding")
+        response.headers["Vary"] = ", ".join(sorted(vary_values))
+    else:
+        response.headers["Vary"] = "Accept-Encoding"
+
+    content_type = str(response.headers.get("content-type", "")).lower()
+    if "application/json" in content_type:
+        url_key = request.url.path
+        if request.url.query:
+            url_key = f"{url_key}?{request.url.query}"
+        data_version = str(int(DATA_LAST_MODIFIED_TS)) if DATA_LAST_MODIFIED_TS is not None else "no-data-mtime"
+        etag_source = f"{url_key}|{data_version}"
+        etag_hash = hashlib.sha256(etag_source.encode("utf-8")).hexdigest()[:16]
         response.headers["ETag"] = f'W/"{etag_hash}"'
     if DATA_LAST_MODIFIED_TS is not None:
         response.headers["Last-Modified"] = formatdate(DATA_LAST_MODIFIED_TS, usegmt=True)
