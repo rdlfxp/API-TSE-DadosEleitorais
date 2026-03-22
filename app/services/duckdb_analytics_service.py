@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import logging
+import math
 from pathlib import Path
 from threading import Lock
 import unicodedata
@@ -580,6 +581,20 @@ class DuckDBAnalyticsService:
         lat = sum(p[0] for p in points) / len(points)
         lng = sum(p[1] for p in points) / len(points)
         return float(lat), float(lng)
+
+    def _coerce_valid_coords(self, lat: object, lng: object) -> tuple[float | None, float | None]:
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+        except (TypeError, ValueError):
+            return None, None
+        if not math.isfinite(lat_f) or not math.isfinite(lng_f):
+            return None, None
+        if not (-90.0 <= lat_f <= 90.0) or not (-180.0 <= lng_f <= 180.0):
+            return None, None
+        if abs(lat_f) < 1e-9 and abs(lng_f) < 1e-9:
+            return None, None
+        return lat_f, lng_f
 
     def filter_options(self) -> dict:
         anos: list[int] = []
@@ -1940,9 +1955,10 @@ class DuckDBAnalyticsService:
                 query_params,
             )
 
-            for idx, row in grouped.iterrows():
-                if pd.notna(row["lat"]) and pd.notna(row["lng"]):
-                    continue
+        valid_coord_indices: list[int] = []
+        for idx, row in grouped.iterrows():
+            lat, lng = self._coerce_valid_coords(row.get("lat"), row.get("lng"))
+            if (lat is None or lng is None) and resolved_level == "zona":
                 geometry = self._resolve_zone_geometry(
                     zone_id=str(row["_zona"]),
                     city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
@@ -1950,10 +1966,18 @@ class DuckDBAnalyticsService:
                     lat=float("nan"),
                     lng=float("nan"),
                 )
-                lat, lng = self._geometry_centroid(geometry)
-                if lat is not None and lng is not None:
-                    grouped.at[idx, "lat"] = lat
-                    grouped.at[idx, "lng"] = lng
+                geo_lat, geo_lng = self._geometry_centroid(geometry)
+                lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
+            if lat is None or lng is None:
+                continue
+            grouped.at[idx, "lat"] = lat
+            grouped.at[idx, "lng"] = lng
+            valid_coord_indices.append(idx)
+
+        if valid_coord_indices:
+            grouped = grouped.loc[valid_coord_indices].copy()
+        else:
+            grouped = grouped.iloc[0:0].copy()
 
         candidate_id_exprs = []
         if self._has("SQ_CANDIDATO"):
@@ -1964,10 +1988,10 @@ class DuckDBAnalyticsService:
             candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_CANDIDATO AS VARCHAR)), '')")
         if self._has("NM_URNA_CANDIDATO"):
             candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR)), '')")
-        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["?"]) + ")"
+        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["CAST(? AS VARCHAR)"]) + ")"
         candidate_id_row = self._rows(
             f"SELECT {candidate_select_expr} AS candidate_id FROM analytics {candidate_where} LIMIT 1",
-            query_params + [str(candidate_id)],
+            [str(candidate_id)] + query_params,
         )
         resolved_candidate_id = str(candidate_id_row[0][0]) if candidate_id_row else str(candidate_id)
 
@@ -2100,8 +2124,8 @@ class DuckDBAnalyticsService:
                 else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)
             ),
             _votes=pd.to_numeric(candidate_current[col_votes], errors="coerce").fillna(0),
-            _lat=(pd.to_numeric(candidate_current[col_lat], errors="coerce") if col_lat else pd.Series([0.0] * len(candidate_current), index=candidate_current.index)),
-            _lng=(pd.to_numeric(candidate_current[col_lng], errors="coerce") if col_lng else pd.Series([0.0] * len(candidate_current), index=candidate_current.index)),
+            _lat=(pd.to_numeric(candidate_current[col_lat], errors="coerce") if col_lat else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)),
+            _lng=(pd.to_numeric(candidate_current[col_lng], errors="coerce") if col_lng else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)),
         )
 
         previous_votes_by_zone: dict[str, float] = {}
@@ -2122,7 +2146,8 @@ class DuckDBAnalyticsService:
             .agg(votes=("_votes", "sum"), zone_name=("_zone_name", "first"), city=("_city", "first"), uf=("_uf", "first"), lat=("_lat", "mean"), lng=("_lng", "mean"))
             .sort_values("votes", ascending=False)
         )
-        items = []
+        with_geometry_items: list[dict] = []
+        without_geometry_items: list[dict] = []
         for _, row in grouped.iterrows():
             zone_name = str(row["zone_name"]) if pd.notna(row["zone_name"]) and str(row["zone_name"]).strip() else f"Zona {row['_zone_id']}"
             prev_votes = float(previous_votes_by_zone.get(str(row["_zone_id"]), 0.0))
@@ -2130,24 +2155,47 @@ class DuckDBAnalyticsService:
                 retention = min(round((float(row["votes"]) / prev_votes) * 100, 4), 100.0)
             else:
                 retention = 100.0
+            lat, lng = self._coerce_valid_coords(row["lat"], row["lng"])
+            geometry = None
+            if include_geometry or lat is None or lng is None:
+                geometry = self._resolve_zone_geometry(
+                    zone_id=str(row["_zone_id"]),
+                    city=(str(row["city"]) if pd.notna(row["city"]) else None),
+                    uf=(str(row["uf"]) if pd.notna(row["uf"]) else None),
+                    lat=(lat if lat is not None else float("nan")),
+                    lng=(lng if lng is not None else float("nan")),
+                )
+            if lat is None or lng is None:
+                geo_lat, geo_lng = self._geometry_centroid(geometry)
+                lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
+            if lat is None or lng is None:
+                continue
             item = {
                 "zone_id": str(row["_zone_id"]),
                 "zone_name": zone_name,
                 "city": str(row["city"]) if pd.notna(row["city"]) else None,
                 "votes": int(row["votes"]),
                 "retention": retention,
-                "lat": float(row["lat"]) if pd.notna(row["lat"]) else 0.0,
-                "lng": float(row["lng"]) if pd.notna(row["lng"]) else 0.0,
+                "lat": float(lat),
+                "lng": float(lng),
             }
             if include_geometry:
-                item["geometry"] = self._resolve_zone_geometry(
-                    zone_id=str(row["_zone_id"]),
-                    city=(str(row["city"]) if pd.notna(row["city"]) else None),
-                    uf=(str(row["uf"]) if pd.notna(row["uf"]) else None),
-                    lat=float(row["lat"]) if pd.notna(row["lat"]) else 0.0,
-                    lng=float(row["lng"]) if pd.notna(row["lng"]) else 0.0,
-                )
-            items.append(item)
+                if geometry is None:
+                    geometry = self._resolve_zone_geometry(
+                        zone_id=str(row["_zone_id"]),
+                        city=(str(row["city"]) if pd.notna(row["city"]) else None),
+                        uf=(str(row["uf"]) if pd.notna(row["uf"]) else None),
+                        lat=float(lat),
+                        lng=float(lng),
+                    )
+                item["geometry"] = geometry
+                if geometry is not None:
+                    with_geometry_items.append(item)
+                else:
+                    without_geometry_items.append(item)
+            else:
+                without_geometry_items.append(item)
+        items = with_geometry_items + without_geometry_items if include_geometry else without_geometry_items
         return {"candidate_id": self._candidate_output_id(candidate_current, candidate_id), "items": items}
 
     def candidates_compare(
