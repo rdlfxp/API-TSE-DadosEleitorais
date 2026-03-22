@@ -2,6 +2,8 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from email.utils import formatdate
+import hashlib
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Literal
@@ -57,6 +59,34 @@ RATE_LIMIT_COUNTERS: dict[tuple[str, int], int] = {}
 RATE_LIMIT_LAST_CLEANUP_BUCKET = -1
 ANALYTICS_CACHE_LOCK = Lock()
 ANALYTICS_CACHE: dict[str, tuple[float, Any]] = {}
+DATA_LAST_MODIFIED_TS: float | None = None
+
+MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
+    "/v1/analytics/filtros": 3600,
+    "/v1/analytics/overview": 600,
+    "/v1/analytics/top-candidatos": 300,
+    "/v1/analytics/candidatos/search": 120,
+    "/v1/analytics/candidatos": 120,
+    "/v1/analytics/distribuicao": 600,
+}
+
+EDGE_CACHE_TTL_BY_PATH: dict[str, int] = {
+    "/v1/analytics/filtros": 3600,
+    "/v1/analytics/overview": 600,
+    "/v1/analytics/top-candidatos": 300,
+    "/v1/analytics/candidatos/search": 120,
+    "/v1/analytics/candidatos": 120,
+    "/v1/analytics/distribuicao": 600,
+    "/v1/analytics/cor-raca-comparativo": 1200,
+    "/v1/analytics/ocupacao-genero": 1200,
+    "/v1/analytics/idade": 1200,
+    "/v1/analytics/serie-temporal": 1200,
+    "/v1/analytics/ranking": 600,
+    "/v1/analytics/mapa-uf": 1200,
+    "/v1/analytics/vagas-oficiais": 1800,
+    "/v1/analytics/polarizacao": 1200,
+    "/v1/candidates/compare": 600,
+}
 
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Bad Request"},
@@ -69,8 +99,9 @@ ERROR_RESPONSES = {
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global service
+    global service, DATA_LAST_MODIFIED_TS
     service = None
+    DATA_LAST_MODIFIED_TS = None
     file_path = Path(settings.analytics_data_path)
     selected_path = file_path
     if settings.prefer_parquet_if_available and file_path.suffix.lower() == ".csv":
@@ -96,6 +127,10 @@ async def lifespan(_: FastAPI):
             )
 
     if selected_path.exists():
+        try:
+            DATA_LAST_MODIFIED_TS = selected_path.stat().st_mtime
+        except OSError:
+            DATA_LAST_MODIFIED_TS = None
         if settings.analytics_engine.lower() == "duckdb":
             service = DuckDBAnalyticsService.from_file(
                 file_path=str(selected_path),
@@ -150,6 +185,7 @@ async def lifespan(_: FastAPI):
         )
     yield
     service = None
+    DATA_LAST_MODIFIED_TS = None
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
@@ -258,6 +294,59 @@ def _cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> None:
         ANALYTICS_CACHE[cache_key] = (now + ttl_seconds, payload)
 
 
+def _edge_cache_ttl_for_path(path: str) -> int | None:
+    if path in EDGE_CACHE_TTL_BY_PATH:
+        return EDGE_CACHE_TTL_BY_PATH[path]
+    if path.startswith("/v1/candidates/") and path.endswith("/summary"):
+        return 1800
+    if path.startswith("/v1/candidates/") and path.endswith("/vote-history"):
+        return 1800
+    if path.startswith("/v1/candidates/") and path.endswith("/electorate-profile"):
+        return 1800
+    if path.startswith("/v1/candidates/") and path.endswith("/vote-distribution"):
+        return 1200
+    if path.startswith("/v1/candidates/") and path.endswith("/vote-map"):
+        return 1800
+    if path.startswith("/v1/candidates/") and path.endswith("/zone-fidelity"):
+        return 1800
+    return None
+
+
+def _configure_cache_headers(
+    request: Request,
+    response: JSONResponse | PlainTextResponse | Any,
+) -> tuple[str, int]:
+    path = request.url.path
+    status_code = response.status_code
+    if request.method != "GET" or status_code >= 400 or path in {"/health", "/metrics"}:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["X-Cache-Policy"] = "no-store"
+        response.headers["X-Cache-TTL"] = "0"
+        return "no-store", 0
+
+    edge_ttl_seconds = _edge_cache_ttl_for_path(path)
+    if edge_ttl_seconds is None:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["X-Cache-Policy"] = "no-store"
+        response.headers["X-Cache-TTL"] = "0"
+        return "no-store", 0
+
+    response.headers["Cache-Control"] = (
+        f"public, max-age=60, s-maxage={edge_ttl_seconds}, "
+        "stale-while-revalidate=60, stale-if-error=300"
+    )
+    response.headers["Vary"] = "Accept-Encoding"
+    body = getattr(response, "body", None)
+    if isinstance(body, (bytes, bytearray)):
+        etag_hash = hashlib.sha256(body).hexdigest()[:16]
+        response.headers["ETag"] = f'W/"{etag_hash}"'
+    if DATA_LAST_MODIFIED_TS is not None:
+        response.headers["Last-Modified"] = formatdate(DATA_LAST_MODIFIED_TS, usegmt=True)
+    response.headers["X-Cache-Policy"] = "public"
+    response.headers["X-Cache-TTL"] = str(edge_ttl_seconds)
+    return "public", edge_ttl_seconds
+
+
 def _run_analytics_query(
     request: Request,
     endpoint: str,
@@ -268,11 +357,14 @@ def _run_analytics_query(
     fallback_factory: Callable[[], Any] | None = None,
 ) -> Any:
     cache_key = ""
+    setattr(request.state, "memory_cache_status", "BYPASS")
     if cache_ttl_seconds > 0:
         cache_key = f"{endpoint}:{json.dumps(filters, sort_keys=True, ensure_ascii=False, default=str)}"
         cached = _cache_get(cache_key)
         if cached is not None:
+            setattr(request.state, "memory_cache_status", "HIT")
             return cached
+        setattr(request.state, "memory_cache_status", "MISS")
 
     started_at = time.perf_counter()
     try:
@@ -315,6 +407,7 @@ def _run_analytics_query(
             if cache_key:
                 stale = _cache_get(cache_key, allow_stale=True)
                 if stale is not None:
+                    setattr(request.state, "memory_cache_status", "STALE_HIT")
                     return stale
             return fallback_factory()
         raise
@@ -363,7 +456,14 @@ async def observability_middleware(request: Request, call_next):
             )
             return JSONResponse(
                 status_code=429,
-                headers={"X-Request-Id": request_id, "Retry-After": str(window)},
+                headers={
+                    "X-Request-Id": request_id,
+                    "Retry-After": str(window),
+                    "Cache-Control": "no-store, max-age=0",
+                    "X-Cache-Policy": "no-store",
+                    "X-Cache-TTL": "0",
+                    "X-Memory-Cache": "BYPASS",
+                },
                 content=_build_error_payload(
                     status_code=429,
                     message="Limite de requisicoes excedido para este IP.",
@@ -377,6 +477,8 @@ async def observability_middleware(request: Request, call_next):
     response = await call_next(request)
     duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
     response.headers["X-Request-Id"] = request_id
+    memory_cache_status = str(getattr(request.state, "memory_cache_status", "BYPASS"))
+    response.headers["X-Memory-Cache"] = memory_cache_status
 
     status_code = response.status_code
     with METRICS_LOCK:
@@ -385,6 +487,8 @@ async def observability_middleware(request: Request, call_next):
             METRICS["requests_4xx_total"] += 1
         elif status_code >= 500:
             METRICS["requests_5xx_total"] += 1
+
+    cache_policy, cache_ttl_seconds = _configure_cache_headers(request, response)
 
     if request.url.path not in {"/health", "/metrics"}:
         logger.info(
@@ -396,6 +500,9 @@ async def observability_middleware(request: Request, call_next):
                     "path": request.url.path,
                     "status_code": status_code,
                     "duration_ms": duration_ms,
+                    "cache_policy": cache_policy,
+                    "cache_ttl_seconds": cache_ttl_seconds,
+                    "memory_cache": memory_cache_status,
                 },
                 ensure_ascii=False,
             )
@@ -493,7 +600,7 @@ def analytics_overview(
         endpoint="/v1/analytics/overview",
         filters=filters,
         operation=lambda: get_service().overview(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio),
-        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/overview"],
     )
     return OverviewResponse(**data)
 
@@ -505,7 +612,7 @@ def analytics_filter_options(request: Request) -> FilterOptionsResponse:
         endpoint="/v1/analytics/filtros",
         filters={},
         operation=lambda: get_service().filter_options(),
-        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/filtros"],
     )
     return FilterOptionsResponse(**data)
 
@@ -561,7 +668,7 @@ def analytics_top_candidates(
             page=page,
             page_size=page_size,
         ),
-        cache_ttl_seconds=settings.analytics_top_candidates_cache_ttl_seconds,
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/top-candidatos"],
         fallback_factory=fallback_payload,
     )
     return TopCandidatesResponse(**data)
@@ -603,7 +710,7 @@ def analytics_candidates_text_search(
             page=page,
             page_size=page_size,
         ),
-        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/candidatos/search"],
     )
     return CandidateSearchResponse(**data)
 
@@ -649,7 +756,7 @@ def analytics_candidates_search_legacy(
             page=page,
             page_size=page_size,
         ),
-        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/candidatos"],
     )
     return CandidateSearchResponse(**data)
 
@@ -808,7 +915,7 @@ def analytics_distribution(
             municipio=municipio,
             somente_eleitos=somente_eleitos,
         ),
-        cache_ttl_seconds=settings.analytics_cache_ttl_seconds,
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/distribuicao"],
     )
     return GroupedDistributionResponse(group_by=group_by, items=items)
 
