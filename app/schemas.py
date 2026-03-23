@@ -268,6 +268,16 @@ class CandidateVoteMapPoint(BaseModel):
     tooltip: str | None = None
 
 
+class CandidateVoteMapRegionCluster(BaseModel):
+    region_type: str
+    region_key: str
+    region_label: str
+    votes: int
+    points: int
+    lat: float
+    lng: float
+
+
 class CandidateVoteMapResponse(BaseModel):
     candidate_id: str
     level: str
@@ -275,6 +285,7 @@ class CandidateVoteMapResponse(BaseModel):
     quantile_q2: int
     total_votes: int
     items: list[CandidateVoteMapPoint] = Field(default_factory=list)
+    region_clusters: list[CandidateVoteMapRegionCluster] = Field(default_factory=list)
 
 
 class ZoneFidelityItem(BaseModel):

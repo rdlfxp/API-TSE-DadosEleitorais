@@ -127,6 +127,36 @@ UF_TO_MACROREGIAO = {
     "TO": "Norte",
 }
 
+UF_CENTROIDS = {
+    "AC": (-9.0238, -70.8120),
+    "AL": (-9.6482, -35.7089),
+    "AP": (1.4141, -51.7701),
+    "AM": (-3.4168, -65.8561),
+    "BA": (-12.5797, -41.7007),
+    "CE": (-5.4984, -39.3206),
+    "DF": (-15.7998, -47.8645),
+    "ES": (-19.1834, -40.3089),
+    "GO": (-15.8270, -49.8362),
+    "MA": (-4.9609, -45.2744),
+    "MT": (-12.6819, -56.9211),
+    "MS": (-20.7722, -54.7852),
+    "MG": (-18.5122, -44.5550),
+    "PA": (-3.4168, -52.8430),
+    "PB": (-7.2399, -36.7820),
+    "PR": (-24.8949, -51.5506),
+    "PE": (-8.8137, -36.9541),
+    "PI": (-7.7183, -42.7289),
+    "RJ": (-22.9099, -43.2096),
+    "RN": (-5.4026, -36.9541),
+    "RS": (-30.0346, -51.2177),
+    "RO": (-10.8333, -63.9000),
+    "RR": (2.7376, -62.0751),
+    "SC": (-27.2423, -50.2189),
+    "SP": (-22.19, -48.79),
+    "SE": (-10.5741, -37.3857),
+    "TO": (-10.1753, -48.2982),
+}
+
 
 @dataclass
 class AnalyticsService:
@@ -136,6 +166,7 @@ class AnalyticsService:
     _source_path: Path | None = field(default=None, init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
+    _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_csv(
@@ -467,6 +498,239 @@ class AnalyticsService:
 
         self._zone_geometry_index_cache = index
         return index
+
+    def _municipality_coord_index(self) -> dict[str, tuple[float, float]]:
+        if self._municipality_coord_index_cache is not None:
+            return self._municipality_coord_index_cache
+
+        root = self._project_root()
+        candidates: list[Path] = []
+        for pattern in [
+            "data/geo/**/*.geojson",
+            "data/geo/**/*municip*.csv",
+            "data/geo/**/*municip*.parquet",
+            "data/geo/**/*city*.csv",
+            "data/geo/**/*city*.parquet",
+        ]:
+            candidates.extend(root.glob(pattern))
+        candidates = sorted({path for path in candidates if path.is_file()})
+
+        index: dict[str, tuple[float, float]] = {}
+        for path in candidates:
+            suffix = path.suffix.lower()
+            if suffix == ".geojson":
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                features = payload.get("features", []) if isinstance(payload, dict) else []
+                for feature in features:
+                    if not isinstance(feature, dict):
+                        continue
+                    geometry = feature.get("geometry")
+                    lat, lng = self._geometry_centroid(geometry)
+                    lat, lng = self._coerce_valid_coords(lat, lng)
+                    if lat is None or lng is None:
+                        continue
+                    props = feature.get("properties") or {}
+                    if not isinstance(props, dict):
+                        props = {}
+                    norm_props = {self._normalize_ascii_upper(str(k)): v for k, v in props.items()}
+                    self._index_municipality_coords(index, norm_props, lat, lng)
+                continue
+
+            frame: pd.DataFrame
+            try:
+                frame = pd.read_parquet(path) if suffix == ".parquet" else pd.read_csv(path, low_memory=False)
+            except Exception:
+                continue
+            if frame.empty:
+                continue
+            norm_cols = {str(col): self._normalize_ascii_upper(str(col)) for col in frame.columns}
+            col_by_norm = {v: k for k, v in norm_cols.items()}
+            code_col = next(
+                (
+                    col_by_norm[key]
+                    for key in ["CD_MUNICIPIO", "COD_MUNICIPIO", "MUNICIPIO_ID", "MUNICIPIO_CODE", "IBGE", "ID"]
+                    if key in col_by_norm
+                ),
+                None,
+            )
+            uf_col = next((col_by_norm[key] for key in ["SG_UF", "UF", "STATE"] if key in col_by_norm), None)
+            city_col = next(
+                (
+                    col_by_norm[key]
+                    for key in ["NM_MUNICIPIO", "NM_UE", "MUNICIPIO", "MUNICIPALITY", "CITY", "NAME"]
+                    if key in col_by_norm
+                ),
+                None,
+            )
+            lat_col = next(
+                (col_by_norm[key] for key in ["LATITUDE", "LAT", "VL_LATITUDE"] if key in col_by_norm),
+                None,
+            )
+            lng_col = next(
+                (col_by_norm[key] for key in ["LONGITUDE", "LON", "LNG", "VL_LONGITUDE"] if key in col_by_norm),
+                None,
+            )
+            if not lat_col or not lng_col:
+                continue
+            for _, row in frame.iterrows():
+                lat, lng = self._coerce_valid_coords(row.get(lat_col), row.get(lng_col))
+                if lat is None or lng is None:
+                    continue
+                props = {}
+                if code_col:
+                    props["CD_MUNICIPIO"] = row.get(code_col)
+                if uf_col:
+                    props["SG_UF"] = row.get(uf_col)
+                if city_col:
+                    props["NM_MUNICIPIO"] = row.get(city_col)
+                norm_props = {self._normalize_ascii_upper(str(k)): v for k, v in props.items()}
+                self._index_municipality_coords(index, norm_props, lat, lng)
+
+        self._municipality_coord_index_cache = index
+        return index
+
+    def _normalize_municipio_code(self, code: object) -> str:
+        raw = str(code or "").strip()
+        if not raw:
+            return ""
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        return digits
+
+    def _index_municipality_coords(
+        self,
+        index: dict[str, tuple[float, float]],
+        norm_props: dict[str, object],
+        lat: float,
+        lng: float,
+    ) -> None:
+        uf_val = ""
+        for key in ["SG_UF", "UF", "STATE"]:
+            prop_key = self._normalize_ascii_upper(key)
+            if prop_key in norm_props and str(norm_props[prop_key] or "").strip():
+                uf_val = self._normalize_ascii_upper(str(norm_props[prop_key]))
+                break
+
+        city_val = ""
+        for key in ["NM_MUNICIPIO", "NM_UE", "MUNICIPIO", "MUNICIPALITY", "CITY", "NAME"]:
+            prop_key = self._normalize_ascii_upper(key)
+            if prop_key in norm_props and str(norm_props[prop_key] or "").strip():
+                city_val = self._normalize_municipio_key(str(norm_props[prop_key]))
+                break
+
+        code_val = ""
+        for key in ["CD_MUNICIPIO", "COD_MUNICIPIO", "MUNICIPIO_ID", "MUNICIPIO_CODE", "IBGE", "ID"]:
+            prop_key = self._normalize_ascii_upper(key)
+            if prop_key in norm_props and str(norm_props[prop_key] or "").strip():
+                code_val = self._normalize_municipio_code(norm_props[prop_key])
+                if code_val:
+                    break
+
+        if code_val:
+            index.setdefault(f"CODE:{code_val}", (lat, lng))
+        if uf_val and city_val:
+            index.setdefault(f"{uf_val}|{city_val}", (lat, lng))
+        if city_val:
+            index.setdefault(city_val, (lat, lng))
+
+    def _resolve_municipality_coords(
+        self,
+        city: str | None,
+        uf: str | None,
+        code: object | None,
+        lat: object,
+        lng: object,
+    ) -> tuple[float | None, float | None]:
+        valid_lat, valid_lng = self._coerce_valid_coords(lat, lng)
+        if valid_lat is not None and valid_lng is not None:
+            return valid_lat, valid_lng
+
+        code_key = self._normalize_municipio_code(code)
+        uf_key = self._normalize_ascii_upper(uf or "")
+        city_key = self._normalize_municipio_key(city or "")
+        index = self._municipality_coord_index()
+
+        for key in [
+            f"CODE:{code_key}" if code_key else "",
+            f"{uf_key}|{city_key}" if uf_key and city_key else "",
+            city_key,
+        ]:
+            if key and key in index:
+                return index[key]
+
+        if uf_key in UF_CENTROIDS:
+            return UF_CENTROIDS[uf_key]
+        return None, None
+
+    def _region_clusters_from_points(self, points: list[dict]) -> list[dict]:
+        uf_acc: dict[str, dict[str, float | int | str]] = {}
+        for point in points:
+            uf = str(point.get("uf") or "").strip().upper()
+            lat = point.get("lat")
+            lng = point.get("lng")
+            votes = int(point.get("votes") or 0)
+            if not uf or votes <= 0 or lat is None or lng is None:
+                continue
+            bucket = uf_acc.setdefault(
+                uf,
+                {"votes": 0, "points": 0, "sum_lat": 0.0, "sum_lng": 0.0},
+            )
+            bucket["votes"] = int(bucket["votes"]) + votes
+            bucket["points"] = int(bucket["points"]) + 1
+            bucket["sum_lat"] = float(bucket["sum_lat"]) + (float(lat) * votes)
+            bucket["sum_lng"] = float(bucket["sum_lng"]) + (float(lng) * votes)
+
+        uf_clusters: list[dict] = []
+        for uf, bucket in uf_acc.items():
+            votes = int(bucket["votes"])
+            if votes <= 0:
+                continue
+            uf_clusters.append(
+                {
+                    "region_type": "uf",
+                    "region_key": uf,
+                    "region_label": uf,
+                    "votes": votes,
+                    "points": int(bucket["points"]),
+                    "lat": round(float(bucket["sum_lat"]) / votes, 6),
+                    "lng": round(float(bucket["sum_lng"]) / votes, 6),
+                }
+            )
+
+        macro_acc: dict[str, dict[str, float | int | str]] = {}
+        for cluster in uf_clusters:
+            uf = str(cluster["region_key"])
+            macro = UF_TO_MACROREGIAO.get(uf, "Indefinida")
+            votes = int(cluster["votes"])
+            bucket = macro_acc.setdefault(
+                macro,
+                {"votes": 0, "points": 0, "sum_lat": 0.0, "sum_lng": 0.0},
+            )
+            bucket["votes"] = int(bucket["votes"]) + votes
+            bucket["points"] = int(bucket["points"]) + int(cluster["points"])
+            bucket["sum_lat"] = float(bucket["sum_lat"]) + (float(cluster["lat"]) * votes)
+            bucket["sum_lng"] = float(bucket["sum_lng"]) + (float(cluster["lng"]) * votes)
+
+        macro_clusters: list[dict] = []
+        for macro, bucket in macro_acc.items():
+            votes = int(bucket["votes"])
+            if votes <= 0:
+                continue
+            macro_clusters.append(
+                {
+                    "region_type": "macroregiao",
+                    "region_key": self._normalize_ascii_upper(macro),
+                    "region_label": macro,
+                    "votes": votes,
+                    "points": int(bucket["points"]),
+                    "lat": round(float(bucket["sum_lat"]) / votes, 6),
+                    "lng": round(float(bucket["sum_lng"]) / votes, 6),
+                }
+            )
+
+        return sorted(uf_clusters + macro_clusters, key=lambda item: int(item["votes"]), reverse=True)
 
     def _resolve_zone_geometry(self, zone_id: str, city: str | None, uf: str | None, lat: float, lng: float) -> object | None:
         zone_key = self._normalize_ascii_upper(zone_id)
@@ -1709,6 +1973,7 @@ class AnalyticsService:
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_cd_municipio = self._pick_col(["CD_MUNICIPIO", "COD_MUNICIPIO", "ID_MUNICIPIO"])
         col_zona = self._pick_col(["NR_ZONA", "CD_ZONA", "SQ_ZONA"])
         col_lat = self._pick_col(["LATITUDE", "LAT", "VL_LATITUDE"])
         col_lng = self._pick_col(["LONGITUDE", "LON", "LNG", "VL_LONGITUDE"])
@@ -1754,6 +2019,11 @@ class AnalyticsService:
                 if col_municipio
                 else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
             ),
+            _cd_municipio=(
+                self._normalize_text(candidate_rows[col_cd_municipio]).replace("", pd.NA)
+                if col_cd_municipio
+                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+            ),
             _zona=(
                 self._normalize_text(candidate_rows[col_zona]).replace("", pd.NA)
                 if col_zona
@@ -1779,7 +2049,7 @@ class AnalyticsService:
             )
             grouped = (
                 normalized.groupby(["_key", "_label", "_uf", "_municipio"], as_index=False)
-                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"))
+                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
                 .sort_values("votes", ascending=False)
             )
         else:
@@ -1800,13 +2070,21 @@ class AnalyticsService:
             )
             grouped = (
                 normalized.groupby(["_key", "_label", "_uf", "_municipio", "_zona"], as_index=False)
-                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"))
+                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
                 .sort_values("votes", ascending=False)
             )
 
         valid_coord_indices: list[int] = []
         for idx, row in grouped.iterrows():
             lat, lng = self._coerce_valid_coords(row.get("lat"), row.get("lng"))
+            if lat is None or lng is None:
+                lat, lng = self._resolve_municipality_coords(
+                    city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
+                    uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
+                    code=(row["_cd_municipio"] if "_cd_municipio" in row.index else None),
+                    lat=lat,
+                    lng=lng,
+                )
             if (lat is None or lng is None) and resolved_level == "zona":
                 geometry = self._resolve_zone_geometry(
                     zone_id=str(row["_zona"]),
@@ -1887,6 +2165,7 @@ class AnalyticsService:
             "quantile_q2": q2,
             "total_votes": total_votes,
             "items": items,
+            "region_clusters": self._region_clusters_from_points(items),
         }
 
     def candidate_zone_fidelity(

@@ -3806,6 +3806,49 @@
         ],
         "title": "CandidateVoteMapPoint"
       },
+      "CandidateVoteMapRegionCluster": {
+        "properties": {
+          "region_type": {
+            "type": "string",
+            "title": "Region Type"
+          },
+          "region_key": {
+            "type": "string",
+            "title": "Region Key"
+          },
+          "region_label": {
+            "type": "string",
+            "title": "Region Label"
+          },
+          "votes": {
+            "type": "integer",
+            "title": "Votes"
+          },
+          "points": {
+            "type": "integer",
+            "title": "Points"
+          },
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lng": {
+            "type": "number",
+            "title": "Lng"
+          }
+        },
+        "type": "object",
+        "required": [
+          "region_type",
+          "region_key",
+          "region_label",
+          "votes",
+          "points",
+          "lat",
+          "lng"
+        ],
+        "title": "CandidateVoteMapRegionCluster"
+      },
       "CandidateVoteMapResponse": {
         "properties": {
           "candidate_id": {
@@ -3834,6 +3877,13 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "region_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateVoteMapRegionCluster"
+            },
+            "type": "array",
+            "title": "Region Clusters"
           }
         },
         "type": "object",
