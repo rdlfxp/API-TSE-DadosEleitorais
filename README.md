@@ -129,6 +129,77 @@ Notas:
 - A API passa a funcionar para qualquer ano/cargo disponivel no arquivo final.
 - O relatorio JSON traz checagens por ano: colunas faltantes, nulos criticos, duplicidade e total de votos.
 
+### 4.3) Coordenadas de municipios para vote-map (MapKit)
+
+O endpoint `/v1/candidates/{candidate_id}/vote-map` procura coordenadas municipais em `data/geo`.
+Para preparar a base de municipios:
+
+```bash
+python3 scripts/prepare_municipality_coords.py \
+  --analytics data/curated/analytics.csv \
+  --output data/geo/municipios_centroids.csv \
+  --missing-report data/geo/municipios_missing_coords.csv
+```
+
+Se voce ja tiver uma fonte de coordenadas (CSV/Parquet), use merge automatico por
+`CD_MUNICIPIO` (prioritario) e fallback por `SG_UF + NM_MUNICIPIO`:
+
+```bash
+python3 scripts/prepare_municipality_coords.py \
+  --analytics data/curated/analytics.csv \
+  --coords-input /caminho/coords_municipios.csv \
+  --output data/geo/municipios_centroids.csv \
+  --missing-report data/geo/municipios_missing_coords.csv
+```
+
+Formato esperado na saida:
+- `CD_MUNICIPIO`
+- `SG_UF`
+- `NM_MUNICIPIO`
+- `LATITUDE`
+- `LONGITUDE`
+
+Sem planilha externa (geopy/Nominatim), geocodificando por municipio:
+
+```bash
+python3 scripts/prepare_municipality_coords.py \
+  --analytics data/curated/analytics.csv \
+  --geocode-missing \
+  --geocode-cache data/geo/geocode_cache.csv \
+  --output data/geo/municipios_centroids.csv \
+  --missing-report data/geo/municipios_missing_coords.csv
+```
+
+Para processar em lotes e retomar depois (recomendado):
+
+```bash
+python3 scripts/prepare_municipality_coords.py \
+  --analytics data/curated/analytics.csv \
+  --geocode-missing \
+  --geocode-max-rows 300 \
+  --geocode-cache data/geo/geocode_cache.csv \
+  --output data/geo/municipios_centroids.csv \
+  --missing-report data/geo/municipios_missing_coords.csv
+```
+
+Se o progresso "travar" no mesmo total, rode uma passada com reprocessamento de cache MISS:
+
+```bash
+python3 scripts/prepare_municipality_coords.py \
+  --analytics data/curated/analytics.csv \
+  --geocode-missing \
+  --retry-miss \
+  --geocode-max-rows 300 \
+  --geocode-cache data/geo/geocode_cache.csv \
+  --output data/geo/municipios_centroids.csv \
+  --missing-report data/geo/municipios_missing_coords.csv
+```
+
+Observacoes:
+- instale `geopy` (`pip install -r requirements.txt`)
+- Nominatim exige `rate limit` (o script usa delay minimo por chamada)
+- o cache permite continuar de onde parou sem repetir municipios ja resolvidos
+
 Quality gate (bloqueio por qualidade):
 
 ```bash

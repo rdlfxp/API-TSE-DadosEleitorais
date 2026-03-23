@@ -38,6 +38,8 @@ CANONICAL_COLUMNS = [
     "DT_ELEICAO",
     "DS_SIT_TOT_TURNO",
     "QT_VOTOS_NOMINAIS_VALIDOS",
+    "LATITUDE",
+    "LONGITUDE",
     "IDADE",
     "FAIXA_ETARIA",
 ]
@@ -417,6 +419,8 @@ def _normalize_votacao_file(
         "DT_NASCIMENTO",
         "DT_ELEICAO",
         "DS_SIT_TOT_TURNO",
+        "LATITUDE",
+        "LONGITUDE",
     ]
     agg = (
         df[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
