@@ -2191,14 +2191,14 @@ class DuckDBAnalyticsService:
                     f"{municipio_expr} AS _label, "
                     f"{uf_expr} AS _uf, "
                     f"{municipio_expr} AS _municipio, "
-                    f"{cd_municipio_expr} AS _cd_municipio, "
+                    f"NULLIF(MIN(COALESCE({cd_municipio_expr}, '')), '') AS _cd_municipio, "
                     "NULL AS _zona, "
                     f"SUM({votes_expr}) AS votes, "
                     f"AVG({lat_expr}) AS lat, "
                     f"AVG({lng_expr}) AS lng "
                     f"FROM analytics {candidate_where} "
                     f"AND {municipio_expr} IS NOT NULL "
-                    "GROUP BY 1, 2, 3, 4, 5, 6 "
+                    "GROUP BY 1, 2, 3, 4, 6 "
                     "ORDER BY votes DESC"
                 ),
                 query_params,
@@ -2211,14 +2211,14 @@ class DuckDBAnalyticsService:
                     f"COALESCE({municipio_expr}, 'N/A') || ' - Zona ' || COALESCE({zona_expr}, 'N/A') AS _label, "
                     f"{uf_expr} AS _uf, "
                     f"{municipio_expr} AS _municipio, "
-                    f"{cd_municipio_expr} AS _cd_municipio, "
+                    f"NULLIF(MIN(COALESCE({cd_municipio_expr}, '')), '') AS _cd_municipio, "
                     f"{zona_expr} AS _zona, "
                     f"SUM({votes_expr}) AS votes, "
                     f"AVG({lat_expr}) AS lat, "
                     f"AVG({lng_expr}) AS lng "
                     f"FROM analytics {candidate_where} "
                     f"AND {zona_expr} IS NOT NULL "
-                    "GROUP BY 1, 2, 3, 4, 5, 6 "
+                    "GROUP BY 1, 2, 3, 4, 6 "
                     "ORDER BY votes DESC"
                 ),
                 query_params,

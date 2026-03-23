@@ -2048,8 +2048,8 @@ class AnalyticsService:
                 _label=normalized["_municipio"].astype(str),
             )
             grouped = (
-                normalized.groupby(["_key", "_label", "_uf", "_municipio", "_cd_municipio"], as_index=False)
-                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"))
+                normalized.groupby(["_key", "_label", "_uf", "_municipio"], as_index=False)
+                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
                 .sort_values("votes", ascending=False)
             )
         else:
@@ -2069,8 +2069,8 @@ class AnalyticsService:
                 ),
             )
             grouped = (
-                normalized.groupby(["_key", "_label", "_uf", "_municipio", "_cd_municipio", "_zona"], as_index=False)
-                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"))
+                normalized.groupby(["_key", "_label", "_uf", "_municipio", "_zona"], as_index=False)
+                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
                 .sort_values("votes", ascending=False)
             )
 
