@@ -817,15 +817,35 @@ def candidate_vote_distribution(
     candidate_id: str,
     level: Literal["macroregiao", "uf", "municipio", "zona"],
     year: int | None = None,
+    ano: int | None = None,
     state: str | None = Query(default=None, min_length=2, max_length=2),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
     office: str | None = None,
+    cargo: str | None = None,
+    round_: int | None = Query(default=None, ge=1, le=2, alias="round"),
+    turno: int | None = Query(default=None, ge=1, le=2),
+    sort_by: str | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=500),
 ) -> VoteDistributionResponse:
+    resolved_year = year if year is not None else ano
+    resolved_state = state or uf
+    if resolved_state and resolved_state.strip().upper() in {"BR", "BRASIL"}:
+        resolved_state = None
+    resolved_office = office or cargo
+    resolved_round = round_ if round_ is not None else turno
     data = get_service().candidate_vote_distribution(
         candidate_id=candidate_id,
         level=level,
-        year=year,
-        state=state,
-        office=office,
+        year=resolved_year,
+        state=resolved_state,
+        office=resolved_office,
+        round_filter=resolved_round,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        page_size=page_size,
     )
     return VoteDistributionResponse(**data)
 

@@ -127,6 +127,22 @@ UF_TO_MACROREGIAO = {
     "TO": "Norte",
 }
 
+
+def _safe_percent(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round((numerator / denominator) * 100, 2)
+
+
+def _impact_category(percentual_no_total_do_candidato: float) -> str:
+    # Regra de impacto municipal:
+    # Alto: >= 1.00 | Médio: >= 0.30 e < 1.00 | Baixo: < 0.30
+    if percentual_no_total_do_candidato >= 1.0:
+        return "Alto"
+    if percentual_no_total_do_candidato >= 0.3:
+        return "Médio"
+    return "Baixo"
+
 UF_CENTROIDS = {
     "AC": (-9.0238, -70.8120),
     "AL": (-9.6482, -35.7089),
@@ -1878,16 +1894,31 @@ class AnalyticsService:
         year: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        round_filter: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
     ) -> dict:
         level_key = (level or "").strip().lower()
         if level_key not in {"macroregiao", "uf", "municipio", "zona"}:
             return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
 
-        scoped = self._apply_filters(ano=year, uf=state, cargo=office)
+        normalized_state = (state or "").strip().upper() or None
+        if normalized_state in {"BR", "BRASIL"}:
+            normalized_state = None
+        scoped = self._apply_filters(ano=year, turno=round_filter, uf=normalized_state, cargo=office)
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if candidate_rows.empty or not col_votes:
-            return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
+            return {
+                "candidate_id": str(candidate_id),
+                "level": level_key,
+                "page": page,
+                "page_size": page_size,
+                "total_items": 0,
+                "items": [],
+            }
 
         col_uf = self._pick_col(["SG_UF"])
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
@@ -1912,11 +1943,85 @@ class AnalyticsService:
         elif level_key == "municipio":
             if not col_municipio:
                 return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
-            grouped = candidate_rows.assign(
-                key=self._normalize_text(candidate_rows[col_municipio]).replace("", "N/A"),
-                label=self._normalize_text(candidate_rows[col_municipio]).replace("", "N/A"),
-                _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
+            scoped_votes = scoped.assign(_votes=pd.to_numeric(scoped[col_votes], errors="coerce").fillna(0))
+            candidate_votes = candidate_rows.assign(_votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0))
+            city_totals = (
+                scoped_votes.assign(_municipio=self._normalize_text(scoped_votes[col_municipio]).replace("", pd.NA))
+                .dropna(subset=["_municipio"])
+                .groupby("_municipio", as_index=False)
+                .agg(votos_validos_do_municipio=("_votes", "sum"))
             )
+            grouped = (
+                candidate_votes.assign(_municipio=self._normalize_text(candidate_votes[col_municipio]).replace("", pd.NA))
+                .dropna(subset=["_municipio"])
+                .groupby("_municipio", as_index=False)
+                .agg(qt_votos=("_votes", "sum"))
+                .merge(city_totals, on="_municipio", how="left")
+            )
+            total_candidate_votes = float(grouped["qt_votos"].sum())
+            grouped = grouped.assign(
+                key=grouped["_municipio"].astype(str),
+                label=grouped["_municipio"].astype(str),
+                votes=grouped["qt_votos"].astype(float),
+                vote_share=grouped["qt_votos"].apply(lambda value: _safe_percent(float(value), total_candidate_votes)),
+                nm_municipio=grouped["_municipio"].astype(str),
+                votos_validos_do_municipio=grouped["votos_validos_do_municipio"].fillna(0).astype(float),
+                percentual_candidato_no_municipio=grouped.apply(
+                    lambda row: _safe_percent(float(row["qt_votos"]), float(row["votos_validos_do_municipio"] or 0)),
+                    axis=1,
+                ),
+                percentual_no_total_do_candidato=grouped["qt_votos"].apply(
+                    lambda value: _safe_percent(float(value), total_candidate_votes)
+                ),
+            )
+            grouped = grouped.assign(
+                categoria_impacto=grouped["percentual_no_total_do_candidato"].apply(_impact_category)
+            )
+            items = [
+                {
+                    "key": str(row["key"]),
+                    "label": str(row["label"]),
+                    "votes": int(row["votes"]),
+                    "vote_share": round(float(row["vote_share"]), 4),
+                    "nm_municipio": str(row["nm_municipio"]),
+                    "votos_validos_do_municipio": int(float(row["votos_validos_do_municipio"] or 0)),
+                    "qt_votos": int(float(row["qt_votos"])),
+                    "percentual_candidato_no_municipio": float(row["percentual_candidato_no_municipio"]),
+                    "percentual_no_total_do_candidato": float(row["percentual_no_total_do_candidato"]),
+                    "categoria_impacto": str(row["categoria_impacto"]),
+                }
+                for _, row in grouped.iterrows()
+            ]
+            sort_map = {
+                "key": lambda item: item["key"],
+                "label": lambda item: item["label"],
+                "votes": lambda item: item["votes"],
+                "vote_share": lambda item: item["vote_share"],
+                "nm_municipio": lambda item: item["nm_municipio"],
+                "votos_validos_do_municipio": lambda item: item["votos_validos_do_municipio"],
+                "qt_votos": lambda item: item["qt_votos"],
+                "percentual_candidato_no_municipio": lambda item: item["percentual_candidato_no_municipio"],
+                "percentual_no_total_do_candidato": lambda item: item["percentual_no_total_do_candidato"],
+                "categoria_impacto": lambda item: item["categoria_impacto"],
+            }
+            effective_sort_by = (sort_by or "qt_votos").strip().lower()
+            if effective_sort_by not in sort_map:
+                effective_sort_by = "qt_votos"
+            effective_sort_order = (sort_order or "desc").strip().lower()
+            reverse = effective_sort_order != "asc"
+            items = sorted(items, key=sort_map[effective_sort_by], reverse=reverse)
+            total_items = len(items)
+            if page is not None and page_size is not None:
+                offset = (int(page) - 1) * int(page_size)
+                items = items[offset : offset + int(page_size)]
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": level_key,
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_items,
+                "items": items,
+            }
         else:
             if not col_zona:
                 return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
@@ -1942,7 +2047,36 @@ class AnalyticsService:
             }
             for _, row in agg.iterrows()
         ]
-        return {"candidate_id": self._candidate_output_id(candidate_rows, candidate_id), "level": level_key, "items": items}
+        if page is not None and page_size is not None:
+            sort_map = {
+                "key": lambda item: item["key"],
+                "label": lambda item: item["label"],
+                "votes": lambda item: item["votes"],
+                "vote_share": lambda item: item["vote_share"],
+            }
+            effective_sort_by = (sort_by or "votes").strip().lower()
+            if effective_sort_by not in sort_map:
+                effective_sort_by = "votes"
+            effective_sort_order = (sort_order or "desc").strip().lower()
+            reverse = effective_sort_order != "asc"
+            items = sorted(items, key=sort_map[effective_sort_by], reverse=reverse)
+            total_items = len(items)
+            offset = (int(page) - 1) * int(page_size)
+            items = items[offset : offset + int(page_size)]
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": level_key,
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_items,
+                "items": items,
+            }
+        return {
+            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "level": level_key,
+            "total_items": len(items),
+            "items": items,
+        }
 
     def candidate_vote_map(
         self,
