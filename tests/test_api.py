@@ -671,6 +671,69 @@ def test_candidate_vote_distribution_endpoint(client: TestClient):
     assert by_uf["RJ"]["votes"] == 80000
 
 
+def test_candidate_vote_distribution_municipio_adds_impact_fields(client: TestClient):
+    response = client.get(
+        "/v1/candidates/9/vote-distribution",
+        params={"level": "municipio", "ano": 2022, "uf": "SP", "cargo": "Presidente", "turno": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "9"
+    assert payload["level"] == "municipio"
+    assert payload["total_items"] == 1
+    item = payload["items"][0]
+    assert item["nm_municipio"] == "SAO PAULO"
+    assert item["votos_validos_do_municipio"] == 70000
+    assert item["qt_votos"] == 70000
+    assert item["percentual_candidato_no_municipio"] == 100.0
+    assert item["percentual_no_total_do_candidato"] == 100.0
+    assert item["categoria_impacto"] == "Alto"
+
+
+def test_candidate_vote_distribution_municipio_zero_denominator_returns_zero(client: TestClient):
+    zero_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "SQ_CANDIDATO": 99,
+                "NM_CANDIDATO": "Zero",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 0,
+            }
+        ]
+    )
+    with TestClient(main_module.app) as test_client:
+        main_module.service = AnalyticsService(dataframe=zero_df, default_top_n=20, max_top_n=100)
+        response = test_client.get(
+            "/v1/candidates/99/vote-distribution",
+            params={"level": "municipio", "year": 2018, "state": "SP", "office": "Presidente", "round": 1},
+        )
+    main_module.service = None
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_items"] == 1
+    item = payload["items"][0]
+    assert item["percentual_candidato_no_municipio"] == 0.0
+    assert item["percentual_no_total_do_candidato"] == 0.0
+    assert item["categoria_impacto"] == "Baixo"
+
+
+def test_candidate_vote_distribution_ignores_uf_br_literal(client: TestClient):
+    response = client.get(
+        "/v1/candidates/9/vote-distribution",
+        params={"level": "municipio", "ano": 2022, "uf": "BR", "cargo": "Presidente", "turno": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_items"] == 2
+    by_city = {item["nm_municipio"]: item for item in payload["items"]}
+    assert by_city["SAO PAULO"]["qt_votos"] == 70000
+    assert by_city["RIO DE JANEIRO"]["qt_votos"] == 80000
+
+
 def test_candidate_zone_fidelity_endpoint(client: TestClient):
     response = client.get(
         "/v1/candidates/4/zone-fidelity",

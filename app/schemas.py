@@ -243,11 +243,20 @@ class VoteDistributionItem(BaseModel):
     label: str
     votes: int
     vote_share: float
+    nm_municipio: str | None = None
+    votos_validos_do_municipio: int | None = None
+    qt_votos: int | None = None
+    percentual_candidato_no_municipio: float | None = None
+    percentual_no_total_do_candidato: float | None = None
+    categoria_impacto: str | None = None
 
 
 class VoteDistributionResponse(BaseModel):
     candidate_id: str
     level: str
+    page: int | None = None
+    page_size: int | None = None
+    total_items: int | None = None
     items: list[VoteDistributionItem] = Field(default_factory=list)
 
 

@@ -127,6 +127,22 @@ UF_TO_MACROREGIAO = {
     "TO": "Norte",
 }
 
+
+def _safe_percent(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round((numerator / denominator) * 100, 2)
+
+
+def _impact_category(percentual_no_total_do_candidato: float) -> str:
+    # Regra de impacto municipal:
+    # Alto: >= 1.00 | Médio: >= 0.30 e < 1.00 | Baixo: < 0.30
+    if percentual_no_total_do_candidato >= 1.0:
+        return "Alto"
+    if percentual_no_total_do_candidato >= 0.3:
+        return "Médio"
+    return "Baixo"
+
 UF_CENTROIDS = {
     "AC": (-9.0238, -70.8120),
     "AL": (-9.6482, -35.7089),
@@ -268,8 +284,11 @@ class DuckDBAnalyticsService:
 
     def _create_indexes(self) -> None:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_uf = self._pick_col(["SG_UF"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        col_sq_candidato = self._pick_col(["SQ_CANDIDATO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
 
         if col_ano and col_uf and col_cargo and col_votos:
@@ -278,6 +297,10 @@ class DuckDBAnalyticsService:
             self._create_index("idx_analytics_ano_uf_cargo", [col_ano, col_uf, col_cargo])
         if col_ano and col_cargo:
             self._create_index("idx_analytics_ano_cargo", [col_ano, col_cargo])
+        if col_ano and col_turno and col_uf and col_cargo and col_municipio:
+            self._create_index("idx_analytics_ano_turno_uf_cargo_municipio", [col_ano, col_turno, col_uf, col_cargo, col_municipio])
+        if col_sq_candidato and col_ano and col_turno and col_uf and col_cargo:
+            self._create_index("idx_analytics_sq_candidato_ano_turno_uf_cargo", [col_sq_candidato, col_ano, col_turno, col_uf, col_cargo])
         if col_votos:
             self._create_index("idx_analytics_votos", [col_votos])
 
@@ -465,11 +488,12 @@ class DuckDBAnalyticsService:
     def _filtered_df(
         self,
         ano: int | None = None,
+        turno: int | None = None,
         uf: str | None = None,
         cargo: str | None = None,
         municipio: str | None = None,
     ) -> pd.DataFrame:
-        where, params = self._where(ano=ano, uf=uf, cargo=cargo, municipio=municipio)
+        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
         return self._df(f"SELECT * FROM analytics {where}", params)
 
     def _candidate_mask(self, df: pd.DataFrame, candidate_id: str) -> pd.Series:
@@ -2004,12 +2028,20 @@ class DuckDBAnalyticsService:
         year: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        round_filter: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
     ) -> dict:
         level_key = (level or "").strip().lower()
         if level_key not in {"macroregiao", "uf", "municipio", "zona"}:
             return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
 
-        scoped = self._filtered_df(ano=year, uf=state, cargo=office)
+        normalized_state = (state or "").strip().upper() or None
+        if normalized_state in {"BR", "BRASIL"}:
+            normalized_state = None
+        scoped = self._filtered_df(ano=year, turno=round_filter, uf=normalized_state, cargo=office)
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = (
             "QT_VOTOS_NOMINAIS_VALIDOS"
@@ -2017,11 +2049,187 @@ class DuckDBAnalyticsService:
             else ("NR_VOTACAO_NOMINAL" if "NR_VOTACAO_NOMINAL" in candidate_rows.columns else ("QT_VOTOS_NOMINAIS" if "QT_VOTOS_NOMINAIS" in candidate_rows.columns else None))
         )
         if candidate_rows.empty or not col_votes:
-            return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
+            return {
+                "candidate_id": str(candidate_id),
+                "level": level_key,
+                "page": page,
+                "page_size": page_size,
+                "total_items": 0,
+                "items": [],
+            }
 
         col_uf = "SG_UF" if "SG_UF" in candidate_rows.columns else None
         col_municipio = "NM_UE" if "NM_UE" in candidate_rows.columns else ("NM_MUNICIPIO" if "NM_MUNICIPIO" in candidate_rows.columns else None)
         col_zona = "NR_ZONA" if "NR_ZONA" in candidate_rows.columns else ("CD_ZONA" if "CD_ZONA" in candidate_rows.columns else ("SQ_ZONA" if "SQ_ZONA" in candidate_rows.columns else None))
+
+        if level_key == "municipio":
+            if not col_municipio:
+                return {
+                    "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                    "level": level_key,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_items": 0,
+                    "items": [],
+                }
+
+            where, where_params = self._where(ano=year, turno=round_filter, uf=normalized_state, cargo=office)
+            candidate_norm = str(candidate_id or "").strip()
+            candidate_upper = self._normalize_value(candidate_norm, uppercase=True)
+            candidate_clauses: list[str] = []
+            candidate_params: list[str] = []
+            if self._has("SQ_CANDIDATO"):
+                candidate_clauses.append("TRIM(CAST(SQ_CANDIDATO AS VARCHAR)) = ?")
+                candidate_params.append(candidate_norm)
+            if self._has("NR_CANDIDATO"):
+                candidate_clauses.append("TRIM(CAST(NR_CANDIDATO AS VARCHAR)) = ?")
+                candidate_params.append(candidate_norm)
+            col_nome = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+            if col_nome:
+                candidate_clauses.append(
+                    "UPPER(regexp_replace(regexp_replace(CAST("
+                    f"{col_nome} AS VARCHAR), '[^\\x00-\\x7F]', ''), '\\\\s+', ' ')) = ?"
+                )
+                candidate_params.append(candidate_upper)
+            if not candidate_clauses:
+                return {
+                    "candidate_id": str(candidate_id),
+                    "level": level_key,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_items": 0,
+                    "items": [],
+                }
+
+            municipio_expr = f"NULLIF(TRIM(CAST({col_municipio} AS VARCHAR)), '')"
+            votes_expr = f"COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)"
+            candidate_case_sql = " OR ".join(f"({clause})" for clause in candidate_clauses)
+            cte_sql = (
+                "WITH filtered AS ("
+                f"SELECT {municipio_expr} AS nm_municipio, "
+                f"{votes_expr} AS votos, "
+                f"CASE WHEN ({candidate_case_sql}) THEN 1 ELSE 0 END AS is_candidate "
+                f"FROM analytics {where}"
+                "), "
+                "municipio_totals AS ("
+                "SELECT nm_municipio, SUM(votos) AS votos_validos_do_municipio "
+                "FROM filtered "
+                "WHERE nm_municipio IS NOT NULL "
+                "GROUP BY nm_municipio"
+                "), "
+                "candidate_totals AS ("
+                "SELECT nm_municipio, SUM(votos) AS qt_votos "
+                "FROM filtered "
+                "WHERE is_candidate = 1 AND nm_municipio IS NOT NULL "
+                "GROUP BY nm_municipio"
+                "), "
+                "candidate_grand AS ("
+                "SELECT COALESCE(SUM(qt_votos), 0.0) AS total_votos_candidato_no_recorte "
+                "FROM candidate_totals"
+                ") "
+            )
+
+            count_sql = cte_sql + "SELECT COUNT(*) FROM candidate_totals"
+            count_params = where_params + candidate_params
+            total_items = int(self._scalar(count_sql, count_params) or 0)
+            if total_items == 0:
+                return {
+                    "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                    "level": level_key,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_items": 0,
+                    "items": [],
+                }
+
+            sort_options = {
+                "key": "c.nm_municipio",
+                "label": "c.nm_municipio",
+                "votes": "c.qt_votos",
+                "vote_share": (
+                    "CASE WHEN g.total_votos_candidato_no_recorte > 0 "
+                    "THEN (c.qt_votos / g.total_votos_candidato_no_recorte) * 100.0 "
+                    "ELSE 0.0 END"
+                ),
+                "nm_municipio": "c.nm_municipio",
+                "votos_validos_do_municipio": "m.votos_validos_do_municipio",
+                "qt_votos": "c.qt_votos",
+                "percentual_candidato_no_municipio": (
+                    "CASE WHEN m.votos_validos_do_municipio > 0 "
+                    "THEN (c.qt_votos / m.votos_validos_do_municipio) * 100.0 "
+                    "ELSE 0.0 END"
+                ),
+                "percentual_no_total_do_candidato": (
+                    "CASE WHEN g.total_votos_candidato_no_recorte > 0 "
+                    "THEN (c.qt_votos / g.total_votos_candidato_no_recorte) * 100.0 "
+                    "ELSE 0.0 END"
+                ),
+                "categoria_impacto": (
+                    "CASE "
+                    "WHEN CASE WHEN g.total_votos_candidato_no_recorte > 0 "
+                    "THEN (c.qt_votos / g.total_votos_candidato_no_recorte) * 100.0 ELSE 0.0 END >= 1.0 THEN 'Alto' "
+                    "WHEN CASE WHEN g.total_votos_candidato_no_recorte > 0 "
+                    "THEN (c.qt_votos / g.total_votos_candidato_no_recorte) * 100.0 ELSE 0.0 END >= 0.3 THEN 'Médio' "
+                    "ELSE 'Baixo' "
+                    "END"
+                ),
+            }
+            effective_sort_by = (sort_by or "qt_votos").strip().lower()
+            if effective_sort_by not in sort_options:
+                effective_sort_by = "qt_votos"
+            effective_sort_order = (sort_order or "desc").strip().lower()
+            sort_dir = "ASC" if effective_sort_order == "asc" else "DESC"
+            order_by_sql = f"ORDER BY {sort_options[effective_sort_by]} {sort_dir}, c.nm_municipio ASC"
+
+            pagination_sql = ""
+            rows_params = where_params + candidate_params
+            if page is not None and page_size is not None:
+                offset = (int(page) - 1) * int(page_size)
+                pagination_sql = " LIMIT ? OFFSET ?"
+                rows_params = rows_params + [int(page_size), int(offset)]
+
+            rows_sql = (
+                cte_sql
+                + "SELECT "
+                "c.nm_municipio, "
+                "m.votos_validos_do_municipio, "
+                "c.qt_votos, "
+                "g.total_votos_candidato_no_recorte "
+                "FROM candidate_totals c "
+                "JOIN municipio_totals m ON m.nm_municipio = c.nm_municipio "
+                "CROSS JOIN candidate_grand g "
+                f"{order_by_sql}{pagination_sql}"
+            )
+            rows = self._rows(rows_sql, rows_params)
+            items: list[dict[str, object]] = []
+            for nm_municipio, votos_validos_do_municipio, qt_votos, total_candidato in rows:
+                qt_votos_f = float(qt_votos or 0.0)
+                votos_validos_f = float(votos_validos_do_municipio or 0.0)
+                total_candidato_f = float(total_candidato or 0.0)
+                percentual_municipio = _safe_percent(qt_votos_f, votos_validos_f)
+                percentual_total = _safe_percent(qt_votos_f, total_candidato_f)
+                items.append(
+                    {
+                        "key": str(nm_municipio),
+                        "label": str(nm_municipio),
+                        "votes": int(qt_votos_f),
+                        "vote_share": round(percentual_total, 4),
+                        "nm_municipio": str(nm_municipio),
+                        "votos_validos_do_municipio": int(votos_validos_f),
+                        "qt_votos": int(qt_votos_f),
+                        "percentual_candidato_no_municipio": percentual_municipio,
+                        "percentual_no_total_do_candidato": percentual_total,
+                        "categoria_impacto": _impact_category(percentual_total),
+                    }
+                )
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": level_key,
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_items,
+                "items": items,
+            }
 
         if level_key == "macroregiao":
             if not col_uf:
@@ -2037,14 +2245,6 @@ class DuckDBAnalyticsService:
             grouped = candidate_rows.assign(
                 key=candidate_rows[col_uf].fillna("").astype(str).str.strip().str.upper().replace("", "N/A"),
                 label=candidate_rows[col_uf].fillna("").astype(str).str.strip().str.upper().replace("", "N/A"),
-                _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
-            )
-        elif level_key == "municipio":
-            if not col_municipio:
-                return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
-            grouped = candidate_rows.assign(
-                key=candidate_rows[col_municipio].fillna("").astype(str).str.strip().replace("", "N/A"),
-                label=candidate_rows[col_municipio].fillna("").astype(str).str.strip().replace("", "N/A"),
                 _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
             )
         else:
@@ -2072,7 +2272,30 @@ class DuckDBAnalyticsService:
             }
             for _, row in agg.iterrows()
         ]
-        return {"candidate_id": self._candidate_output_id(candidate_rows, candidate_id), "level": level_key, "items": items}
+        sort_map = {
+            "key": lambda item: item["key"],
+            "label": lambda item: item["label"],
+            "votes": lambda item: item["votes"],
+            "vote_share": lambda item: item["vote_share"],
+        }
+        effective_sort_by = (sort_by or "votes").strip().lower()
+        if effective_sort_by not in sort_map:
+            effective_sort_by = "votes"
+        effective_sort_order = (sort_order or "desc").strip().lower()
+        reverse = effective_sort_order != "asc"
+        items = sorted(items, key=sort_map[effective_sort_by], reverse=reverse)
+        total_items = len(items)
+        if page is not None and page_size is not None:
+            offset = (int(page) - 1) * int(page_size)
+            items = items[offset : offset + int(page_size)]
+        return {
+            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "level": level_key,
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "items": items,
+        }
 
     def candidate_vote_map(
         self,

@@ -2,7 +2,11 @@ import pandas as pd
 import pytest
 
 from app.services.analytics_service import AnalyticsService
+from app.services.analytics_service import _impact_category as pandas_impact_category
+from app.services.analytics_service import _safe_percent as pandas_safe_percent
 from app.services.duckdb_analytics_service import DuckDBAnalyticsService
+from app.services.duckdb_analytics_service import _impact_category as duckdb_impact_category
+from app.services.duckdb_analytics_service import _safe_percent as duckdb_safe_percent
 
 
 @pytest.fixture
@@ -83,3 +87,33 @@ def test_duckdb_cor_raca_comparativo_normaliza_nao_divulgavel(tmp_path):
     assert by_categoria["Branca"]["candidatos"] == 1
     assert by_categoria["Preta"]["candidatos"] == 1
     assert by_categoria["Não informado"]["candidatos"] == 1
+
+
+@pytest.mark.parametrize(
+    ("numerator", "denominator", "expected"),
+    [
+        (50, 200, 25.0),
+        (1, 3, 33.33),
+        (0, 100, 0.0),
+        (100, 0, 0.0),
+    ],
+)
+def test_vote_distribution_formula_safe_percent(numerator: float, denominator: float, expected: float):
+    assert pandas_safe_percent(numerator, denominator) == expected
+    assert duckdb_safe_percent(numerator, denominator) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1.0, "Alto"),
+        (5.5, "Alto"),
+        (0.3, "Médio"),
+        (0.99, "Médio"),
+        (0.29, "Baixo"),
+        (0.0, "Baixo"),
+    ],
+)
+def test_vote_distribution_formula_impact_category(value: float, expected: str):
+    assert pandas_impact_category(value) == expected
+    assert duckdb_impact_category(value) == expected
