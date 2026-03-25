@@ -906,7 +906,8 @@ def candidate_vote_distribution(
     scope_info: dict[str, Any] | None = None
     used_state = resolved_state
     used_municipality = resolved_municipality
-    if is_municipal_request and level == "zona":
+    infer_scope = is_municipal_request and level == "zona" and (not resolved_state or not resolved_municipality)
+    if infer_scope:
         scope_info = _resolve_municipal_scope_or_400(
             request=request,
             service_instance=service,
@@ -944,7 +945,7 @@ def candidate_vote_distribution(
         fallback_scope_info = scope_info
         fallback_state = used_state
         fallback_municipality = used_municipality
-        if is_municipal_request and level == "zona":
+        if infer_scope:
             fallback_scope_info = _resolve_municipal_scope_or_400(
                 request=request,
                 service_instance=service,
@@ -983,7 +984,7 @@ def candidate_vote_distribution(
     if is_municipal_request:
         data["metadata"] = {
             "scope": "municipal",
-            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")),
+            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")) if infer_scope else False,
             "inferred_uf": (scope_info.get("inferred_uf") if scope_info else None),
             "inferred_municipio": (scope_info.get("inferred_municipio") if scope_info else None),
             "requested_uf": resolved_state,
@@ -994,7 +995,7 @@ def candidate_vote_distribution(
             "used_turno": used_round,
             "fallback_applied": fallback_applied,
             "no_data": len(data.get("items", [])) == 0,
-            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")),
+            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")) if infer_scope else False,
             "uf": used_state,
             "municipio": used_municipality,
             "cargo": resolved_office,
@@ -1033,7 +1034,8 @@ def candidate_vote_map(
     scope_info: dict[str, Any] | None = None
     used_state = resolved_state
     used_municipality = resolved_municipality
-    if is_municipal_request and level == "zona":
+    infer_scope = is_municipal_request and level == "zona" and (not resolved_state or not resolved_municipality)
+    if infer_scope:
         scope_info = _resolve_municipal_scope_or_400(
             request=request,
             service_instance=service,
@@ -1063,7 +1065,7 @@ def candidate_vote_map(
         fallback_scope_info = scope_info
         fallback_state = used_state
         fallback_municipality = used_municipality
-        if is_municipal_request and level == "zona":
+        if infer_scope:
             fallback_scope_info = _resolve_municipal_scope_or_400(
                 request=request,
                 service_instance=service,
@@ -1098,7 +1100,7 @@ def candidate_vote_map(
     if is_municipal_request:
         data["metadata"] = {
             "scope": "municipal",
-            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")),
+            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")) if infer_scope else False,
             "inferred_uf": (scope_info.get("inferred_uf") if scope_info else None),
             "inferred_municipio": (scope_info.get("inferred_municipio") if scope_info else None),
             "requested_uf": resolved_state,
@@ -1109,7 +1111,7 @@ def candidate_vote_map(
             "used_turno": used_round,
             "fallback_applied": fallback_applied,
             "no_data": len(data.get("items", [])) == 0,
-            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")),
+            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")) if infer_scope else False,
             "uf": used_state,
             "municipio": used_municipality,
             "cargo": resolved_office,
