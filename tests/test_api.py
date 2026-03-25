@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.services.analytics_service import AnalyticsService
+from app.services.duckdb_analytics_service import DuckDBAnalyticsService
 
 
 @pytest.fixture
@@ -957,6 +958,75 @@ def test_candidate_vote_map_municipal_without_municipio_infers_scope_with_uf(cli
     assert payload["metadata"]["requested_uf"] == "SP"
     assert payload["metadata"]["used_uf"] == "SP"
     assert payload["metadata"]["used_municipio"] == "SAO PAULO"
+    assert payload["metadata"]["traceId"]
+
+
+def test_candidate_vote_endpoints_municipal_duckdb_case_250002098117_infers_sao_paulo_and_is_coherent(
+    client: TestClient, tmp_path
+):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SÃO PAULO",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": "250002098117",
+                "NM_CANDIDATO": "Candidato Produção",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 150000,
+                "NR_ZONA": "100",
+                "LATITUDE": -23.5505,
+                "LONGITUDE": -46.6333,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": "250002098117",
+                "NM_CANDIDATO": "Candidato Produção",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 10,
+                "NR_ZONA": "101",
+                "LATITUDE": -22.9099,
+                "LONGITUDE": -47.0626,
+            },
+        ]
+    )
+    csv_path = tmp_path / "duckdb_scope_case.csv"
+    custom_df.to_csv(csv_path, index=False)
+
+    original_service = main_module.service
+    try:
+        main_module.service = DuckDBAnalyticsService.from_file(
+            file_path=str(csv_path),
+            default_top_n=20,
+            max_top_n=100,
+        )
+        map_response = client.get(
+            "/v1/candidates/250002098117/vote-map",
+            params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
+        )
+        distribution_response = client.get(
+            "/v1/candidates/250002098117/vote-distribution",
+            params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert map_response.status_code == 200
+    assert distribution_response.status_code == 200
+    map_payload = map_response.json()
+    distribution_payload = distribution_response.json()
+    assert map_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
+    assert distribution_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
+    assert map_payload["metadata"]["used_municipio"] == "SAO PAULO"
+    assert distribution_payload["metadata"]["used_municipio"] == "SAO PAULO"
+    assert map_payload["metadata"]["used_uf"] == distribution_payload["metadata"]["used_uf"] == "SP"
+    assert map_payload["metadata"]["no_data"] == distribution_payload["metadata"]["no_data"]
+    assert map_payload["metadata"]["traceId"]
+    assert distribution_payload["metadata"]["traceId"]
 
 
 def test_candidate_vote_endpoints_municipal_without_uf_and_municipio_infer_both(client: TestClient):
@@ -1045,6 +1115,48 @@ def test_candidate_vote_map_municipal_recorte_sem_dados_returns_empty_200(client
     assert payload["items"] == []
     assert payload["metadata"]["no_data"] is True
     assert payload["metadata"]["scope"] == "municipal"
+
+
+def test_candidate_vote_map_municipal_geo_error_never_returns_500(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 444,
+                "NM_CANDIDATO": "Prefeito Geo",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 5000,
+                "NR_ZONA": "100",
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+
+        def _raise_geo_failure(**_kwargs):
+            raise RuntimeError("geo failed")
+
+        def _raise_zone_geo_failure(**_kwargs):
+            raise RuntimeError("zone geo failed")
+
+        service._resolve_municipality_coords = _raise_geo_failure  # type: ignore[method-assign]
+        service._resolve_zone_geometry = _raise_zone_geo_failure  # type: ignore[method-assign]
+        main_module.service = service
+        response = client.get(
+            "/v1/candidates/444/vote-map",
+            params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "SAO PAULO", "cargo": "Prefeito", "turno": 1},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"] == []
+    assert payload["metadata"]["no_data"] is True
 
 
 def test_candidate_vote_map_endpoint_municipio_level(client: TestClient):

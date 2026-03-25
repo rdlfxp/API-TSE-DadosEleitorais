@@ -351,14 +351,18 @@ class DuckDBAnalyticsService:
 
     def _normalized_sql_text_expr(self, expr: str) -> str:
         return (
+            "regexp_replace("
+            "translate("
             "UPPER("
             "regexp_replace("
-            "regexp_replace("
             f"TRIM(CAST({expr} AS VARCHAR)), "
-            "'[^\\x00-\\x7F]', ''"
-            "), "
             "'\\s+', ' '"
             ")"
+            "), "
+            "'ÁÀÂÃÄÅÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑÝŸ', "
+            "'AAAAAAEEEEIIIIOOOOOUUUUCNYY'"
+            "), "
+            "'[^\\x00-\\x7F]', ''"
             ")"
         )
 
@@ -2867,42 +2871,59 @@ class DuckDBAnalyticsService:
 
         valid_coord_indices: list[int] = []
         for idx, row in grouped.iterrows():
-            lat, lng = self._coerce_valid_coords(row.get("lat"), row.get("lng"))
-            if lat is None or lng is None:
-                lat, lng = self._resolve_municipality_coords(
-                    city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
-                    uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
-                    code=(row["_cd_municipio"] if "_cd_municipio" in row.index else None),
-                    lat=lat,
-                    lng=lng,
-                )
-            if (lat is None or lng is None) and resolved_level == "zona":
-                geometry = None
-                try:
-                    geometry = self._resolve_zone_geometry(
-                        zone_id=str(row["_zona"]),
+            try:
+                lat, lng = self._coerce_valid_coords(row.get("lat"), row.get("lng"))
+                if lat is None or lng is None:
+                    lat, lng = self._resolve_municipality_coords(
                         city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
                         uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
-                        lat=float("nan"),
-                        lng=float("nan"),
+                        code=(row["_cd_municipio"] if "_cd_municipio" in row.index else None),
+                        lat=lat,
+                        lng=lng,
                     )
-                except Exception as exc:
-                    logger.warning(
-                        json.dumps(
-                            {
-                                "event": "candidate_vote_map_zone_geometry_error",
-                                "trace_id": trace_id or "n/a",
-                                "zona": str(row["_zona"]) if "_zona" in row.index else None,
-                                "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
-                                "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
-                                "error_type": exc.__class__.__name__,
-                                "error_message": str(exc),
-                            },
-                            ensure_ascii=False,
+                if (lat is None or lng is None) and resolved_level == "zona":
+                    geometry = None
+                    try:
+                        geometry = self._resolve_zone_geometry(
+                            zone_id=str(row["_zona"]),
+                            city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
+                            uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
+                            lat=float("nan"),
+                            lng=float("nan"),
                         )
+                    except Exception as exc:
+                        logger.warning(
+                            json.dumps(
+                                {
+                                    "event": "candidate_vote_map_zone_geometry_error",
+                                    "trace_id": trace_id or "n/a",
+                                    "zona": str(row["_zona"]) if "_zona" in row.index else None,
+                                    "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
+                                    "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
+                                    "error_type": exc.__class__.__name__,
+                                    "error_message": str(exc),
+                                },
+                                ensure_ascii=False,
+                            )
+                        )
+                    geo_lat, geo_lng = self._geometry_centroid(geometry)
+                    lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
+            except Exception as exc:
+                logger.warning(
+                    json.dumps(
+                        {
+                            "event": "candidate_vote_map_geo_resolution_error",
+                            "trace_id": trace_id or "n/a",
+                            "zona": str(row["_zona"]) if "_zona" in row.index else None,
+                            "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
+                            "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
+                            "error_type": exc.__class__.__name__,
+                            "error_message": str(exc),
+                        },
+                        ensure_ascii=False,
                     )
-                geo_lat, geo_lng = self._geometry_centroid(geometry)
-                lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
+                )
+                lat, lng = None, None
             if lat is None or lng is None:
                 logger.warning(
                     json.dumps(
