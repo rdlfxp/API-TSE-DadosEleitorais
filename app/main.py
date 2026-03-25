@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Literal
+import unicodedata
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -216,6 +217,32 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+
+
+MUNICIPAL_OFFICES = {"PREFEITO", "VICE-PREFEITO", "VEREADOR"}
+
+
+def _normalize_ascii_upper(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKD", text)
+    return normalized.encode("ascii", "ignore").decode("ascii").upper()
+
+
+def _is_municipal_office(value: str | None) -> bool:
+    return _normalize_ascii_upper(value) in MUNICIPAL_OFFICES
+
+
+def _resolve_state_param(state: str | None, uf: str | None) -> str | None:
+    resolved_state = state or uf
+    if resolved_state and resolved_state.strip().upper() in {"BR", "BRASIL"}:
+        return None
+    return resolved_state
+
+
+def _resolve_municipality_param(municipality: str | None, municipio: str | None) -> str | None:
+    return municipality or municipio
 
 
 def get_service() -> AnalyticsService | DuckDBAnalyticsService:
@@ -824,29 +851,77 @@ def candidate_vote_distribution(
     cargo: str | None = None,
     round_: int | None = Query(default=None, ge=1, le=2, alias="round"),
     turno: int | None = Query(default=None, ge=1, le=2),
+    municipality: str | None = None,
+    municipio: str | None = None,
     sort_by: str | None = None,
     sort_order: Literal["asc", "desc"] | None = None,
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=500),
 ) -> VoteDistributionResponse:
     resolved_year = year if year is not None else ano
-    resolved_state = state or uf
-    if resolved_state and resolved_state.strip().upper() in {"BR", "BRASIL"}:
-        resolved_state = None
+    resolved_state = _resolve_state_param(state=state, uf=uf)
+    resolved_municipality = _resolve_municipality_param(municipality=municipality, municipio=municipio)
     resolved_office = office or cargo
     resolved_round = round_ if round_ is not None else turno
-    data = get_service().candidate_vote_distribution(
+    is_municipal_request = _is_municipal_office(resolved_office)
+    if is_municipal_request:
+        if resolved_year is None:
+            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: ano.")
+        if not resolved_state:
+            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: uf.")
+        if not resolved_municipality:
+            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: municipio.")
+
+    service = get_service()
+    data = service.candidate_vote_distribution(
         candidate_id=candidate_id,
         level=level,
         year=resolved_year,
         state=resolved_state,
         office=resolved_office,
         round_filter=resolved_round,
+        municipality=resolved_municipality,
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,
         page_size=page_size,
     )
+    fallback_applied = False
+    used_round = resolved_round
+    if (
+        is_municipal_request
+        and resolved_round == 2
+        and not data.get("items")
+    ):
+        fallback_data = service.candidate_vote_distribution(
+            candidate_id=candidate_id,
+            level=level,
+            year=resolved_year,
+            state=resolved_state,
+            office=resolved_office,
+            round_filter=1,
+            municipality=resolved_municipality,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            page_size=page_size,
+        )
+        if fallback_data.get("items"):
+            data = fallback_data
+            fallback_applied = True
+            used_round = 1
+    if is_municipal_request:
+        data["metadata"] = {
+            "scope": "municipal",
+            "requested_turno": resolved_round,
+            "used_turno": used_round,
+            "fallback_applied": fallback_applied,
+            "no_data": len(data.get("items", [])) == 0,
+            "uf": resolved_state,
+            "municipio": resolved_municipality,
+            "cargo": resolved_office,
+            "ano": resolved_year,
+        }
     return VoteDistributionResponse(**data)
 
 
@@ -855,18 +930,68 @@ def candidate_vote_map(
     candidate_id: str,
     level: Literal["auto", "municipio", "zona"] = "auto",
     year: int | None = None,
+    ano: int | None = None,
     state: str | None = Query(default=None, min_length=2, max_length=2),
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
     office: str | None = None,
+    cargo: str | None = None,
+    round_: int | None = Query(default=None, ge=1, le=2, alias="round"),
+    turno: int | None = Query(default=None, ge=1, le=2),
     municipality: str | None = None,
+    municipio: str | None = None,
 ) -> CandidateVoteMapResponse:
-    data = get_service().candidate_vote_map(
+    resolved_year = year if year is not None else ano
+    resolved_state = _resolve_state_param(state=state, uf=uf)
+    resolved_office = office or cargo
+    resolved_round = round_ if round_ is not None else turno
+    resolved_municipality = _resolve_municipality_param(municipality=municipality, municipio=municipio)
+    is_municipal_request = _is_municipal_office(resolved_office)
+    if is_municipal_request:
+        if resolved_year is None:
+            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: ano.")
+        if not resolved_state:
+            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: uf.")
+        if not resolved_municipality:
+            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: municipio.")
+
+    service = get_service()
+    data = service.candidate_vote_map(
         candidate_id=candidate_id,
         level=level,
-        year=year,
-        state=state,
-        office=office,
-        municipality=municipality,
+        year=resolved_year,
+        state=resolved_state,
+        office=resolved_office,
+        round_filter=resolved_round,
+        municipality=resolved_municipality,
     )
+    fallback_applied = False
+    used_round = resolved_round
+    if is_municipal_request and resolved_round == 2 and not data.get("items"):
+        fallback_data = service.candidate_vote_map(
+            candidate_id=candidate_id,
+            level=level,
+            year=resolved_year,
+            state=resolved_state,
+            office=resolved_office,
+            round_filter=1,
+            municipality=resolved_municipality,
+        )
+        if fallback_data.get("items"):
+            data = fallback_data
+            fallback_applied = True
+            used_round = 1
+    if is_municipal_request:
+        data["metadata"] = {
+            "scope": "municipal",
+            "requested_turno": resolved_round,
+            "used_turno": used_round,
+            "fallback_applied": fallback_applied,
+            "no_data": len(data.get("items", [])) == 0,
+            "uf": resolved_state,
+            "municipio": resolved_municipality,
+            "cargo": resolved_office,
+            "ano": resolved_year,
+        }
     return CandidateVoteMapResponse(**data)
 
 

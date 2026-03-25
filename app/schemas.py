@@ -249,15 +249,23 @@ class VoteDistributionItem(BaseModel):
     percentual_candidato_no_municipio: float | None = None
     percentual_no_total_do_candidato: float | None = None
     categoria_impacto: str | None = None
+    impact_category: str | None = None
+    candidate_total_share: float | None = None
+    zone_id: str | None = None
+    zone_name: str | None = None
+    municipio: str | None = None
+    uf: str | None = None
 
 
 class VoteDistributionResponse(BaseModel):
     candidate_id: str
     level: str
+    total_candidate_votes: int | None = None
     page: int | None = None
     page_size: int | None = None
     total_items: int | None = None
     items: list[VoteDistributionItem] = Field(default_factory=list)
+    metadata: dict | None = None
 
 
 class CandidateVoteMapPoint(BaseModel):
@@ -265,10 +273,10 @@ class CandidateVoteMapPoint(BaseModel):
     label: str
     votes: int
     vote_share: float
-    tier: int
-    color_rgb: list[int]
-    marker_size: int
-    cluster_size: int
+    tier: int | None = None
+    color_rgb: str | None = None
+    marker_size: int | None = None
+    cluster_size: int | None = None
     lat: float | None = None
     lng: float | None = None
     uf: str | None = None
@@ -290,11 +298,12 @@ class CandidateVoteMapRegionCluster(BaseModel):
 class CandidateVoteMapResponse(BaseModel):
     candidate_id: str
     level: str
-    quantile_q1: int
-    quantile_q2: int
+    quantile_q1: int | None
+    quantile_q2: int | None
     total_votes: int
     items: list[CandidateVoteMapPoint] = Field(default_factory=list)
     region_clusters: list[CandidateVoteMapRegionCluster] = Field(default_factory=list)
+    metadata: dict | None = None
 
 
 class ZoneFidelityItem(BaseModel):
