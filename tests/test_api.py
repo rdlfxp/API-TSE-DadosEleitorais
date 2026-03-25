@@ -1029,6 +1029,54 @@ def test_candidate_vote_endpoints_municipal_duckdb_case_250002098117_infers_sao_
     assert distribution_payload["metadata"]["traceId"]
 
 
+def test_candidate_vote_map_duckdb_candidate_id_resolution_error_returns_200(tmp_path, client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": "250002098117",
+                "NM_CANDIDATO": "Candidato Produção",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 150000,
+                "NR_ZONA": "100",
+            },
+        ]
+    )
+    csv_path = tmp_path / "duckdb_vote_map_candidate_id_error.csv"
+    custom_df.to_csv(csv_path, index=False)
+
+    original_service = main_module.service
+    try:
+        service = DuckDBAnalyticsService.from_file(
+            file_path=str(csv_path),
+            default_top_n=20,
+            max_top_n=100,
+        )
+        original_rows = service._rows
+
+        def _rows_with_candidate_id_failure(sql: str, params: list[object]):
+            if "AS candidate_id FROM analytics" in sql:
+                raise RuntimeError("forced candidate_id resolution failure")
+            return original_rows(sql, params)
+
+        service._rows = _rows_with_candidate_id_failure  # type: ignore[method-assign]
+        main_module.service = service
+        response = client.get(
+            "/v1/candidates/250002098117/vote-map",
+            params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "250002098117"
+    assert payload["metadata"]["traceId"]
+
+
 def test_candidate_vote_endpoints_municipal_without_uf_and_municipio_infer_both(client: TestClient):
     map_response = client.get(
         "/v1/candidates/4/vote-map",

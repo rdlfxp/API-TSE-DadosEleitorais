@@ -725,26 +725,13 @@ class DuckDBAnalyticsService:
         query_params = where_params + candidate_params
         grouped = self._df(sql, query_params)
 
-        candidate_id_exprs = []
-        if self._has("SQ_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(SQ_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NR_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NR_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NM_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NM_URNA_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR)), '')")
-        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["CAST(? AS VARCHAR)"]) + ")"
-        candidate_row = self._rows(
-            (
-                f"SELECT {candidate_select_expr} AS candidate_id "
-                f"FROM analytics {where} "
-                f"{'AND' if where else 'WHERE'} ({' OR '.join(candidate_clauses)}) "
-                "LIMIT 1"
-            ),
-            [str(candidate_id)] + query_params,
+        candidate_where = f"{where} {'AND' if where else 'WHERE'} ({' OR '.join(candidate_clauses)})"
+        resolved_candidate_id = self._resolve_candidate_output_id_sql(
+            candidate_id=candidate_id,
+            where_clause=candidate_where,
+            query_params=query_params,
+            trace_id=trace_id,
         )
-        resolved_candidate_id = str(candidate_row[0][0]) if candidate_row else str(candidate_id)
 
         self._log_municipal_zone_debug(
             event=source_event,
@@ -766,6 +753,46 @@ class DuckDBAnalyticsService:
             },
         )
         return grouped, resolved_candidate_id
+
+    def _resolve_candidate_output_id_sql(
+        self,
+        *,
+        candidate_id: str,
+        where_clause: str,
+        query_params: list[object],
+        trace_id: str | None = None,
+    ) -> str:
+        candidate_id_exprs = []
+        if self._has("SQ_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(SQ_CANDIDATO AS VARCHAR)), '')")
+        if self._has("NR_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(NR_CANDIDATO AS VARCHAR)), '')")
+        if self._has("NM_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_CANDIDATO AS VARCHAR)), '')")
+        if self._has("NM_URNA_CANDIDATO"):
+            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR)), '')")
+        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["CAST(? AS VARCHAR)"]) + ")"
+        try:
+            candidate_id_row = self._rows(
+                f"SELECT {candidate_select_expr} AS candidate_id FROM analytics {where_clause} LIMIT 1",
+                [str(candidate_id)] + list(query_params),
+            )
+            if candidate_id_row and candidate_id_row[0] and candidate_id_row[0][0] is not None:
+                return str(candidate_id_row[0][0])
+        except Exception as exc:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "candidate_vote_map_candidate_id_resolution_error",
+                        "trace_id": trace_id or "n/a",
+                        "candidate_id": str(candidate_id),
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return str(candidate_id)
 
     def _candidate_mask(self, df: pd.DataFrame, candidate_id: str) -> pd.Series:
         candidate_norm = str(candidate_id or "").strip()
@@ -2947,21 +2974,12 @@ class DuckDBAnalyticsService:
         else:
             grouped = grouped.iloc[0:0].copy()
 
-        candidate_id_exprs = []
-        if self._has("SQ_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(SQ_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NR_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NR_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NM_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NM_URNA_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR)), '')")
-        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["CAST(? AS VARCHAR)"]) + ")"
-        candidate_id_row = self._rows(
-            f"SELECT {candidate_select_expr} AS candidate_id FROM analytics {candidate_where} LIMIT 1",
-            [str(candidate_id)] + query_params,
+        resolved_candidate_id = self._resolve_candidate_output_id_sql(
+            candidate_id=candidate_id,
+            where_clause=candidate_where,
+            query_params=query_params,
+            trace_id=trace_id,
         )
-        resolved_candidate_id = str(candidate_id_row[0][0]) if candidate_id_row else str(candidate_id)
 
         if grouped.empty:
             return {
@@ -2973,7 +2991,16 @@ class DuckDBAnalyticsService:
                 "items": [],
             }
 
-        votes = grouped["votes"].astype(float)
+        votes = pd.to_numeric(grouped["votes"], errors="coerce").dropna()
+        if votes.empty:
+            return {
+                "candidate_id": resolved_candidate_id,
+                "level": resolved_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
         q1 = int(votes.quantile(0.33))
         q2 = int(votes.quantile(0.66))
         if q2 < q1:
@@ -2989,7 +3016,8 @@ class DuckDBAnalyticsService:
         total_votes_safe = float(total_votes) if total_votes > 0 else 1.0
         items: list[dict] = []
         for _, row in grouped.sort_values("votes", ascending=False).iterrows():
-            row_votes = int(float(pd.to_numeric(row["votes"], errors="coerce") or 0.0))
+            row_votes_num = pd.to_numeric(row["votes"], errors="coerce")
+            row_votes = int(float(row_votes_num)) if pd.notna(row_votes_num) else 0
             tier = 0 if row_votes <= q1 else (1 if row_votes <= q2 else 2)
             cfg = tiers[tier]
             label = str(row["_label"])
