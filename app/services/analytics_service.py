@@ -1895,6 +1895,7 @@ class AnalyticsService:
         state: str | None = None,
         office: str | None = None,
         round_filter: int | None = None,
+        municipality: str | None = None,
         sort_by: str | None = None,
         sort_order: str | None = None,
         page: int | None = None,
@@ -1907,7 +1908,13 @@ class AnalyticsService:
         normalized_state = (state or "").strip().upper() or None
         if normalized_state in {"BR", "BRASIL"}:
             normalized_state = None
-        scoped = self._apply_filters(ano=year, turno=round_filter, uf=normalized_state, cargo=office)
+        scoped = self._apply_filters(
+            ano=year,
+            turno=round_filter,
+            uf=normalized_state,
+            cargo=office,
+            municipio=municipality,
+        )
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if candidate_rows.empty or not col_votes:
@@ -1923,6 +1930,14 @@ class AnalyticsService:
         col_uf = self._pick_col(["SG_UF"])
         col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
         col_zona = self._pick_col(["NR_ZONA", "CD_ZONA", "SQ_ZONA"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        if office:
+            municipal_scope = self._cargo_scope(office) == "municipio"
+        elif col_cargo:
+            cargo_norm = self._normalize_text(candidate_rows[col_cargo]).apply(self._normalize_ascii_upper)
+            municipal_scope = cargo_norm.isin(MUNICIPAL_CARGOS).any()
+        else:
+            municipal_scope = False
 
         if level_key == "macroregiao":
             if not col_uf:
@@ -2025,16 +2040,97 @@ class AnalyticsService:
         else:
             if not col_zona:
                 return {"candidate_id": str(candidate_id), "level": level_key, "items": []}
-            zone_label = (
-                self._normalize_text(candidate_rows[col_municipio]).replace("", "N/A") + " - Zona " + self._normalize_text(candidate_rows[col_zona]).replace("", "N/A")
-                if col_municipio
-                else "Zona " + self._normalize_text(candidate_rows[col_zona]).replace("", "N/A")
-            )
+            normalized_zone = self._normalize_text(candidate_rows[col_zona]).replace("", pd.NA)
             grouped = candidate_rows.assign(
-                key=self._normalize_text(candidate_rows[col_zona]).replace("", "N/A"),
-                label=zone_label,
+                _zona=normalized_zone,
+                _municipio=(
+                    self._normalize_text(candidate_rows[col_municipio]).replace("", pd.NA)
+                    if col_municipio
+                    else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+                ),
+                _uf=(
+                    self._normalize_text(candidate_rows[col_uf]).str.upper().replace("", pd.NA)
+                    if col_uf
+                    else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+                ),
                 _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
+            ).dropna(subset=["_zona"])
+
+            agg = (
+                grouped.groupby(["_zona", "_municipio", "_uf"], as_index=False)
+                .agg(votes=("_votes", "sum"))
+                .sort_values("votes", ascending=False)
             )
+            total_candidate_votes = float(agg["votes"].sum()) if not agg.empty else 0.0
+            total_votes_safe = total_candidate_votes if total_candidate_votes > 0 else 1.0
+            items: list[dict[str, object]] = []
+            for _, row in agg.iterrows():
+                zone_id = str(row["_zona"])
+                row_votes = float(row["votes"])
+                vote_share = round((row_votes / total_votes_safe) * 100, 4)
+                if municipal_scope:
+                    impact = _impact_category(vote_share)
+                    items.append(
+                        {
+                            "key": f"zona-{zone_id}",
+                            "label": f"Zona {zone_id}",
+                            "votes": int(row_votes),
+                            "vote_share": vote_share,
+                            "impact_category": impact,
+                            "candidate_total_share": vote_share,
+                            "zone_id": zone_id,
+                            "zone_name": f"Zona {zone_id}",
+                            "municipio": (
+                                str(row["_municipio"]) if pd.notna(row["_municipio"]) else None
+                            ),
+                            "uf": str(row["_uf"]) if pd.notna(row["_uf"]) else None,
+                            "categoria_impacto": impact,
+                            "percentual_no_total_do_candidato": vote_share,
+                        }
+                    )
+                else:
+                    label = (
+                        f"{str(row['_municipio'])} - Zona {zone_id}"
+                        if pd.notna(row["_municipio"])
+                        else f"Zona {zone_id}"
+                    )
+                    items.append(
+                        {
+                            "key": zone_id,
+                            "label": label,
+                            "votes": int(row_votes),
+                            "vote_share": vote_share,
+                        }
+                    )
+            sort_map = {
+                "key": lambda item: item["key"],
+                "label": lambda item: item["label"],
+                "votes": lambda item: item["votes"],
+                "vote_share": lambda item: item["vote_share"],
+                "impact_category": lambda item: str(item.get("impact_category", "")),
+                "candidate_total_share": lambda item: float(item.get("candidate_total_share", 0.0)),
+                "zone_id": lambda item: str(item.get("zone_id", "")),
+                "zone_name": lambda item: str(item.get("zone_name", "")),
+            }
+            effective_sort_by = (sort_by or "votes").strip().lower()
+            if effective_sort_by not in sort_map:
+                effective_sort_by = "votes"
+            effective_sort_order = (sort_order or "desc").strip().lower()
+            reverse = effective_sort_order != "asc"
+            items = sorted(items, key=sort_map[effective_sort_by], reverse=reverse)
+            total_items = len(items)
+            if page is not None and page_size is not None:
+                offset = (int(page) - 1) * int(page_size)
+                items = items[offset : offset + int(page_size)]
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": level_key,
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_items,
+                "total_candidate_votes": int(total_candidate_votes),
+                "items": items,
+            }
 
         agg = grouped.groupby(["key", "label"], as_index=False).agg(votes=("_votes", "sum")).sort_values("votes", ascending=False)
         total_votes = float(agg["votes"].sum()) or 1.0
@@ -2085,13 +2181,14 @@ class AnalyticsService:
         year: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        round_filter: int | None = None,
         municipality: str | None = None,
     ) -> dict:
         requested_level = (level or "auto").strip().lower()
         if requested_level not in {"auto", "municipio", "zona"}:
             requested_level = "auto"
 
-        scoped = self._apply_filters(ano=year, uf=state, cargo=office, municipio=municipality)
+        scoped = self._apply_filters(ano=year, turno=round_filter, uf=state, cargo=office, municipio=municipality)
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if candidate_rows.empty or not col_votes:
@@ -2140,6 +2237,13 @@ class AnalyticsService:
                 "total_votes": 0,
                 "items": [],
             }
+        if office:
+            municipal_scope = self._cargo_scope(office) == "municipio"
+        elif col_cargo:
+            cargo_norm = self._normalize_text(candidate_rows[col_cargo]).apply(self._normalize_ascii_upper)
+            municipal_scope = cargo_norm.isin(MUNICIPAL_CARGOS).any()
+        else:
+            municipal_scope = False
 
         normalized = candidate_rows.assign(
             _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
@@ -2188,20 +2292,26 @@ class AnalyticsService:
             )
         else:
             normalized = normalized.dropna(subset=["_zona"]).copy()
-            normalized = normalized.assign(
-                _key=(
-                    normalized["_uf"].fillna("N/A").astype(str)
-                    + "|"
-                    + normalized["_municipio"].fillna("N/A").astype(str)
-                    + "|"
-                    + normalized["_zona"].fillna("N/A").astype(str)
-                ),
-                _label=(
-                    normalized["_municipio"].fillna("N/A").astype(str)
-                    + " - Zona "
-                    + normalized["_zona"].fillna("N/A").astype(str)
-                ),
-            )
+            if municipal_scope:
+                normalized = normalized.assign(
+                    _key="zona-" + normalized["_zona"].astype(str),
+                    _label="Zona " + normalized["_zona"].astype(str),
+                )
+            else:
+                normalized = normalized.assign(
+                    _key=(
+                        normalized["_uf"].fillna("N/A").astype(str)
+                        + "|"
+                        + normalized["_municipio"].fillna("N/A").astype(str)
+                        + "|"
+                        + normalized["_zona"].fillna("N/A").astype(str)
+                    ),
+                    _label=(
+                        normalized["_municipio"].fillna("N/A").astype(str)
+                        + " - Zona "
+                        + normalized["_zona"].fillna("N/A").astype(str)
+                    ),
+                )
             grouped = (
                 normalized.groupby(["_key", "_label", "_uf", "_municipio", "_zona"], as_index=False)
                 .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
@@ -2257,9 +2367,9 @@ class AnalyticsService:
             q2 = q1
 
         tiers = {
-            0: {"rgb": [34, 197, 94], "marker_size": 32, "cluster_size": 40},
-            1: {"rgb": [250, 204, 21], "marker_size": 34, "cluster_size": 52},
-            2: {"rgb": [239, 68, 68], "marker_size": 42, "cluster_size": 60},
+            0: {"rgb": "#22C55E", "marker_size": 32, "cluster_size": 40},
+            1: {"rgb": "#FACC15", "marker_size": 34, "cluster_size": 52},
+            2: {"rgb": "#EF4444", "marker_size": 42, "cluster_size": 60},
         }
 
         total_votes = int(votes.sum())
@@ -2288,7 +2398,7 @@ class AnalyticsService:
                         str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None
                     ),
                     "zona": str(row["_zona"]) if "_zona" in row.index and pd.notna(row["_zona"]) else None,
-                    "tooltip": f"{label} — {tooltip_votes} votos",
+                    "tooltip": f"{label} • {tooltip_votes} votos",
                 }
             )
 
@@ -2299,7 +2409,7 @@ class AnalyticsService:
             "quantile_q2": q2,
             "total_votes": total_votes,
             "items": items,
-            "region_clusters": self._region_clusters_from_points(items),
+            "region_clusters": [] if (resolved_level == "zona" and municipal_scope) else self._region_clusters_from_points(items),
         }
 
     def candidate_zone_fidelity(

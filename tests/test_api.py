@@ -671,6 +671,104 @@ def test_candidate_vote_distribution_endpoint(client: TestClient):
     assert by_uf["RJ"]["votes"] == 80000
 
 
+def test_candidate_vote_distribution_municipal_prefeito_level_zona(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipio": "SAO PAULO",
+            "cargo": "Prefeito",
+            "turno": 1,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert payload["level"] == "zona"
+    assert payload["total_candidate_votes"] == 500000
+    assert payload["metadata"]["scope"] == "municipal"
+    assert payload["metadata"]["no_data"] is False
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["key"] == "zona-100"
+    assert item["label"] == "Zona 100"
+    assert item["zone_id"] == "100"
+    assert item["zone_name"] == "Zona 100"
+    assert item["municipio"] == "SAO PAULO"
+    assert item["uf"] == "SP"
+    assert item["votes"] == 500000
+
+
+def test_candidate_vote_distribution_municipal_vereador_level_zona(client: TestClient):
+    response = client.get(
+        "/v1/candidates/8/vote-distribution",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipio": "CAMPINAS",
+            "cargo": "Vereador",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "8"
+    assert payload["level"] == "zona"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["key"] == "zona-121"
+    assert payload["items"][0]["zone_id"] == "121"
+
+
+def test_candidate_vote_distribution_municipal_without_municipio_returns_400(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
+    )
+    assert response.status_code == 400
+    assert "municipio" in response.json()["message"].lower()
+
+
+def test_candidate_vote_distribution_municipal_recorte_sem_dados_returns_empty_200(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipio": "CAMPINAS",
+            "cargo": "Prefeito",
+            "turno": 1,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"] == []
+    assert payload["metadata"]["no_data"] is True
+    assert payload["metadata"]["scope"] == "municipal"
+
+
+def test_candidate_vote_distribution_municipal_turno_2_fallback_to_1(client: TestClient):
+    response = client.get(
+        "/v1/candidates/8/vote-distribution",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipio": "CAMPINAS",
+            "cargo": "Vereador",
+            "turno": 2,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["metadata"]["fallback_applied"] is True
+    assert payload["metadata"]["requested_turno"] == 2
+    assert payload["metadata"]["used_turno"] == 1
+
+
 def test_candidate_vote_distribution_municipio_adds_impact_fields(client: TestClient):
     response = client.get(
         "/v1/candidates/9/vote-distribution",
@@ -750,7 +848,7 @@ def test_candidate_zone_fidelity_endpoint(client: TestClient):
 def test_candidate_vote_map_endpoint_auto_uses_zona_for_municipal_office(client: TestClient):
     response = client.get(
         "/v1/candidates/4/vote-map",
-        params={"year": 2024, "state": "SP", "office": "Prefeito"},
+        params={"year": 2024, "state": "SP", "municipio": "SAO PAULO", "office": "Prefeito"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -761,7 +859,66 @@ def test_candidate_vote_map_endpoint_auto_uses_zona_for_municipal_office(client:
     assert payload["items"][0]["zona"] == "100"
     assert payload["items"][0]["votes"] == 1050000
     assert payload["items"][0]["tier"] == 0
+    assert payload["items"][0]["key"] == "zona-100"
+    assert payload["items"][0]["label"] == "Zona 100"
     assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
+
+
+def test_candidate_vote_map_municipal_prefeito_turno_1_level_zona(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipio": "SAO PAULO",
+            "cargo": "Prefeito",
+            "turno": 1,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert payload["level"] == "zona"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["zona"] == "100"
+    assert payload["items"][0]["lat"] is not None
+    assert payload["items"][0]["lng"] is not None
+    assert payload["region_clusters"] == []
+
+
+def test_candidate_vote_map_municipal_vereador_campinas_level_zona(client: TestClient):
+    response = client.get(
+        "/v1/candidates/8/vote-map",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "CAMPINAS", "cargo": "Vereador"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["level"] == "zona"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["zona"] == "121"
+    assert payload["items"][0]["key"] == "zona-121"
+
+
+def test_candidate_vote_map_municipal_without_municipio_returns_400(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito"},
+    )
+    assert response.status_code == 400
+    assert "municipio" in response.json()["message"].lower()
+
+
+def test_candidate_vote_map_municipal_recorte_sem_dados_returns_empty_200(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "CAMPINAS", "cargo": "Prefeito", "turno": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"] == []
+    assert payload["metadata"]["no_data"] is True
+    assert payload["metadata"]["scope"] == "municipal"
 
 
 def test_candidate_vote_map_endpoint_municipio_level(client: TestClient):
