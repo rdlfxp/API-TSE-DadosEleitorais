@@ -242,7 +242,12 @@ def _resolve_state_param(state: str | None, uf: str | None) -> str | None:
 
 
 def _resolve_municipality_param(municipality: str | None, municipio: str | None) -> str | None:
-    return municipality or municipio
+    resolved = municipality or municipio
+    if resolved is None:
+        return None
+    normalized = _normalize_ascii_upper(resolved)
+    normalized = " ".join(normalized.split())
+    return normalized or None
 
 
 def get_service() -> AnalyticsService | DuckDBAnalyticsService:
@@ -841,6 +846,7 @@ def candidate_electorate_profile(
 
 @app.get("/v1/candidates/{candidate_id}/vote-distribution", response_model=VoteDistributionResponse, responses=ERROR_RESPONSES)
 def candidate_vote_distribution(
+    request: Request,
     candidate_id: str,
     level: Literal["macroregiao", "uf", "municipio", "zona"],
     year: int | None = None,
@@ -885,6 +891,7 @@ def candidate_vote_distribution(
         sort_order=sort_order,
         page=page,
         page_size=page_size,
+        trace_id=_trace_id_from_request(request),
     )
     fallback_applied = False
     used_round = resolved_round
@@ -905,6 +912,7 @@ def candidate_vote_distribution(
             sort_order=sort_order,
             page=page,
             page_size=page_size,
+            trace_id=_trace_id_from_request(request),
         )
         if fallback_data.get("items"):
             data = fallback_data
@@ -927,6 +935,7 @@ def candidate_vote_distribution(
 
 @app.get("/v1/candidates/{candidate_id}/vote-map", response_model=CandidateVoteMapResponse, responses=ERROR_RESPONSES)
 def candidate_vote_map(
+    request: Request,
     candidate_id: str,
     level: Literal["auto", "municipio", "zona"] = "auto",
     year: int | None = None,
@@ -963,6 +972,7 @@ def candidate_vote_map(
         office=resolved_office,
         round_filter=resolved_round,
         municipality=resolved_municipality,
+        trace_id=_trace_id_from_request(request),
     )
     fallback_applied = False
     used_round = resolved_round
@@ -975,6 +985,7 @@ def candidate_vote_map(
             office=resolved_office,
             round_filter=1,
             municipality=resolved_municipality,
+            trace_id=_trace_id_from_request(request),
         )
         if fallback_data.get("items"):
             data = fallback_data

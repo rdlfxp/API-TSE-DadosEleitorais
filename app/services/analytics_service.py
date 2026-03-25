@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Iterable
@@ -96,6 +97,7 @@ COR_RACA_CATEGORY_LABELS = {
 }
 
 SUPPORTED_ANALYTICS_YEARS = {2018, 2020, 2022, 2024}
+logger = logging.getLogger("api.meucandidato")
 
 UF_TO_MACROREGIAO = {
     "AC": "Norte",
@@ -272,7 +274,11 @@ class AnalyticsService:
         if partido and col_partido:
             df = df[df[col_partido].astype(str).str.upper().str.strip() == partido.upper().strip()]
         if municipio and col_municipio:
-            df = df[df[col_municipio].astype(str).str.upper().str.strip() == municipio.upper().strip()]
+            municipio_norm = self._normalize_municipio_filter(municipio)
+            col_municipio_norm = (
+                df[col_municipio].astype(str).apply(self._normalize_municipio_filter)
+            )
+            df = df[col_municipio_norm == municipio_norm]
         if somente_eleitos and col_situacao:
             df = df[self._is_elected(df[col_situacao])]
         return df
@@ -290,6 +296,32 @@ class AnalyticsService:
         if not key:
             return ""
         return MUNICIPIO_ALIAS_MAP.get(key, key)
+
+    def _normalize_municipio_filter(self, text: str | None) -> str:
+        key = self._normalize_municipio_key(text or "")
+        return " ".join(key.split())
+
+    def _log_municipal_zone_debug(
+        self,
+        *,
+        event: str,
+        trace_id: str | None,
+        normalized_filters: dict[str, object],
+        plan: str,
+        counts: dict[str, object] | None = None,
+    ) -> None:
+        logger.info(
+            json.dumps(
+                {
+                    "event": event,
+                    "trace_id": trace_id or "n/a",
+                    "normalized_filters": normalized_filters,
+                    "plan": plan,
+                    "counts": counts or {},
+                },
+                ensure_ascii=False,
+            )
+        )
 
     def _official_prefeito_totals_by_uf(self, ano: int | None) -> dict[str, int]:
         if ano is None:
@@ -1900,6 +1932,7 @@ class AnalyticsService:
         sort_order: str | None = None,
         page: int | None = None,
         page_size: int | None = None,
+        trace_id: str | None = None,
     ) -> dict:
         level_key = (level or "").strip().lower()
         if level_key not in {"macroregiao", "uf", "municipio", "zona"}:
@@ -1908,12 +1941,13 @@ class AnalyticsService:
         normalized_state = (state or "").strip().upper() or None
         if normalized_state in {"BR", "BRASIL"}:
             normalized_state = None
+        normalized_municipio = self._normalize_municipio_filter(municipality) if municipality else None
         scoped = self._apply_filters(
             ano=year,
             turno=round_filter,
             uf=normalized_state,
             cargo=office,
-            municipio=municipality,
+            municipio=normalized_municipio,
         )
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
@@ -2061,6 +2095,26 @@ class AnalyticsService:
                 .agg(votes=("_votes", "sum"))
                 .sort_values("votes", ascending=False)
             )
+            if municipal_scope:
+                self._log_municipal_zone_debug(
+                    event="candidate_vote_distribution_municipal_zone_base",
+                    trace_id=trace_id,
+                    normalized_filters={
+                        "candidate_id": str(candidate_id),
+                        "ano": year,
+                        "cargo": office,
+                        "uf": normalized_state,
+                        "municipio": normalized_municipio,
+                        "turno": round_filter,
+                        "level": "zona",
+                    },
+                    plan="pandas_groupby(candidate_rows by zona/municipio/uf after normalized filters)",
+                    counts={
+                        "rows_candidate": int(len(candidate_rows)),
+                        "rows_grouped": int(len(agg)),
+                        "total_candidate_votes": int(float(agg["votes"].sum())) if not agg.empty else 0,
+                    },
+                )
             total_candidate_votes = float(agg["votes"].sum()) if not agg.empty else 0.0
             total_votes_safe = total_candidate_votes if total_candidate_votes > 0 else 1.0
             items: list[dict[str, object]] = []
@@ -2183,12 +2237,17 @@ class AnalyticsService:
         office: str | None = None,
         round_filter: int | None = None,
         municipality: str | None = None,
+        trace_id: str | None = None,
     ) -> dict:
         requested_level = (level or "auto").strip().lower()
         if requested_level not in {"auto", "municipio", "zona"}:
             requested_level = "auto"
+        normalized_state = (state or "").strip().upper() or None
+        if normalized_state in {"BR", "BRASIL"}:
+            normalized_state = None
+        normalized_municipio = self._normalize_municipio_filter(municipality) if municipality else None
 
-        scoped = self._apply_filters(ano=year, turno=round_filter, uf=state, cargo=office, municipio=municipality)
+        scoped = self._apply_filters(ano=year, turno=round_filter, uf=normalized_state, cargo=office, municipio=normalized_municipio)
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if candidate_rows.empty or not col_votes:
@@ -2317,6 +2376,26 @@ class AnalyticsService:
                 .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
                 .sort_values("votes", ascending=False)
             )
+            if municipal_scope:
+                self._log_municipal_zone_debug(
+                    event="candidate_vote_map_municipal_zone_base",
+                    trace_id=trace_id,
+                    normalized_filters={
+                        "candidate_id": str(candidate_id),
+                        "ano": year,
+                        "cargo": office,
+                        "uf": normalized_state,
+                        "municipio": normalized_municipio,
+                        "turno": round_filter,
+                        "level": "zona",
+                    },
+                    plan="pandas_groupby(candidate_rows by key/zona after normalized filters)",
+                    counts={
+                        "rows_candidate": int(len(candidate_rows)),
+                        "rows_grouped": int(len(grouped)),
+                        "total_candidate_votes": int(float(grouped["votes"].sum())) if not grouped.empty else 0,
+                    },
+                )
 
         valid_coord_indices: list[int] = []
         for idx, row in grouped.iterrows():
@@ -2330,16 +2409,45 @@ class AnalyticsService:
                     lng=lng,
                 )
             if (lat is None or lng is None) and resolved_level == "zona":
-                geometry = self._resolve_zone_geometry(
-                    zone_id=str(row["_zona"]),
-                    city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
-                    uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
-                    lat=float("nan"),
-                    lng=float("nan"),
-                )
+                geometry = None
+                try:
+                    geometry = self._resolve_zone_geometry(
+                        zone_id=str(row["_zona"]),
+                        city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
+                        uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
+                        lat=float("nan"),
+                        lng=float("nan"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        json.dumps(
+                            {
+                                "event": "candidate_vote_map_zone_geometry_error",
+                                "trace_id": trace_id or "n/a",
+                                "zona": str(row["_zona"]) if "_zona" in row.index else None,
+                                "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
+                                "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
+                                "error_type": exc.__class__.__name__,
+                                "error_message": str(exc),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
                 geo_lat, geo_lng = self._geometry_centroid(geometry)
                 lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
             if lat is None or lng is None:
+                logger.warning(
+                    json.dumps(
+                        {
+                            "event": "candidate_vote_map_zone_missing_coords_dropped",
+                            "trace_id": trace_id or "n/a",
+                            "zona": str(row["_zona"]) if "_zona" in row.index else None,
+                            "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
+                            "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
                 continue
             grouped.at[idx, "lat"] = lat
             grouped.at[idx, "lng"] = lng
@@ -2376,7 +2484,7 @@ class AnalyticsService:
         total_votes_safe = float(total_votes) if total_votes > 0 else 1.0
         items: list[dict] = []
         for _, row in grouped.sort_values("votes", ascending=False).iterrows():
-            row_votes = int(row["votes"])
+            row_votes = int(float(pd.to_numeric(row["votes"], errors="coerce") or 0.0))
             tier = 0 if row_votes <= q1 else (1 if row_votes <= q2 else 2)
             cfg = tiers[tier]
             label = str(row["_label"])

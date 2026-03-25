@@ -887,6 +887,24 @@ def test_candidate_vote_map_municipal_prefeito_turno_1_level_zona(client: TestCl
     assert payload["region_clusters"] == []
 
 
+def test_candidate_vote_map_municipal_accepts_aliases_and_municipio_with_accent(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipality": "São Paulo",
+            "cargo": "Prefeito",
+            "round": 1,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    assert payload["metadata"]["municipio"] == "SAO PAULO"
+
+
 def test_candidate_vote_map_municipal_vereador_campinas_level_zona(client: TestClient):
     response = client.get(
         "/v1/candidates/8/vote-map",
@@ -898,6 +916,24 @@ def test_candidate_vote_map_municipal_vereador_campinas_level_zona(client: TestC
     assert len(payload["items"]) == 1
     assert payload["items"][0]["zona"] == "121"
     assert payload["items"][0]["key"] == "zona-121"
+
+
+def test_candidate_vote_distribution_municipal_accepts_aliases_and_municipio_with_accent(client: TestClient):
+    response = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={
+            "level": "zona",
+            "ano": 2024,
+            "uf": "SP",
+            "municipality": "São Paulo",
+            "cargo": "Prefeito",
+            "round": 1,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    assert payload["metadata"]["municipio"] == "SAO PAULO"
 
 
 def test_candidate_vote_map_municipal_without_municipio_returns_400(client: TestClient):
