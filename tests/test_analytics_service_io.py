@@ -117,3 +117,63 @@ def test_vote_distribution_formula_safe_percent(numerator: float, denominator: f
 def test_vote_distribution_formula_impact_category(value: float, expected: str):
     assert pandas_impact_category(value) == expected
     assert duckdb_impact_category(value) == expected
+
+
+def test_resolve_municipal_scope_parity_between_pandas_and_duckdb(tmp_path):
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 42,
+                "NM_CANDIDATO": "Prefeito X",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1000,
+                "NR_ZONA": "100",
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 42,
+                "NM_CANDIDATO": "Prefeito X",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 100,
+                "NR_ZONA": "101",
+            },
+        ]
+    )
+    csv_path = tmp_path / "municipal_scope.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    pandas_scope = pandas_service.resolve_municipal_scope(
+        candidate_id="42",
+        year=2024,
+        office="Prefeito",
+        round_filter=1,
+        state=None,
+        municipality=None,
+    )
+    duckdb_scope = duckdb_service.resolve_municipal_scope(
+        candidate_id="42",
+        year=2024,
+        office="Prefeito",
+        round_filter=1,
+        state=None,
+        municipality=None,
+    )
+
+    assert pandas_scope == duckdb_scope
+    assert pandas_scope["used_uf"] == "SP"
+    assert pandas_scope["used_municipio"] == "SAO PAULO"
+    assert pandas_scope["disambiguation_applied"] is True
