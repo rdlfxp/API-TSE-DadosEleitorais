@@ -456,6 +456,95 @@ class AnalyticsService:
                     return str(values.iloc[0])
         return str(fallback)
 
+    def resolve_municipal_scope(
+        self,
+        *,
+        candidate_id: str,
+        year: int | None,
+        office: str | None,
+        round_filter: int | None,
+        state: str | None = None,
+        municipality: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, object]:
+        requested_uf = (state or "").strip().upper() or None
+        if requested_uf in {"BR", "BRASIL"}:
+            requested_uf = None
+        requested_municipio = self._normalize_municipio_filter(municipality) if municipality else None
+
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        if not col_uf or not col_municipio:
+            raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
+
+        scoped = self._apply_filters(
+            ano=year,
+            turno=round_filter,
+            cargo=office,
+            uf=requested_uf,
+            municipio=requested_municipio,
+        )
+        candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
+        if candidate_rows.empty:
+            raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
+
+        grouped = candidate_rows.assign(
+            _uf=self._normalize_text(candidate_rows[col_uf]).str.upper().replace("", pd.NA),
+            _municipio=self._normalize_text(candidate_rows[col_municipio]).apply(self._normalize_municipio_filter).replace("", pd.NA),
+            _votes=(
+                pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0)
+                if col_votes
+                else pd.Series([0.0] * len(candidate_rows), index=candidate_rows.index)
+            ),
+        ).dropna(subset=["_uf", "_municipio"])
+        if grouped.empty:
+            raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
+
+        by_scope = (
+            grouped.groupby(["_uf", "_municipio"], as_index=False)
+            .agg(qt_votos=("_votes", "sum"))
+            .sort_values(["qt_votos", "_uf", "_municipio"], ascending=[False, True, True])
+            .reset_index(drop=True)
+        )
+        used_uf = str(by_scope.iloc[0]["_uf"])
+        used_municipio = str(by_scope.iloc[0]["_municipio"])
+        disambiguation_applied = False
+        if len(by_scope) > 1 and (requested_uf is None or requested_municipio is None):
+            disambiguation_applied = True
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "resolve_municipal_scope_disambiguation",
+                        "trace_id": trace_id or "n/a",
+                        "candidate_id": str(candidate_id),
+                        "ano": year,
+                        "cargo": office,
+                        "turno": round_filter,
+                        "requested_uf": requested_uf,
+                        "requested_municipio": requested_municipio,
+                        "used_uf": used_uf,
+                        "used_municipio": used_municipio,
+                        "disambiguation_applied": True,
+                        "candidates_considered": int(len(by_scope)),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        inferred_uf = requested_uf is None and bool(used_uf)
+        inferred_municipio = requested_municipio is None and bool(used_municipio)
+        return {
+            "requested_uf": requested_uf,
+            "requested_municipio": requested_municipio,
+            "used_uf": used_uf,
+            "used_municipio": used_municipio,
+            "inferred_geo": bool(inferred_uf or inferred_municipio),
+            "inferred_uf": used_uf if inferred_uf else None,
+            "inferred_municipio": used_municipio if inferred_municipio else None,
+            "disambiguation_applied": disambiguation_applied,
+        }
+
     def _aggregate_candidate_votes(self, df: pd.DataFrame) -> pd.DataFrame:
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])

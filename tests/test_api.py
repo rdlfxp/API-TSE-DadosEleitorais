@@ -721,13 +721,20 @@ def test_candidate_vote_distribution_municipal_vereador_level_zona(client: TestC
     assert payload["items"][0]["zone_id"] == "121"
 
 
-def test_candidate_vote_distribution_municipal_without_municipio_returns_400(client: TestClient):
+def test_candidate_vote_distribution_municipal_without_municipio_infers_scope_with_uf(client: TestClient):
     response = client.get(
         "/v1/candidates/4/vote-distribution",
         params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
     )
-    assert response.status_code == 400
-    assert "municipio" in response.json()["message"].lower()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    assert payload["metadata"]["scope"] == "municipal"
+    assert payload["metadata"]["inferred_geo"] is True
+    assert payload["metadata"]["inferred_municipio"] == "SAO PAULO"
+    assert payload["metadata"]["requested_uf"] == "SP"
+    assert payload["metadata"]["used_uf"] == "SP"
+    assert payload["metadata"]["used_municipio"] == "SAO PAULO"
 
 
 def test_candidate_vote_distribution_municipal_recorte_sem_dados_returns_empty_200(client: TestClient):
@@ -936,13 +943,96 @@ def test_candidate_vote_distribution_municipal_accepts_aliases_and_municipio_wit
     assert payload["metadata"]["municipio"] == "SAO PAULO"
 
 
-def test_candidate_vote_map_municipal_without_municipio_returns_400(client: TestClient):
+def test_candidate_vote_map_municipal_without_municipio_infers_scope_with_uf(client: TestClient):
     response = client.get(
         "/v1/candidates/4/vote-map",
         params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito"},
     )
-    assert response.status_code == 400
-    assert "municipio" in response.json()["message"].lower()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    assert payload["metadata"]["scope"] == "municipal"
+    assert payload["metadata"]["inferred_geo"] is True
+    assert payload["metadata"]["inferred_municipio"] == "SAO PAULO"
+    assert payload["metadata"]["requested_uf"] == "SP"
+    assert payload["metadata"]["used_uf"] == "SP"
+    assert payload["metadata"]["used_municipio"] == "SAO PAULO"
+
+
+def test_candidate_vote_endpoints_municipal_without_uf_and_municipio_infer_both(client: TestClient):
+    map_response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"level": "zona", "ano": 2024, "cargo": "Prefeito", "turno": 1},
+    )
+    assert map_response.status_code == 200
+    map_payload = map_response.json()
+    assert map_payload["items"]
+    assert map_payload["metadata"]["inferred_geo"] is True
+    assert map_payload["metadata"]["inferred_uf"] == "SP"
+    assert map_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
+    assert map_payload["metadata"]["used_uf"] == "SP"
+    assert map_payload["metadata"]["used_municipio"] == "SAO PAULO"
+
+    distribution_response = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={"level": "zona", "ano": 2024, "cargo": "Prefeito", "turno": 1},
+    )
+    assert distribution_response.status_code == 200
+    distribution_payload = distribution_response.json()
+    assert distribution_payload["items"]
+    assert distribution_payload["metadata"]["inferred_geo"] is True
+    assert distribution_payload["metadata"]["inferred_uf"] == "SP"
+    assert distribution_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
+    assert distribution_payload["metadata"]["used_uf"] == "SP"
+    assert distribution_payload["metadata"]["used_municipio"] == "SAO PAULO"
+
+
+def test_candidate_vote_endpoints_municipality_alias_equivalence(client: TestClient):
+    map_alias = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "municipality": "São Paulo", "cargo": "Prefeito", "turno": 1},
+    )
+    map_native = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "SAO PAULO", "cargo": "Prefeito", "turno": 1},
+    )
+    assert map_alias.status_code == 200
+    assert map_native.status_code == 200
+    assert map_alias.json()["items"] == map_native.json()["items"]
+
+    distribution_alias = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "municipality": "São Paulo", "cargo": "Prefeito", "turno": 1},
+    )
+    distribution_native = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "SAO PAULO", "cargo": "Prefeito", "turno": 1},
+    )
+    assert distribution_alias.status_code == 200
+    assert distribution_native.status_code == 200
+    assert distribution_alias.json()["items"] == distribution_native.json()["items"]
+
+
+def test_candidate_vote_endpoints_municipal_inference_failure_returns_400_with_trace(client: TestClient):
+    map_response = client.get(
+        "/v1/candidates/4/vote-map",
+        params={"level": "zona", "ano": 2024, "uf": "RJ", "cargo": "Prefeito", "turno": 1},
+    )
+    assert map_response.status_code == 400
+    map_payload = map_response.json()
+    assert map_payload["code"] == "BAD_REQUEST"
+    assert map_payload["message"] == "Nao foi possivel inferir municipio para candidate_id no recorte informado."
+    assert map_payload["traceId"]
+
+    distribution_response = client.get(
+        "/v1/candidates/4/vote-distribution",
+        params={"level": "zona", "ano": 2024, "uf": "RJ", "cargo": "Prefeito", "turno": 1},
+    )
+    assert distribution_response.status_code == 400
+    distribution_payload = distribution_response.json()
+    assert distribution_payload["code"] == "BAD_REQUEST"
+    assert distribution_payload["message"] == "Nao foi possivel inferir municipio para candidate_id no recorte informado."
+    assert distribution_payload["traceId"]
 
 
 def test_candidate_vote_map_municipal_recorte_sem_dados_returns_empty_200(client: TestClient):

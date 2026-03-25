@@ -560,6 +560,102 @@ class DuckDBAnalyticsService:
             params.append(candidate_upper)
         return clauses, params
 
+    def resolve_municipal_scope(
+        self,
+        *,
+        candidate_id: str,
+        year: int | None,
+        office: str | None,
+        round_filter: int | None,
+        state: str | None = None,
+        municipality: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, object]:
+        requested_uf = (state or "").strip().upper() or None
+        if requested_uf in {"BR", "BRASIL"}:
+            requested_uf = None
+        requested_municipio = self._normalize_municipio_filter(municipality) if municipality else None
+
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        if not col_uf or not col_municipio:
+            raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
+
+        where, where_params = self._where(
+            ano=year,
+            turno=round_filter,
+            cargo=office,
+            uf=requested_uf,
+            municipio=requested_municipio,
+        )
+        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+        if not candidate_clauses:
+            raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
+
+        uf_expr = f"NULLIF(UPPER(TRIM(CAST({col_uf} AS VARCHAR))), '')"
+        municipio_expr = f"NULLIF({self._normalized_sql_text_expr(col_municipio)}, '')"
+        votes_expr = f"COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)" if col_votes else "0.0"
+        grouped = self._rows(
+            (
+                "WITH candidate_scope AS ("
+                "SELECT "
+                f"{uf_expr} AS uf, "
+                f"{municipio_expr} AS municipio, "
+                f"{votes_expr} AS votos "
+                f"FROM analytics {where} "
+                f"{'AND' if where else 'WHERE'} ({' OR '.join(candidate_clauses)})"
+                ") "
+                "SELECT uf, municipio, SUM(votos) AS qt_votos "
+                "FROM candidate_scope "
+                "WHERE uf IS NOT NULL AND municipio IS NOT NULL "
+                "GROUP BY uf, municipio "
+                "ORDER BY qt_votos DESC, uf ASC, municipio ASC"
+            ),
+            where_params + candidate_params,
+        )
+        if not grouped:
+            raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
+
+        used_uf, used_municipio, _ = grouped[0]
+        disambiguation_applied = False
+        if len(grouped) > 1 and (requested_uf is None or requested_municipio is None):
+            disambiguation_applied = True
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "resolve_municipal_scope_disambiguation",
+                        "trace_id": trace_id or "n/a",
+                        "candidate_id": str(candidate_id),
+                        "ano": year,
+                        "cargo": office,
+                        "turno": round_filter,
+                        "requested_uf": requested_uf,
+                        "requested_municipio": requested_municipio,
+                        "used_uf": str(used_uf),
+                        "used_municipio": str(used_municipio),
+                        "disambiguation_applied": True,
+                        "candidates_considered": int(len(grouped)),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        used_uf_text = str(used_uf)
+        used_municipio_text = self._normalize_municipio_filter(str(used_municipio))
+        inferred_uf = requested_uf is None and bool(used_uf_text)
+        inferred_municipio = requested_municipio is None and bool(used_municipio_text)
+        return {
+            "requested_uf": requested_uf,
+            "requested_municipio": requested_municipio,
+            "used_uf": used_uf_text,
+            "used_municipio": used_municipio_text,
+            "inferred_geo": bool(inferred_uf or inferred_municipio),
+            "inferred_uf": used_uf_text if inferred_uf else None,
+            "inferred_municipio": used_municipio_text if inferred_municipio else None,
+            "disambiguation_applied": disambiguation_applied,
+        }
+
     def _municipal_zone_candidate_base(
         self,
         *,

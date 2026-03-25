@@ -250,6 +250,34 @@ def _resolve_municipality_param(municipality: str | None, municipio: str | None)
     return normalized or None
 
 
+def _resolve_municipal_scope_or_400(
+    *,
+    request: Request,
+    service_instance: AnalyticsService | DuckDBAnalyticsService,
+    candidate_id: str,
+    year: int | None,
+    office: str | None,
+    round_filter: int | None,
+    state: str | None,
+    municipality: str | None,
+) -> dict[str, Any]:
+    try:
+        return service_instance.resolve_municipal_scope(
+            candidate_id=candidate_id,
+            year=year,
+            office=office,
+            round_filter=round_filter,
+            state=state,
+            municipality=municipality,
+            trace_id=_trace_id_from_request(request),
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Nao foi possivel inferir municipio para candidate_id no recorte informado.",
+        ) from None
+
+
 def get_service() -> AnalyticsService | DuckDBAnalyticsService:
     if service is None:
         raise HTTPException(
@@ -873,20 +901,33 @@ def candidate_vote_distribution(
     if is_municipal_request:
         if resolved_year is None:
             raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: ano.")
-        if not resolved_state:
-            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: uf.")
-        if not resolved_municipality:
-            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: municipio.")
 
     service = get_service()
+    scope_info: dict[str, Any] | None = None
+    used_state = resolved_state
+    used_municipality = resolved_municipality
+    if is_municipal_request and level == "zona":
+        scope_info = _resolve_municipal_scope_or_400(
+            request=request,
+            service_instance=service,
+            candidate_id=candidate_id,
+            year=resolved_year,
+            office=resolved_office,
+            round_filter=resolved_round,
+            state=resolved_state,
+            municipality=resolved_municipality,
+        )
+        used_state = str(scope_info["used_uf"]) if scope_info.get("used_uf") else None
+        used_municipality = str(scope_info["used_municipio"]) if scope_info.get("used_municipio") else None
+
     data = service.candidate_vote_distribution(
         candidate_id=candidate_id,
         level=level,
         year=resolved_year,
-        state=resolved_state,
+        state=used_state,
         office=resolved_office,
         round_filter=resolved_round,
-        municipality=resolved_municipality,
+        municipality=used_municipality,
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,
@@ -900,14 +941,32 @@ def candidate_vote_distribution(
         and resolved_round == 2
         and not data.get("items")
     ):
+        fallback_scope_info = scope_info
+        fallback_state = used_state
+        fallback_municipality = used_municipality
+        if is_municipal_request and level == "zona":
+            fallback_scope_info = _resolve_municipal_scope_or_400(
+                request=request,
+                service_instance=service,
+                candidate_id=candidate_id,
+                year=resolved_year,
+                office=resolved_office,
+                round_filter=1,
+                state=resolved_state,
+                municipality=resolved_municipality,
+            )
+            fallback_state = str(fallback_scope_info["used_uf"]) if fallback_scope_info.get("used_uf") else None
+            fallback_municipality = (
+                str(fallback_scope_info["used_municipio"]) if fallback_scope_info.get("used_municipio") else None
+            )
         fallback_data = service.candidate_vote_distribution(
             candidate_id=candidate_id,
             level=level,
             year=resolved_year,
-            state=resolved_state,
+            state=fallback_state,
             office=resolved_office,
             round_filter=1,
-            municipality=resolved_municipality,
+            municipality=fallback_municipality,
             sort_by=sort_by,
             sort_order=sort_order,
             page=page,
@@ -916,17 +975,28 @@ def candidate_vote_distribution(
         )
         if fallback_data.get("items"):
             data = fallback_data
+            scope_info = fallback_scope_info
+            used_state = fallback_state
+            used_municipality = fallback_municipality
             fallback_applied = True
             used_round = 1
     if is_municipal_request:
         data["metadata"] = {
             "scope": "municipal",
+            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")),
+            "inferred_uf": (scope_info.get("inferred_uf") if scope_info else None),
+            "inferred_municipio": (scope_info.get("inferred_municipio") if scope_info else None),
+            "requested_uf": resolved_state,
+            "requested_municipio": resolved_municipality,
+            "used_uf": used_state,
+            "used_municipio": used_municipality,
             "requested_turno": resolved_round,
             "used_turno": used_round,
             "fallback_applied": fallback_applied,
             "no_data": len(data.get("items", [])) == 0,
-            "uf": resolved_state,
-            "municipio": resolved_municipality,
+            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")),
+            "uf": used_state,
+            "municipio": used_municipality,
             "cargo": resolved_office,
             "ano": resolved_year,
         }
@@ -958,48 +1028,90 @@ def candidate_vote_map(
     if is_municipal_request:
         if resolved_year is None:
             raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: ano.")
-        if not resolved_state:
-            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: uf.")
-        if not resolved_municipality:
-            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: municipio.")
 
     service = get_service()
+    scope_info: dict[str, Any] | None = None
+    used_state = resolved_state
+    used_municipality = resolved_municipality
+    if is_municipal_request and level == "zona":
+        scope_info = _resolve_municipal_scope_or_400(
+            request=request,
+            service_instance=service,
+            candidate_id=candidate_id,
+            year=resolved_year,
+            office=resolved_office,
+            round_filter=resolved_round,
+            state=resolved_state,
+            municipality=resolved_municipality,
+        )
+        used_state = str(scope_info["used_uf"]) if scope_info.get("used_uf") else None
+        used_municipality = str(scope_info["used_municipio"]) if scope_info.get("used_municipio") else None
+
     data = service.candidate_vote_map(
         candidate_id=candidate_id,
         level=level,
         year=resolved_year,
-        state=resolved_state,
+        state=used_state,
         office=resolved_office,
         round_filter=resolved_round,
-        municipality=resolved_municipality,
+        municipality=used_municipality,
         trace_id=_trace_id_from_request(request),
     )
     fallback_applied = False
     used_round = resolved_round
     if is_municipal_request and resolved_round == 2 and not data.get("items"):
+        fallback_scope_info = scope_info
+        fallback_state = used_state
+        fallback_municipality = used_municipality
+        if is_municipal_request and level == "zona":
+            fallback_scope_info = _resolve_municipal_scope_or_400(
+                request=request,
+                service_instance=service,
+                candidate_id=candidate_id,
+                year=resolved_year,
+                office=resolved_office,
+                round_filter=1,
+                state=resolved_state,
+                municipality=resolved_municipality,
+            )
+            fallback_state = str(fallback_scope_info["used_uf"]) if fallback_scope_info.get("used_uf") else None
+            fallback_municipality = (
+                str(fallback_scope_info["used_municipio"]) if fallback_scope_info.get("used_municipio") else None
+            )
         fallback_data = service.candidate_vote_map(
             candidate_id=candidate_id,
             level=level,
             year=resolved_year,
-            state=resolved_state,
+            state=fallback_state,
             office=resolved_office,
             round_filter=1,
-            municipality=resolved_municipality,
+            municipality=fallback_municipality,
             trace_id=_trace_id_from_request(request),
         )
         if fallback_data.get("items"):
             data = fallback_data
+            scope_info = fallback_scope_info
+            used_state = fallback_state
+            used_municipality = fallback_municipality
             fallback_applied = True
             used_round = 1
     if is_municipal_request:
         data["metadata"] = {
             "scope": "municipal",
+            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")),
+            "inferred_uf": (scope_info.get("inferred_uf") if scope_info else None),
+            "inferred_municipio": (scope_info.get("inferred_municipio") if scope_info else None),
+            "requested_uf": resolved_state,
+            "requested_municipio": resolved_municipality,
+            "used_uf": used_state,
+            "used_municipio": used_municipality,
             "requested_turno": resolved_round,
             "used_turno": used_round,
             "fallback_applied": fallback_applied,
             "no_data": len(data.get("items", [])) == 0,
-            "uf": resolved_state,
-            "municipio": resolved_municipality,
+            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")),
+            "uf": used_state,
+            "municipio": used_municipality,
             "cargo": resolved_office,
             "ano": resolved_year,
         }
