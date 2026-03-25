@@ -2574,7 +2574,16 @@ class AnalyticsService:
                 "items": [],
             }
 
-        votes = grouped["votes"].astype(float)
+        votes = pd.to_numeric(grouped["votes"], errors="coerce").dropna()
+        if votes.empty:
+            return {
+                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "level": resolved_level,
+                "quantile_q1": 0,
+                "quantile_q2": 0,
+                "total_votes": 0,
+                "items": [],
+            }
         q1 = int(votes.quantile(0.33))
         q2 = int(votes.quantile(0.66))
         if q2 < q1:
@@ -2590,7 +2599,8 @@ class AnalyticsService:
         total_votes_safe = float(total_votes) if total_votes > 0 else 1.0
         items: list[dict] = []
         for _, row in grouped.sort_values("votes", ascending=False).iterrows():
-            row_votes = int(float(pd.to_numeric(row["votes"], errors="coerce") or 0.0))
+            row_votes_num = pd.to_numeric(row["votes"], errors="coerce")
+            row_votes = int(float(row_votes_num)) if pd.notna(row_votes_num) else 0
             tier = 0 if row_votes <= q1 else (1 if row_votes <= q2 else 2)
             cfg = tiers[tier]
             label = str(row["_label"])
