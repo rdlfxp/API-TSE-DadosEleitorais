@@ -58,7 +58,7 @@ R2_OBJECT_KEY_PARQUET=latest/analytics.parquet
 uvicorn app.main:app --reload
 ```
 
-## 4) Normalizacao multi-ano (2014/2018/2022)
+## 4) Normalizacao multi-ano (2000-2024)
 
 ### 4.1) Fluxo recomendado (auto descoberta em `data/raw`)
 
@@ -96,7 +96,7 @@ Parquet opcional (melhor performance em volume alto):
 pip install pyarrow
 python3 scripts/normalize.py \
   --raw-dir data/raw \
-  --years 2018 2020 2022 2024 \
+  --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 \
   --output data/curated/analytics.parquet \
   --report data/curated/quality_report.json
 ```
@@ -106,7 +106,7 @@ Para integrar outras variacoes de planilha de votacao, adicione mais padroes:
 ```bash
 python3 scripts/normalize.py \
   --raw-dir data/raw \
-  --years 2018 2020 2022 2024 \
+  --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 \
   --votacao-pattern '*votacao_candidato*munzona*.csv' '*votacao_candidato*.csv' \
   --consulta-pattern '*consulta_cand*.csv' '*consulta_vagas*.csv'
 ```
@@ -520,7 +520,7 @@ O que ele faz:
 Agendamento semanal:
 - cron atual: `0 9 * * 1` (toda segunda-feira, 09:00 UTC)
 - para runs agendados, `publish_to_r2` fica ativo automaticamente
-- anos padrão de normalização: `2018 2020 2022 2024`
+- anos padrão de normalização: `2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024`
 
 Configuração de fontes remotas:
 - em `Settings > Secrets and variables > Actions > Secrets`, crie `TSE_SOURCES_JSON`
@@ -531,7 +531,7 @@ Configuração de fontes remotas:
 
 Execução manual com multi-ano customizado:
 - `Actions` > `Data Refresh` > `Run workflow`
-- `normalize_years`: ex. `2018 2020 2022 2024`
+- `normalize_years`: ex. `2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024`
 - `publish_to_r2`: `true`
 - `keep_snapshots`: ex. `7`
 

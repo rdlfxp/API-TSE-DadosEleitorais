@@ -129,6 +129,20 @@ def parse_args() -> argparse.Namespace:
         help="Encoding dos CSVs de entrada. Padrao TSE: latin1.",
     )
     parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "Processa arquivos de votacao em chunks para reduzir uso de memoria. "
+            "Use 0 para desativado (padrao)."
+        ),
+    )
+    parser.add_argument(
+        "--disable-consulta-merge",
+        action="store_true",
+        help="Desativa enrich por consulta_cand para reduzir consumo de memoria.",
+    )
+    parser.add_argument(
         "--quality-gate",
         action="store_true",
         help="Ativa bloqueio por qualidade de dados (encerra com erro se regras nao forem atendidas).",
@@ -182,6 +196,12 @@ def _extract_year_from_path(file_path: str) -> int | None:
 
 def _parse_date(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce", dayfirst=True)
+
+
+def _sanitize_date_range(series: pd.Series, min_year: int, max_year: int) -> pd.Series:
+    parsed = _parse_date(series)
+    years = parsed.dt.year
+    return parsed.where(years.between(min_year, max_year), pd.NaT)
 
 
 def _discover_files(
@@ -242,19 +262,22 @@ def _classify_age(age: float) -> str:
 
 def _compute_age(df: pd.DataFrame) -> pd.Series:
     if "IDADE" in df.columns:
-        return pd.to_numeric(df["IDADE"], errors="coerce")
+        age = pd.to_numeric(df["IDADE"], errors="coerce")
+        return age.where(age.between(15, 120), pd.NA)
 
     if "DT_NASCIMENTO" not in df.columns:
         return pd.Series([pd.NA] * len(df), index=df.index, dtype="float64")
 
-    nasc = _parse_date(df["DT_NASCIMENTO"])
+    nasc = _sanitize_date_range(df["DT_NASCIMENTO"], 1900, 2100)
     if "DT_ELEICAO" in df.columns:
-        eleicao = _parse_date(df["DT_ELEICAO"])
-        return ((eleicao - nasc).dt.days / 365.25).round(0)
+        eleicao = _sanitize_date_range(df["DT_ELEICAO"], 1990, 2100)
+        age = ((eleicao - nasc).dt.days / 365.25).round(0)
+        return age.where(age.between(15, 120), pd.NA)
 
     if "ANO_ELEICAO" in df.columns:
         ano = pd.to_numeric(df["ANO_ELEICAO"], errors="coerce")
-        return (ano - nasc.dt.year).round(0)
+        age = (ano - nasc.dt.year).round(0)
+        return age.where(age.between(15, 120), pd.NA)
 
     return pd.Series([pd.NA] * len(df), index=df.index, dtype="float64")
 
@@ -322,116 +345,146 @@ def _normalize_votacao_file(
     consulta_df: pd.DataFrame,
     sep: str,
     encoding: str,
+    chunk_size: int = 0,
+    merge_consulta: bool = True,
 ) -> pd.DataFrame:
-    df = pd.read_csv(file_path, sep=sep, encoding=encoding, low_memory=False)
-    df = _clean_columns(df).copy()
+    def _normalize_votacao_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        df = _clean_columns(df).copy()
 
-    rename_map: dict[str, str] = {}
-    col_ano = _find_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
-    if col_ano and col_ano != "ANO_ELEICAO":
-        rename_map[col_ano] = "ANO_ELEICAO"
-    col_votos = _find_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL"])
-    if col_votos and col_votos != "QT_VOTOS_NOMINAIS_VALIDOS":
-        rename_map[col_votos] = "QT_VOTOS_NOMINAIS_VALIDOS"
-    col_turno = _find_col(df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
-    if col_turno and col_turno != "NR_TURNO":
-        rename_map[col_turno] = "NR_TURNO"
-    if rename_map:
-        df = df.rename(columns=rename_map).copy()
+        rename_map: dict[str, str] = {}
+        col_ano = _find_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        if col_ano and col_ano != "ANO_ELEICAO":
+            rename_map[col_ano] = "ANO_ELEICAO"
+        col_votos = _find_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL"])
+        if col_votos and col_votos != "QT_VOTOS_NOMINAIS_VALIDOS":
+            rename_map[col_votos] = "QT_VOTOS_NOMINAIS_VALIDOS"
+        col_turno = _find_col(df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        if col_turno and col_turno != "NR_TURNO":
+            rename_map[col_turno] = "NR_TURNO"
+        if rename_map:
+            df = df.rename(columns=rename_map).copy()
 
-    if "ANO_ELEICAO" not in df.columns:
-        year_guess = _extract_year_from_path(file_path)
-        if year_guess is not None:
-            df.loc[:, "ANO_ELEICAO"] = year_guess
+        if "ANO_ELEICAO" not in df.columns:
+            year_guess = _extract_year_from_path(file_path)
+            if year_guess is not None:
+                df.loc[:, "ANO_ELEICAO"] = year_guess
 
-    if not consulta_df.empty:
-        join_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in df.columns and c in consulta_df.columns]
-        if not join_keys:
-            join_keys = [c for c in ["ANO_ELEICAO", "NR_CANDIDATO", "SG_UF", "DS_CARGO"] if c in df.columns and c in consulta_df.columns]
-        if join_keys:
-            profile_cols = [
-                c
-                for c in [
-                    "DS_GENERO",
-                    "DS_GRAU_INSTRUCAO",
-                    "DS_ESTADO_CIVIL",
-                    "DS_COR_RACA",
-                    "DS_OCUPACAO",
-                    "DT_NASCIMENTO",
-                    "NM_CANDIDATO",
-                    "NM_URNA_CANDIDATO",
+        if merge_consulta and not consulta_df.empty:
+            join_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in df.columns and c in consulta_df.columns]
+            if not join_keys:
+                join_keys = [c for c in ["ANO_ELEICAO", "NR_CANDIDATO", "SG_UF", "DS_CARGO"] if c in df.columns and c in consulta_df.columns]
+            if join_keys:
+                profile_cols = [
+                    c
+                    for c in [
+                        "DS_GENERO",
+                        "DS_GRAU_INSTRUCAO",
+                        "DS_ESTADO_CIVIL",
+                        "DS_COR_RACA",
+                        "DS_OCUPACAO",
+                        "DT_NASCIMENTO",
+                        "NM_CANDIDATO",
+                        "NM_URNA_CANDIDATO",
+                    ]
+                    if c in consulta_df.columns
                 ]
-                if c in consulta_df.columns
-            ]
-            if profile_cols:
-                df = df.merge(
-                    consulta_df[join_keys + profile_cols],
-                    on=join_keys,
-                    how="left",
-                    suffixes=("", "_CONS"),
-                ).copy()
-                for col in profile_cols:
-                    alt = f"{col}_CONS"
-                    if alt in df.columns:
-                        if col in df.columns:
-                            df.loc[:, col] = df[col].fillna(df[alt])
-                            df = df.drop(columns=[alt])
-                        else:
-                            df = df.rename(columns={alt: col})
+                if profile_cols:
+                    df = df.merge(
+                        consulta_df[join_keys + profile_cols],
+                        on=join_keys,
+                        how="left",
+                        suffixes=("", "_CONS"),
+                    ).copy()
+                    for col in profile_cols:
+                        alt = f"{col}_CONS"
+                        if alt in df.columns:
+                            if col in df.columns:
+                                df.loc[:, col] = df[col].fillna(df[alt])
+                                df = df.drop(columns=[alt])
+                            else:
+                                df = df.rename(columns={alt: col})
 
-    if "QT_VOTOS_NOMINAIS_VALIDOS" not in df.columns:
-        df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = 0
-    df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = (
-        pd.to_numeric(df["QT_VOTOS_NOMINAIS_VALIDOS"], errors="coerce").fillna(0).astype("int64")
-    )
-    if "NR_TURNO" in df.columns:
-        df.loc[:, "NR_TURNO"] = _normalize_turno(df["NR_TURNO"])
+        if "QT_VOTOS_NOMINAIS_VALIDOS" not in df.columns:
+            df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = 0
+        df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = (
+            pd.to_numeric(df["QT_VOTOS_NOMINAIS_VALIDOS"], errors="coerce").fillna(0).astype("int64")
+        )
+        if "NR_TURNO" in df.columns:
+            df.loc[:, "NR_TURNO"] = _normalize_turno(df["NR_TURNO"])
 
-    for col in CANONICAL_COLUMNS:
-        if col not in df.columns:
-            df.loc[:, col] = pd.NA
+        for col in CANONICAL_COLUMNS:
+            if col not in df.columns:
+                df.loc[:, col] = pd.NA
 
-    df.loc[:, "IDADE"] = _compute_age(df)
-    df.loc[:, "FAIXA_ETARIA"] = df["IDADE"].apply(_classify_age)
+        df.loc[:, "IDADE"] = _compute_age(df)
+        df.loc[:, "FAIXA_ETARIA"] = df["IDADE"].apply(_classify_age)
 
-    group_cols = [
-        "ANO_ELEICAO",
-        "NR_TURNO",
-        "SG_UF",
-        "NM_UE",
-        "CD_MUNICIPIO",
-        "NR_ZONA",
-        "NR_SECAO",
-        "CD_CARGO",
-        "DS_CARGO",
-        "SQ_CANDIDATO",
-        "NR_CANDIDATO",
-        "NM_CANDIDATO",
-        "NM_URNA_CANDIDATO",
-        "SG_PARTIDO",
-        "NM_PARTIDO",
-        "TP_AGREMIACAO",
-        "DS_GENERO",
-        "DS_GRAU_INSTRUCAO",
-        "DS_ESTADO_CIVIL",
-        "DS_COR_RACA",
-        "DS_OCUPACAO",
-        "DT_NASCIMENTO",
-        "DT_ELEICAO",
-        "DS_SIT_TOT_TURNO",
-        "LATITUDE",
-        "LONGITUDE",
-    ]
-    agg = (
-        df[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
-        .groupby(group_cols, dropna=False, as_index=False)["QT_VOTOS_NOMINAIS_VALIDOS"]
-        .sum()
-        .copy()
-    )
+        group_cols = [
+            "ANO_ELEICAO",
+            "NR_TURNO",
+            "SG_UF",
+            "NM_UE",
+            "CD_MUNICIPIO",
+            "NR_ZONA",
+            "NR_SECAO",
+            "CD_CARGO",
+            "DS_CARGO",
+            "SQ_CANDIDATO",
+            "NR_CANDIDATO",
+            "NM_CANDIDATO",
+            "NM_URNA_CANDIDATO",
+            "SG_PARTIDO",
+            "NM_PARTIDO",
+            "TP_AGREMIACAO",
+            "DS_GENERO",
+            "DS_GRAU_INSTRUCAO",
+            "DS_ESTADO_CIVIL",
+            "DS_COR_RACA",
+            "DS_OCUPACAO",
+            "DT_NASCIMENTO",
+            "DT_ELEICAO",
+            "DS_SIT_TOT_TURNO",
+            "LATITUDE",
+            "LONGITUDE",
+        ]
+        agg = (
+            df[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
+            .groupby(group_cols, dropna=False, as_index=False)["QT_VOTOS_NOMINAIS_VALIDOS"]
+            .sum()
+            .copy()
+        )
 
-    agg.loc[:, "IDADE"] = _compute_age(agg)
-    agg.loc[:, "FAIXA_ETARIA"] = agg["IDADE"].apply(_classify_age)
-    return agg[CANONICAL_COLUMNS].copy()
+        agg.loc[:, "IDADE"] = _compute_age(agg)
+        agg.loc[:, "FAIXA_ETARIA"] = agg["IDADE"].apply(_classify_age)
+        return agg[CANONICAL_COLUMNS].copy()
+
+    if chunk_size and chunk_size > 0:
+        partials: list[pd.DataFrame] = []
+        reader = pd.read_csv(
+            file_path,
+            sep=sep,
+            encoding=encoding,
+            low_memory=False,
+            chunksize=int(chunk_size),
+        )
+        for chunk in reader:
+            partials.append(_normalize_votacao_chunk(chunk))
+        if not partials:
+            return pd.DataFrame(columns=CANONICAL_COLUMNS)
+        merged = pd.concat(partials, ignore_index=True)
+        group_cols = [c for c in CANONICAL_COLUMNS if c not in ["QT_VOTOS_NOMINAIS_VALIDOS", "IDADE", "FAIXA_ETARIA"]]
+        merged = (
+            merged[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
+            .groupby(group_cols, dropna=False, as_index=False)["QT_VOTOS_NOMINAIS_VALIDOS"]
+            .sum()
+            .copy()
+        )
+        merged.loc[:, "IDADE"] = _compute_age(merged)
+        merged.loc[:, "FAIXA_ETARIA"] = merged["IDADE"].apply(_classify_age)
+        return merged[CANONICAL_COLUMNS].copy()
+
+    df = pd.read_csv(file_path, sep=sep, encoding=encoding, low_memory=False)
+    return _normalize_votacao_chunk(df)
 
 
 def _quality_report(df: pd.DataFrame) -> dict:
@@ -640,7 +693,11 @@ def main() -> None:
         )
         raise SystemExit(2)
 
-    consulta = _prepare_consulta(consulta_files, sep=args.sep, encoding=args.encoding)
+    consulta = (
+        pd.DataFrame()
+        if args.disable_consulta_merge
+        else _prepare_consulta(consulta_files, sep=args.sep, encoding=args.encoding)
+    )
     normalized_frames: list[pd.DataFrame] = []
 
     for vot_file in votacao_files:
@@ -651,6 +708,8 @@ def main() -> None:
                 consulta_df=consulta,
                 sep=args.sep,
                 encoding=args.encoding,
+                chunk_size=args.chunk_size,
+                merge_consulta=(not args.disable_consulta_merge),
             )
         )
 

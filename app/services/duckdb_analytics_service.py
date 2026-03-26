@@ -173,7 +173,7 @@ UF_CENTROIDS = {
     "TO": (-10.1753, -48.2982),
 }
 
-SUPPORTED_ANALYTICS_YEARS = {2018, 2020, 2022, 2024}
+SUPPORTED_ANALYTICS_YEARS = {2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014, 2016, 2018, 2020, 2022, 2024}
 logger = logging.getLogger("api.meucandidato")
 
 
@@ -365,6 +365,14 @@ class DuckDBAnalyticsService:
             "'[^\\x00-\\x7F]', ''"
             ")"
         )
+
+    def _nullable_text_sql_expr(self, expr: str | None, *, uppercase: bool = False) -> str:
+        if not expr:
+            return "CAST(NULL AS VARCHAR)"
+        base = f"TRIM(CAST({expr} AS VARCHAR))"
+        if uppercase:
+            base = f"UPPER({base})"
+        return f"(CASE WHEN {base} = '' THEN CAST(NULL AS VARCHAR) ELSE {base} END)"
 
     def _log_municipal_zone_debug(
         self,
@@ -597,7 +605,7 @@ class DuckDBAnalyticsService:
         if not candidate_clauses:
             raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
 
-        uf_expr = f"NULLIF(UPPER(TRIM(CAST({col_uf} AS VARCHAR))), '')"
+        uf_expr = self._nullable_text_sql_expr(col_uf, uppercase=True)
         municipio_expr = f"NULLIF({self._normalized_sql_text_expr(col_municipio)}, '')"
         votes_expr = f"COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)" if col_votes else "0.0"
         grouped = self._rows(
@@ -699,10 +707,10 @@ class DuckDBAnalyticsService:
         if not candidate_clauses:
             return pd.DataFrame(columns=["_zona", "_municipio", "_uf", "_cd_municipio", "votes"]), str(candidate_id)
 
-        uf_expr = f"NULLIF(UPPER(TRIM(CAST({col_uf} AS VARCHAR))), '')" if col_uf else "NULL"
-        municipio_expr = f"NULLIF(TRIM(CAST({col_municipio} AS VARCHAR)), '')" if col_municipio else "NULL"
-        cd_municipio_expr = f"NULLIF(TRIM(CAST({col_cd_municipio} AS VARCHAR)), '')" if col_cd_municipio else "NULL"
-        zona_expr = f"NULLIF(TRIM(CAST({col_zona} AS VARCHAR)), '')"
+        uf_expr = f"UPPER(TRIM(CAST({col_uf} AS VARCHAR)))" if col_uf else "CAST(NULL AS VARCHAR)"
+        municipio_expr = f"TRIM(CAST({col_municipio} AS VARCHAR))" if col_municipio else "CAST(NULL AS VARCHAR)"
+        cd_municipio_expr = f"TRIM(CAST({col_cd_municipio} AS VARCHAR))" if col_cd_municipio else "CAST(NULL AS VARCHAR)"
+        zona_expr = f"TRIM(CAST({col_zona} AS VARCHAR))" if col_zona else "CAST(NULL AS VARCHAR)"
         votes_expr = f"COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)"
 
         sql = (
@@ -715,7 +723,7 @@ class DuckDBAnalyticsService:
             f"{votes_expr} AS _votes "
             f"FROM analytics {where} "
             f"{'AND' if where else 'WHERE'} ({' OR '.join(candidate_clauses)}) "
-            f"AND {zona_expr} IS NOT NULL"
+            f"AND {zona_expr} IS NOT NULL AND {zona_expr} <> ''"
             ") "
             "SELECT _zona, _municipio, _uf, NULLIF(MIN(COALESCE(_cd_municipio, '')), '') AS _cd_municipio, SUM(_votes) AS votes "
             "FROM base "
@@ -2825,31 +2833,33 @@ class DuckDBAnalyticsService:
         else:
             municipal_scope = False
 
-        uf_expr = f"NULLIF(UPPER(TRIM(CAST({col_uf} AS VARCHAR))), '')" if col_uf else "NULL"
-        municipio_expr = f"NULLIF(TRIM(CAST({col_municipio} AS VARCHAR)), '')" if col_municipio else "NULL"
-        cd_municipio_expr = f"NULLIF(TRIM(CAST({col_cd_municipio} AS VARCHAR)), '')" if col_cd_municipio else "NULL"
-        zona_expr = f"NULLIF(TRIM(CAST({col_zona} AS VARCHAR)), '')" if col_zona else "NULL"
+        uf_expr = f"UPPER(TRIM(CAST({col_uf} AS VARCHAR)))" if col_uf else "CAST(NULL AS VARCHAR)"
+        municipio_expr = f"TRIM(CAST({col_municipio} AS VARCHAR))" if col_municipio else "CAST(NULL AS VARCHAR)"
+        cd_municipio_expr = f"TRIM(CAST({col_cd_municipio} AS VARCHAR))" if col_cd_municipio else "CAST(NULL AS VARCHAR)"
+        zona_expr = f"TRIM(CAST({col_zona} AS VARCHAR))" if col_zona else "CAST(NULL AS VARCHAR)"
         lat_expr = f"TRY_CAST({col_lat} AS DOUBLE)" if col_lat else "NULL"
         lng_expr = f"TRY_CAST({col_lng} AS DOUBLE)" if col_lng else "NULL"
 
         if resolved_level == "municipio":
+            municipio_group_expr = cd_municipio_expr if col_cd_municipio else municipio_expr
+            municipio_sql = (
+                "SELECT "
+                f"{municipio_group_expr} AS _key, "
+                f"{municipio_group_expr} AS _label, "
+                f"{uf_expr} AS _uf, "
+                f"{municipio_group_expr} AS _municipio, "
+                f"MIN({cd_municipio_expr}) AS _cd_municipio, "
+                "NULL AS _zona, "
+                f"SUM({votes_expr}) AS votes, "
+                f"AVG({lat_expr}) AS lat, "
+                f"AVG({lng_expr}) AS lng "
+                f"FROM analytics {candidate_where} "
+                f"AND {municipio_group_expr} IS NOT NULL AND {municipio_group_expr} <> '' "
+                "GROUP BY 1, 2, 3, 4, 6 "
+                "ORDER BY votes DESC"
+            )
             grouped = self._df(
-                (
-                    "SELECT "
-                    f"{municipio_expr} AS _key, "
-                    f"{municipio_expr} AS _label, "
-                    f"{uf_expr} AS _uf, "
-                    f"{municipio_expr} AS _municipio, "
-                    f"NULLIF(MIN(COALESCE({cd_municipio_expr}, '')), '') AS _cd_municipio, "
-                    "NULL AS _zona, "
-                    f"SUM({votes_expr}) AS votes, "
-                    f"AVG({lat_expr}) AS lat, "
-                    f"AVG({lng_expr}) AS lng "
-                    f"FROM analytics {candidate_where} "
-                    f"AND {municipio_expr} IS NOT NULL "
-                    "GROUP BY 1, 2, 3, 4, 6 "
-                    "ORDER BY votes DESC"
-                ),
+                municipio_sql,
                 query_params,
             )
         else:
