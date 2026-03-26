@@ -1,54 +1,218 @@
 [
   {
-    "url": "https://exemplo.tse.jus.br/dados/2018/consulta_cand_2018_BRASIL.csv",
-    "target": "2018/consulta_cand_2018_BRASIL.csv"
-  },
-  {
-    "url": "https://exemplo.tse.jus.br/dados/2018/votacao_candidato_munzona_2018_BRASIL.zip",
-    "target": "2018/votacao_candidato_munzona_2018_BRASIL.zip",
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2000.zip",
+    "target": "2000/consulta_cand_2000.zip",
     "extract": true,
     "extract_members": [
-      "*votacao_candidato_munzona_2018_BRASIL*.csv"
+      "*consulta_cand_2000*.csv"
     ]
   },
   {
-    "url": "https://exemplo.tse.jus.br/dados/2020/consulta_cand_2020_BRASIL.csv",
-    "target": "2020/consulta_cand_2020_BRASIL.csv"
-  },
-  {
-    "url": "https://exemplo.tse.jus.br/dados/2020/votacao_candidato_munzona_2020_BRASIL.zip",
-    "target": "2020/votacao_candidato_munzona_2020_BRASIL.zip",
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2000.zip",
+    "target": "2000/votacao_candidato_munzona_2000.zip",
     "extract": true,
     "extract_members": [
-      "*votacao_candidato_munzona_2020_BRASIL*.csv"
+      "*votacao_candidato_munzona_2000*.csv"
     ]
   },
   {
-    "url": "https://exemplo.tse.jus.br/dados/2022/consulta_cand_2022_BRASIL.csv",
-    "target": "2022/consulta_cand_2022_BRASIL.csv"
-  },
-  {
-    "url": "https://exemplo.tse.jus.br/dados/2022/votacao_candidato_munzona_2022_BRASIL.zip",
-    "target": "2022/votacao_candidato_munzona_2022_BRASIL.zip",
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2002.zip",
+    "target": "2002/consulta_cand_2002.zip",
     "extract": true,
     "extract_members": [
-      "*votacao_candidato_munzona_2022_BRASIL*.csv"
+      "*consulta_cand_2002*.csv"
     ]
   },
   {
-    "url": "https://exemplo.tse.jus.br/dados/2024/consulta_cand_2024_BRASIL.csv",
-    "target": "2024/consulta_cand_2024_BRASIL.csv"
-  },
-  {
-    "url": "https://exemplo.tse.jus.br/dados/2024/consulta_vagas_2024_BRASIL.csv",
-    "target": "2024/consulta_vagas_2024_BRASIL.csv"
-  },
-  {
-    "url": "https://exemplo.tse.jus.br/dados/2024/votacao_candidato_munzona_2024_BRASIL.zip",
-    "target": "2024/votacao_candidato_munzona_2024_BRASIL.zip",
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2002.zip",
+    "target": "2002/votacao_candidato_munzona_2002.zip",
     "extract": true,
     "extract_members": [
-      "*votacao_candidato_munzona_2024_BRASIL*.csv"
+      "*votacao_candidato_munzona_2002*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2004.zip",
+    "target": "2004/consulta_cand_2004.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2004*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2004.zip",
+    "target": "2004/votacao_candidato_munzona_2004.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2004*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2006.zip",
+    "target": "2006/consulta_cand_2006.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2006*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2006.zip",
+    "target": "2006/votacao_candidato_munzona_2006.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2006*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2008.zip",
+    "target": "2008/consulta_cand_2008.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2008*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2008.zip",
+    "target": "2008/votacao_candidato_munzona_2008.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2008*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2010.zip",
+    "target": "2010/consulta_cand_2010.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2010*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2010.zip",
+    "target": "2010/votacao_candidato_munzona_2010.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2010*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2012.zip",
+    "target": "2012/consulta_cand_2012.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2012*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2012.zip",
+    "target": "2012/votacao_candidato_munzona_2012.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2012*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2014.zip",
+    "target": "2014/consulta_cand_2014.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2014*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2014.zip",
+    "target": "2014/votacao_candidato_munzona_2014.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2014*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2016.zip",
+    "target": "2016/consulta_cand_2016.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2016*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2016.zip",
+    "target": "2016/votacao_candidato_munzona_2016.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2016*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2018.zip",
+    "target": "2018/consulta_cand_2018.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2018*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2018.zip",
+    "target": "2018/votacao_candidato_munzona_2018.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2018*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2020.zip",
+    "target": "2020/consulta_cand_2020.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2020*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2020.zip",
+    "target": "2020/votacao_candidato_munzona_2020.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2020*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2022.zip",
+    "target": "2022/consulta_cand_2022.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2022*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2022.zip",
+    "target": "2022/votacao_candidato_munzona_2022.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2022*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2024.zip",
+    "target": "2024/consulta_cand_2024.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_cand_2024*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_vagas/consulta_vagas_2024.zip",
+    "target": "2024/consulta_vagas_2024.zip",
+    "extract": true,
+    "extract_members": [
+      "*consulta_vagas_2024*.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2024.zip",
+    "target": "2024/votacao_candidato_munzona_2024.zip",
+    "extract": true,
+    "extract_members": [
+      "*votacao_candidato_munzona_2024*.csv"
     ]
   }
 ]

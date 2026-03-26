@@ -6,7 +6,7 @@ on:
       normalize_years:
         description: "Anos para normalizacao (separados por espaco)"
         required: false
-        default: "2018 2020 2022 2024"
+        default: "2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024"
         type: string
       publish_to_r2:
         description: "Publicar curated/snapshots no Cloudflare R2"
@@ -62,7 +62,7 @@ jobs:
       - name: Normalize raw data
         if: steps.raw_check.outputs.csv_count != '0'
         run: |
-          NORMALIZE_YEARS="${{ inputs.normalize_years || '2018 2020 2022 2024' }}"
+          NORMALIZE_YEARS="${{ inputs.normalize_years || '2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024' }}"
           echo "Normalize years: $NORMALIZE_YEARS"
           python scripts/normalize.py \
             --raw-dir data/raw \
@@ -82,6 +82,27 @@ jobs:
             --input data/curated/analytics.csv \
             --output data/curated/analytics.parquet \
             --delimiter ","
+
+      - name: Validate API endpoints (legacy years)
+        if: steps.raw_check.outputs.csv_count != '0'
+        run: |
+          ANALYTICS_ENGINE=duckdb \
+          ANALYTICS_DATA_PATH=data/curated/analytics.parquet \
+          PREFER_PARQUET_IF_AVAILABLE=true \
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn_data_refresh.log 2>&1 &
+          UVICORN_PID=$!
+          trap 'kill $UVICORN_PID || true' EXIT
+
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          python scripts/validate_endpoints_full.py \
+            --base-url http://127.0.0.1:8000 \
+            --legacy-year 2016
 
       - name: Publish snapshot
         if: steps.raw_check.outputs.csv_count != '0'
