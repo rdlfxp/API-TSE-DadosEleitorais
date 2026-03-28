@@ -281,6 +281,117 @@ def client():
     main_module.service = None
 
 
+def _presidente_nacional_df() -> pd.DataFrame:
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 20,
+                "NM_CANDIDATO": "Presidente A",
+                "SG_PARTIDO": "PAA",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 60000,
+            },
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 20,
+                "NM_CANDIDATO": "Presidente A",
+                "SG_PARTIDO": "PAA",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 50000,
+            },
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 21,
+                "NM_CANDIDATO": "Presidente B",
+                "SG_PARTIDO": "PBB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 55000,
+            },
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 21,
+                "NM_CANDIDATO": "Presidente B",
+                "SG_PARTIDO": "PBB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 45000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 30,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PXX",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 110000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 30,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PXX",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 90000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 31,
+                "NM_CANDIDATO": "Presidente Y",
+                "SG_PARTIDO": "PYY",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 50000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 31,
+                "NM_CANDIDATO": "Presidente Y",
+                "SG_PARTIDO": "PYY",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 40000,
+            },
+        ]
+    )
+    return df.assign(
+        DS_GENERO=df["SQ_CANDIDATO"].map({20: "MASCULINO", 21: "FEMININO", 30: "MASCULINO", 31: "FEMININO"}),
+        DS_OCUPACAO=df["SQ_CANDIDATO"].map({20: "ADVOGADO", 21: "EMPRESARIA", 30: "EMPRESARIO", 31: "PROFESSORA"}),
+        DS_COR_RACA=df["SQ_CANDIDATO"].map({20: "BRANCA", 21: "PARDA", 30: "BRANCA", 31: "PRETA"}),
+        DS_GRAU_INSTRUCAO=df["SQ_CANDIDATO"].map(
+            {20: "SUPERIOR COMPLETO", 21: "SUPERIOR COMPLETO", 30: "SUPERIOR COMPLETO", 31: "SUPERIOR COMPLETO"}
+        ),
+    )
+
+
 def test_health_endpoint(client: TestClient):
     response = client.get("/health")
     assert response.status_code == 200
@@ -337,6 +448,105 @@ def test_overview_with_turno_filter(client: TestClient):
     assert payload["total_candidatos"] == 1
     assert payload["total_eleitos"] == 1
     assert payload["total_votos_nominais"] == 550000
+
+
+def test_presidente_nacional_overview_distribution_top_and_ranking_are_consistent():
+    custom_df = _presidente_nacional_df()
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
+    with TestClient(main_module.app) as test_client:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+
+        overview = test_client.get(
+            "/v1/analytics/overview",
+            params={"year": 2022, "cargo": "Presidente", "turno": 2},
+        )
+        distribution = test_client.get(
+            "/v1/analytics/distribuicao",
+            params={"year": 2022, "cargo": "Presidente", "turno": 2, "group_by": "status"},
+        )
+        top_candidates = test_client.get(
+            "/v1/analytics/top-candidatos",
+            params={"year": 2022, "cargo": "Presidente", "turno": 2, "page": 1, "page_size": 50},
+        )
+        ranking = test_client.get(
+            "/v1/analytics/ranking",
+            params={"year": 2022, "cargo": "Presidente", "turno": 2, "group_by": "partido", "metric": "eleitos", "top_n": 10},
+        )
+
+        assert overview.status_code == 200
+        assert distribution.status_code == 200
+        assert top_candidates.status_code == 200
+        assert ranking.status_code == 200
+
+        overview_payload = overview.json()
+        distribution_payload = distribution.json()
+        top_payload = top_candidates.json()
+        ranking_payload = ranking.json()
+
+        assert overview_payload["total_registros"] == 2
+        assert overview_payload["total_candidatos"] == 2
+        assert overview_payload["total_eleitos"] == 1
+        assert overview_payload["total_votos_nominais"] == 290000
+
+        status_counts = {item["label"]: item["value"] for item in distribution_payload["items"]}
+        assert status_counts == {"ELEITO": 1.0, "NAO ELEITO": 1.0}
+
+        assert top_payload["total"] == 2
+        assert [item["candidate_id"] for item in top_payload["items"]] == ["30", "31"]
+        assert [item["votos"] for item in top_payload["items"]] == [200000, 90000]
+        assert all(item["uf"] is None for item in top_payload["items"])
+
+        ranking_counts = {item["label"]: item["value"] for item in ranking_payload["items"]}
+        assert ranking_counts == {"PXX": 1.0, "PYY": 0.0}
+
+    main_module.service = None
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
+
+
+def test_presidente_nacional_first_round_dedupes_candidates_but_keeps_uf_scope_independent():
+    custom_df = _presidente_nacional_df()
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
+    with TestClient(main_module.app) as test_client:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+
+        national = test_client.get(
+            "/v1/analytics/overview",
+            params={"year": 2018, "cargo": "Presidente", "turno": 1},
+        )
+        sp_scope = test_client.get(
+            "/v1/analytics/overview",
+            params={"year": 2018, "cargo": "Presidente", "turno": 1, "uf": "SP"},
+        )
+        national_top = test_client.get(
+            "/v1/analytics/top-candidatos",
+            params={"year": 2018, "cargo": "Presidente", "turno": 1, "page": 1, "page_size": 50},
+        )
+
+        assert national.status_code == 200
+        assert sp_scope.status_code == 200
+        assert national_top.status_code == 200
+
+        national_payload = national.json()
+        sp_payload = sp_scope.json()
+        top_payload = national_top.json()
+
+        assert national_payload["total_registros"] == 2
+        assert national_payload["total_candidatos"] == 2
+        assert national_payload["total_votos_nominais"] == 210000
+
+        assert sp_payload["total_registros"] == 2
+        assert sp_payload["total_candidatos"] == 2
+        assert sp_payload["total_votos_nominais"] == 115000
+
+        assert [item["candidate_id"] for item in top_payload["items"]] == ["20", "21"]
+        assert [item["votos"] for item in top_payload["items"]] == [110000, 100000]
+
+    main_module.service = None
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
 
 
 def test_top_candidates_respects_top_n(client: TestClient):
@@ -574,6 +784,51 @@ def test_candidates_search_with_filters_and_order(client: TestClient):
     assert payload["items"][1]["candidate_id"] == "2"
     assert payload["items"][0]["candidato"] == "Candidato A"
     assert payload["items"][1]["candidato"] == "Candidato B"
+
+
+def test_candidates_search_prioritizes_votes_desc_when_relevance_differs(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 10,
+                "NR_CANDIDATO": 10,
+                "NM_CANDIDATO": "Ana",
+                "SG_PARTIDO": "AAA",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 100,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 11,
+                "NR_CANDIDATO": 11,
+                "NM_CANDIDATO": "Ana Maria",
+                "SG_PARTIDO": "BBB",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1000,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        response = client.get(
+            "/v1/analytics/candidatos/search",
+            params={"q": "ana", "ano": 2024, "uf": "SP", "cargo": "Prefeito"},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["candidate_id"] for item in payload["items"]] == ["11", "10"]
+    assert [item["votos"] for item in payload["items"]] == [1000, 100]
 
 
 def test_candidates_search_pagination(client: TestClient):

@@ -29,6 +29,36 @@ NATIONAL_CARGOS = {
     "VICE-PRESIDENTE",
 }
 
+VALID_UF_CODES = {
+    "AC",
+    "AL",
+    "AM",
+    "AP",
+    "BA",
+    "CE",
+    "DF",
+    "ES",
+    "GO",
+    "MA",
+    "MG",
+    "MS",
+    "MT",
+    "PA",
+    "PB",
+    "PE",
+    "PI",
+    "PR",
+    "RJ",
+    "RN",
+    "RO",
+    "RR",
+    "RS",
+    "SC",
+    "SE",
+    "SP",
+    "TO",
+}
+
 PARTIDO_SPECTRUM_MAP = {
     "PCDOB": "esquerda",
     "PC DO B": "esquerda",
@@ -247,6 +277,7 @@ class AnalyticsService:
         somente_eleitos: bool = False,
     ) -> pd.DataFrame:
         df = self.dataframe.copy()
+        normalized_uf = self._normalize_uf_filter(uf)
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_uf = self._pick_col(["SG_UF"])
@@ -267,8 +298,8 @@ class AnalyticsService:
                 .str.strip()
             )
             df = df[(turno_num == int(turno)).fillna(False) | (turno_text == str(int(turno))).fillna(False)]
-        if uf and col_uf:
-            df = df[df[col_uf].astype(str).str.upper() == uf.upper()]
+        if normalized_uf and col_uf:
+            df = df[df[col_uf].astype(str).str.upper() == normalized_uf]
         if cargo and col_cargo:
             df = df[df[col_cargo].astype(str).str.lower() == cargo.lower()]
         if partido and col_partido:
@@ -286,6 +317,12 @@ class AnalyticsService:
     def _normalize_text(self, series: pd.Series) -> pd.Series:
         return series.fillna("").astype(str).str.strip()
 
+    def _normalize_uf_filter(self, uf: str | None) -> str | None:
+        normalized = self._normalize_ascii_upper(uf or "")
+        if normalized in {"", "BR", "BRASIL"}:
+            return None
+        return normalized
+
     def _normalize_ascii_upper(self, text: str) -> str:
         normalized = unicodedata.normalize("NFKD", text)
         ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
@@ -300,6 +337,63 @@ class AnalyticsService:
     def _normalize_municipio_filter(self, text: str | None) -> str:
         key = self._normalize_municipio_key(text or "")
         return " ".join(key.split())
+
+    def _is_national_presidential_scope(
+        self,
+        *,
+        cargo: str | None,
+        uf: str | None,
+        municipio: str | None,
+    ) -> bool:
+        cargo_norm = self._normalize_ascii_upper(cargo or "")
+        municipio_norm = self._normalize_municipio_filter(municipio) if municipio else ""
+        return cargo_norm == "PRESIDENTE" and self._normalize_uf_filter(uf) is None and not municipio_norm
+
+    def _dedupe_national_presidential_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df.copy()
+
+        col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        if not col_candidato:
+            return df.copy()
+
+        candidate_key = (
+            self._normalize_text(df[col_candidate_key]).replace("", pd.NA)
+            if col_candidate_key
+            else self._normalize_text(df[col_candidato]).str.lower().replace("", pd.NA)
+        )
+        dedup = df.assign(_candidate_key=candidate_key).dropna(subset=["_candidate_key"]).copy()
+        if dedup.empty:
+            return dedup.drop(columns=["_candidate_key"], errors="ignore")
+
+        col_votos = self._pick_col(
+            ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
+        )
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        if col_situacao:
+            status_priority = dedup.assign(_eleito_rank=self._is_elected(dedup[col_situacao]).astype(int))
+            status_priority = (
+                status_priority.sort_values(["_candidate_key", "_eleito_rank"], ascending=[True, False])
+                .drop_duplicates(subset=["_candidate_key"], keep="first")
+                .loc[:, ["_candidate_key", col_situacao]]
+            )
+        else:
+            status_priority = None
+
+        agg_spec: dict[str, str] = {}
+        for col in df.columns:
+            if col == col_votos:
+                agg_spec[col] = "sum"
+            elif col != col_situacao:
+                agg_spec[col] = "first"
+
+        grouped = dedup.groupby("_candidate_key", as_index=False).agg(agg_spec)
+        if col_situacao and status_priority is not None:
+            grouped = grouped.merge(status_priority, on="_candidate_key", how="left")
+        if col_votos:
+            grouped.loc[:, col_votos] = grouped[col_votos].astype(int)
+        return grouped.drop(columns=["_candidate_key"], errors="ignore")
 
     def _log_municipal_zone_debug(
         self,
@@ -957,6 +1051,7 @@ class AnalyticsService:
                 .str.strip()
                 .replace("", pd.NA)
                 .dropna()
+                .loc[lambda series: series.isin(VALID_UF_CODES)]
                 .unique()
                 .tolist()
             )
@@ -985,6 +1080,8 @@ class AnalyticsService:
         municipio: str | None = None,
     ) -> dict:
         df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+        if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio):
+            df = self._dedupe_national_presidential_candidates(df)
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
@@ -1087,7 +1184,8 @@ class AnalyticsService:
         else:
             grouped["_uf_out"] = None
 
-        grouped = grouped.sort_values("_votos", ascending=False)
+        grouped = grouped.assign(_candidato_sort=self._normalize_text(grouped[col_candidato]).str.lower())
+        grouped = grouped.sort_values(["_votos", "_candidato_sort"], ascending=[False, True])
         total = int(len(grouped))
         total_pages = (total + effective_page_size - 1) // effective_page_size
         start = (page - 1) * effective_page_size
@@ -1156,6 +1254,8 @@ class AnalyticsService:
             municipio=municipio,
             somente_eleitos=somente_eleitos,
         )
+        if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio) and group_by != "uf":
+            df = self._dedupe_national_presidential_candidates(df)
         counts = (
             df[target_col]
             .fillna("N/A")
@@ -1468,6 +1568,8 @@ class AnalyticsService:
             municipio=municipio,
             somente_eleitos=somente_eleitos,
         )
+        if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio) and group_by != "uf":
+            df = self._dedupe_national_presidential_candidates(df)
         agg = self._aggregate_metric(df, metric=metric, group_cols=[col_group])
         if agg is None or agg.empty:
             return []
@@ -2987,7 +3089,7 @@ class AnalyticsService:
                 as_index=False,
             )
             .agg(_score=("_score", "max"), _votos=("_votos", "sum"))
-            .sort_values(by=["_score", "_votos", "_candidato"], ascending=[False, False, True])
+            .sort_values(by=["_votos", "_score", "_candidato"], ascending=[False, False, True])
         )
 
         total = int(len(grouped))

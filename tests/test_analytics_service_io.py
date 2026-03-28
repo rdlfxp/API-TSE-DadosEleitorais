@@ -54,6 +54,32 @@ def test_from_file_loads_parquet(tmp_path, sample_df: pd.DataFrame):
     assert service.filter_options()["ufs"] == ["SP"]
 
 
+def test_filter_options_excludes_non_official_uf_codes(tmp_path):
+    df = pd.DataFrame(
+        [
+            {"ANO_ELEICAO": 2024, "SG_UF": "SP", "DS_CARGO": "Prefeito"},
+            {"ANO_ELEICAO": 2022, "SG_UF": "ZZ", "DS_CARGO": "Presidente"},
+            {"ANO_ELEICAO": 2010, "SG_UF": "VT", "DS_CARGO": "Presidente"},
+        ]
+    )
+    path = tmp_path / "analytics.csv"
+    df.to_csv(path, index=False)
+
+    pandas_service = AnalyticsService.from_file(
+        file_path=str(path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    assert pandas_service.filter_options()["ufs"] == ["SP"]
+    assert duckdb_service.filter_options()["ufs"] == ["SP"]
+
+
 def test_from_file_rejects_unsupported_extension(tmp_path):
     path = tmp_path / "analytics.txt"
     path.write_text("invalid", encoding="utf-8")
@@ -177,3 +203,144 @@ def test_resolve_municipal_scope_parity_between_pandas_and_duckdb(tmp_path):
     assert pandas_scope["used_uf"] == "SP"
     assert pandas_scope["used_municipio"] == "SAO PAULO"
     assert pandas_scope["disambiguation_applied"] is True
+
+
+def test_search_candidates_orders_by_votes_desc_even_with_relevance_score(tmp_path):
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": "10",
+                "NM_CANDIDATO": "Ana",
+                "NR_CANDIDATO": "10",
+                "SG_PARTIDO": "AAA",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 100,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": "11",
+                "NM_CANDIDATO": "Ana Maria",
+                "NR_CANDIDATO": "11",
+                "SG_PARTIDO": "BBB",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 1000,
+            },
+        ]
+    )
+    csv_path = tmp_path / "search_votes_priority.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    pandas_payload = pandas_service.search_candidates(q="ana", ano=2024, uf="SP", cargo="Prefeito", page=1, page_size=10)
+    duckdb_payload = duckdb_service.search_candidates(q="ana", ano=2024, uf="SP", cargo="Prefeito", page=1, page_size=10)
+
+    assert [item["candidate_id"] for item in pandas_payload["items"]] == ["11", "10"]
+    assert [item["candidate_id"] for item in duckdb_payload["items"]] == ["11", "10"]
+
+
+def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(tmp_path):
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 30,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PXX",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 110000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 30,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PXX",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 90000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 31,
+                "NM_CANDIDATO": "Presidente Y",
+                "SG_PARTIDO": "PYY",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 50000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 2,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 31,
+                "NM_CANDIDATO": "Presidente Y",
+                "SG_PARTIDO": "PYY",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 40000,
+            },
+        ]
+    )
+    csv_path = tmp_path / "presidente_nacional.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    overview_kwargs = {"ano": 2022, "turno": 2, "cargo": "Presidente", "uf": None, "municipio": None}
+    distribution_kwargs = {
+        "group_by": "status",
+        "ano": 2022,
+        "turno": 2,
+        "cargo": "Presidente",
+        "uf": None,
+        "municipio": None,
+    }
+    ranking_kwargs = {
+        "group_by": "partido",
+        "metric": "eleitos",
+        "ano": 2022,
+        "turno": 2,
+        "cargo": "Presidente",
+        "uf": None,
+        "municipio": None,
+        "top_n": 10,
+    }
+
+    assert pandas_service.overview(**overview_kwargs) == duckdb_service.overview(**overview_kwargs)
+    assert pandas_service.distribution(**distribution_kwargs) == duckdb_service.distribution(**distribution_kwargs)
+    assert pandas_service.top_candidates(ano=2022, turno=2, cargo="Presidente", page=1, page_size=50) == duckdb_service.top_candidates(
+        ano=2022,
+        turno=2,
+        cargo="Presidente",
+        page=1,
+        page_size=50,
+    )
+    assert pandas_service.ranking(**ranking_kwargs) == duckdb_service.ranking(**ranking_kwargs)
