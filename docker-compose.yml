@@ -5,7 +5,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      ANALYTICS_DATA_PATH: data/curated/analytics.csv
+      ANALYTICS_DATA_PATH: data/curated/analytics.parquet
       ANALYTICS_SEPARATOR: ","
       ANALYTICS_ENCODING: "utf-8"
     volumes:

@@ -109,6 +109,10 @@ async def lifespan(_: FastAPI):
         parquet_candidate = file_path.with_suffix(".parquet")
         if parquet_candidate.exists():
             selected_path = parquet_candidate
+    elif settings.prefer_parquet_if_available and file_path.suffix.lower() == ".parquet":
+        csv_candidate = file_path.with_suffix(".csv")
+        if not selected_path.exists() and csv_candidate.exists():
+            selected_path = csv_candidate
 
     if not selected_path.exists():
         downloaded_path = ensure_local_analytics_from_r2(
@@ -248,6 +252,16 @@ def _resolve_municipality_param(municipality: str | None, municipio: str | None)
     normalized = _normalize_ascii_upper(resolved)
     normalized = " ".join(normalized.split())
     return normalized or None
+
+
+def _resolve_year_param(ano: int | None, year: int | None) -> int | None:
+    if ano is not None and year is not None and int(ano) != int(year):
+        raise HTTPException(status_code=400, detail="Parametros conflitantes: ano e year com valores diferentes.")
+    if year is not None:
+        return int(year)
+    if ano is not None:
+        return int(ano)
+    return None
 
 
 def _run_municipal_vote_flow(
@@ -726,17 +740,25 @@ def metrics() -> str:
 def analytics_overview(
     request: Request,
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
 ) -> OverviewResponse:
-    filters = {"ano": ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio}
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
+    filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio}
     data = _run_analytics_query(
         request=request,
         endpoint="/v1/analytics/overview",
         filters=filters,
-        operation=lambda: get_service().overview(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio),
+        operation=lambda: get_service().overview(
+            ano=resolved_ano,
+            turno=turno,
+            uf=uf,
+            cargo=cargo,
+            municipio=municipio,
+        ),
         cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/overview"],
     )
     return OverviewResponse(**data)
@@ -758,6 +780,7 @@ def analytics_filter_options(request: Request) -> FilterOptionsResponse:
 def analytics_top_candidates(
     request: Request,
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
@@ -767,9 +790,10 @@ def analytics_top_candidates(
     page: int = Query(default=1, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> TopCandidatesResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     effective_page_size = min(page_size or top_n or settings.default_top_n, settings.max_top_n)
     filters = {
-        "ano": ano,
+        "ano": resolved_ano,
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
@@ -795,7 +819,7 @@ def analytics_top_candidates(
         endpoint="/v1/analytics/top-candidatos",
         filters=filters,
         operation=lambda: get_service().top_candidates(
-            ano=ano,
+            ano=resolved_ano,
             turno=turno,
             uf=uf,
             cargo=cargo,
@@ -815,7 +839,8 @@ def analytics_top_candidates(
 def analytics_candidates_text_search(
     request: Request,
     q: str = Query(..., min_length=2, description="Busca textual por nome do candidato"),
-    ano: int = Query(...),
+    ano: int | None = Query(default=None),
+    year: int | None = Query(default=None),
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
@@ -823,9 +848,12 @@ def analytics_candidates_text_search(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateSearchResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
+    if resolved_ano is None:
+        raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente: ano (ou year).")
     filters = {
         "q": q,
-        "ano": ano,
+        "ano": resolved_ano,
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
@@ -839,7 +867,7 @@ def analytics_candidates_text_search(
         filters=filters,
         operation=lambda: get_service().search_candidates(
             q=q,
-            ano=ano,
+            ano=resolved_ano,
             turno=turno,
             uf=uf,
             cargo=cargo,
@@ -861,7 +889,8 @@ def analytics_candidates_text_search(
 def analytics_candidates_search_legacy(
     request: Request,
     query: str = Query(..., min_length=2, description="Parametro legado. Use q em /v1/analytics/candidatos/search"),
-    ano: int = Query(...),
+    ano: int | None = Query(default=None),
+    year: int | None = Query(default=None),
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
@@ -869,9 +898,12 @@ def analytics_candidates_search_legacy(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateSearchResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
+    if resolved_ano is None:
+        raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente: ano (ou year).")
     filters = {
         "query": query,
-        "ano": ano,
+        "ano": resolved_ano,
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
@@ -885,7 +917,7 @@ def analytics_candidates_search_legacy(
         filters=filters,
         operation=lambda: get_service().search_candidates(
             q=query,
-            ano=ano,
+            ano=resolved_ano,
             turno=turno,
             uf=uf,
             cargo=cargo,
@@ -1139,18 +1171,20 @@ def analytics_distribution(
         description="Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf",
     ),
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
     somente_eleitos: bool = False,
 ) -> GroupedDistributionResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     allowed_group_by = {"status", "genero", "instrucao", "cor_raca", "estado_civil", "ocupacao", "cargo", "uf"}
     if group_by not in allowed_group_by:
         raise HTTPException(status_code=400, detail="group_by invalido ou coluna ausente no dataset")
     filters = {
         "group_by": group_by,
-        "ano": ano,
+        "ano": resolved_ano,
         "turno": turno,
         "uf": uf,
         "cargo": cargo,
@@ -1163,7 +1197,7 @@ def analytics_distribution(
         filters=filters,
         operation=lambda: get_service().distribution(
             group_by=group_by,
-            ano=ano,
+            ano=resolved_ano,
             turno=turno,
             uf=uf,
             cargo=cargo,
@@ -1178,13 +1212,15 @@ def analytics_distribution(
 @app.get("/v1/analytics/cor-raca-comparativo", response_model=CorRacaComparativoResponse, responses=ERROR_RESPONSES)
 def analytics_cor_raca_comparativo(
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
 ) -> CorRacaComparativoResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     data = get_service().cor_raca_comparativo(
-        ano=ano,
+        ano=resolved_ano,
         turno=turno,
         uf=uf,
         cargo=cargo,
@@ -1196,14 +1232,16 @@ def analytics_cor_raca_comparativo(
 @app.get("/v1/analytics/ocupacao-genero", response_model=OccupationGenderResponse, responses=ERROR_RESPONSES)
 def analytics_occupation_gender(
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
     somente_eleitos: bool = False,
 ) -> OccupationGenderResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     items = get_service().occupation_gender_distribution(
-        ano=ano,
+        ano=resolved_ano,
         turno=turno,
         uf=uf,
         cargo=cargo,
@@ -1216,14 +1254,16 @@ def analytics_occupation_gender(
 @app.get("/v1/analytics/idade", response_model=AgeStatsResponse, responses=ERROR_RESPONSES)
 def analytics_age(
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
     somente_eleitos: bool = True,
 ) -> AgeStatsResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     data = get_service().age_stats(
-        ano=ano,
+        ano=resolved_ano,
         turno=turno,
         uf=uf,
         cargo=cargo,
@@ -1263,6 +1303,7 @@ def analytics_ranking(
     group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"),
     metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
@@ -1270,11 +1311,12 @@ def analytics_ranking(
     somente_eleitos: bool = False,
     top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> RankingResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     effective_top_n = top_n or settings.default_top_n
     items = get_service().ranking(
         group_by=group_by,
         metric=metric,
-        ano=ano,
+        ano=resolved_ano,
         turno=turno,
         uf=uf,
         cargo=cargo,
@@ -1291,14 +1333,16 @@ def analytics_ranking(
 def analytics_uf_map(
     metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"),
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     cargo: str | None = None,
     municipio: str | None = None,
     somente_eleitos: bool = False,
 ) -> UFMapResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     items = get_service().uf_map(
         metric=metric,
-        ano=ano,
+        ano=resolved_ano,
         turno=turno,
         cargo=cargo,
         municipio=municipio,
@@ -1313,14 +1357,16 @@ def analytics_uf_map(
 def analytics_official_vacancies(
     group_by: str = Query(default="cargo", description="Valores: cargo, uf, municipio"),
     ano: int | None = None,
+    year: int | None = None,
     turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
     municipio: str | None = None,
 ) -> OfficialVacanciesResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     data = get_service().official_vacancies(
         group_by=group_by,
-        ano=ano,
+        ano=resolved_ano,
         turno=turno,
         uf=uf,
         cargo=cargo,
@@ -1341,21 +1387,23 @@ def analytics_official_vacancies(
 def analytics_polarizacao(
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     ano: int | None = None,
+    year: int | None = None,
     map_mode: str | None = Query(default=None),
     ano_governador: int | None = None,
     turno_governador: int | None = Query(default=None, ge=1, le=2),
     ano_municipal: int | None = None,
     turno_municipal: int | None = Query(default=None, ge=1, le=2),
 ) -> PolarizacaoResponse:
+    resolved_ano = _resolve_year_param(ano=ano, year=year)
     mode = (map_mode or "").strip().lower()
-    if ano is not None:
+    if resolved_ano is not None:
         if mode == "statebygovernor" and ano_governador is None:
-            ano_governador = ano
+            ano_governador = resolved_ano
         elif mode == "municipalitybymayor" and ano_municipal is None:
-            ano_municipal = ano
+            ano_municipal = resolved_ano
         elif ano_governador is None and ano_municipal is None:
-            ano_governador = ano
-            ano_municipal = ano
+            ano_governador = resolved_ano
+            ano_municipal = resolved_ano
 
     data = get_service().polarizacao(
         uf=uf,
