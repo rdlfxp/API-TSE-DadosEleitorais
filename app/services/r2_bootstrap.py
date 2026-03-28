@@ -62,10 +62,22 @@ def ensure_local_analytics_from_r2(preferred_path: Path, prefer_parquet: bool) -
         csv_path = preferred_path
         parquet_path = preferred_path.with_suffix(".parquet")
 
-    if prefer_parquet and _download(client, settings.r2_object_key_parquet, parquet_path):
-        return parquet_path
+    ordered_candidates: list[tuple[str, Path]]
+    if prefer_parquet:
+        ordered_candidates = [
+            (settings.r2_object_key_parquet, parquet_path),
+            (settings.r2_object_key_csv, csv_path),
+        ]
+    else:
+        ordered_candidates = [
+            (settings.r2_object_key_csv, csv_path),
+            (settings.r2_object_key_parquet, parquet_path),
+        ]
 
-    if _download(client, settings.r2_object_key_csv, csv_path):
-        return csv_path
+    for object_key, destination in ordered_candidates:
+        if not object_key:
+            continue
+        if _download(client, object_key, destination):
+            return destination
 
     return None

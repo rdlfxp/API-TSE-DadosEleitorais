@@ -19,13 +19,13 @@ Organizacao recomendada:
 - `data/curated/analytics.csv`: base consolidada consumida pela API (saida padrao)
 - `data/curated/quality_report.json`: relatorio de qualidade da consolidacao
 
-Por padrao, a API tenta carregar `data/curated/analytics.csv`.
+Por padrao, a API tenta carregar `data/curated/analytics.parquet`.
 
 Você pode configurar via `.env`:
 
 ```env
 ANALYTICS_ENGINE=duckdb
-ANALYTICS_DATA_PATH=data/curated/analytics.csv
+ANALYTICS_DATA_PATH=data/curated/analytics.parquet
 ANALYTICS_SEPARATOR=,
 ANALYTICS_ENCODING=utf-8
 RATE_LIMIT_ENABLED=true
@@ -50,7 +50,16 @@ R2_SECRET_ACCESS_KEY=sua_secret_key
 R2_BUCKET=tse-curated
 R2_OBJECT_KEY_CSV=latest/analytics.csv
 R2_OBJECT_KEY_PARQUET=latest/analytics.parquet
+R2_CONNECT_TIMEOUT_SECONDS=5
+R2_READ_TIMEOUT_SECONDS=30
 ```
+
+Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap tenta primeiro `latest/analytics.parquet` e faz fallback para `latest/analytics.csv`.
+
+## Compatibilidade de parâmetros de ano
+
+Os endpoints de analytics aceitam tanto `ano` quanto `year`.
+Se ambos forem enviados com valores diferentes, a API retorna `400`.
 
 ## 3) Run
 

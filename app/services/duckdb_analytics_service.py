@@ -30,6 +30,36 @@ NATIONAL_CARGOS = {
     "VICE-PRESIDENTE",
 }
 
+VALID_UF_CODES = {
+    "AC",
+    "AL",
+    "AM",
+    "AP",
+    "BA",
+    "CE",
+    "DF",
+    "ES",
+    "GO",
+    "MA",
+    "MG",
+    "MS",
+    "MT",
+    "PA",
+    "PB",
+    "PE",
+    "PI",
+    "PR",
+    "RJ",
+    "RN",
+    "RO",
+    "RR",
+    "RS",
+    "SC",
+    "SE",
+    "SP",
+    "TO",
+}
+
 PARTIDO_SPECTRUM_MAP = {
     "PCDOB": "esquerda",
     "PC DO B": "esquerda",
@@ -500,6 +530,7 @@ class DuckDBAnalyticsService:
     ) -> tuple[str, list]:
         clauses = []
         params: list = []
+        normalized_uf = self._normalize_uf_filter(uf)
 
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
@@ -522,9 +553,9 @@ class DuckDBAnalyticsService:
                 )
             )
             params.append(turno)
-        if uf and col_uf:
+        if normalized_uf and col_uf:
             clauses.append(f"UPPER(TRIM(CAST({col_uf} AS VARCHAR))) = ?")
-            params.append(uf.upper())
+            params.append(normalized_uf)
         if cargo and col_cargo:
             clauses.append(f"LOWER(TRIM(CAST({col_cargo} AS VARCHAR))) = ?")
             params.append(cargo.lower())
@@ -539,6 +570,67 @@ class DuckDBAnalyticsService:
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
+
+    def _normalize_uf_filter(self, uf: str | None) -> str | None:
+        normalized = self._normalize_value(uf or "", uppercase=True)
+        if normalized in {"", "BR", "BRASIL"}:
+            return None
+        return normalized
+
+    def _is_national_presidential_scope(
+        self,
+        *,
+        cargo: str | None,
+        uf: str | None,
+        municipio: str | None,
+    ) -> bool:
+        cargo_norm = self._normalize_value(cargo or "", uppercase=True)
+        municipio_norm = self._normalize_municipio_filter(municipio) if municipio else ""
+        return cargo_norm == "PRESIDENTE" and self._normalize_uf_filter(uf) is None and not municipio_norm
+
+    def _dedupe_national_presidential_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df.copy()
+
+        col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        if not col_candidato:
+            return df.copy()
+
+        candidate_key = (
+            df[col_candidate_key].fillna("").astype(str).str.strip().replace("", pd.NA)
+            if col_candidate_key
+            else df[col_candidato].fillna("").astype(str).str.strip().str.lower().replace("", pd.NA)
+        )
+        dedup = df.assign(_candidate_key=candidate_key).dropna(subset=["_candidate_key"]).copy()
+        if dedup.empty:
+            return dedup.drop(columns=["_candidate_key"], errors="ignore")
+
+        col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        if col_situacao:
+            status_priority = dedup.assign(_eleito_rank=self._is_elected_series(dedup[col_situacao]).astype(int))
+            status_priority = (
+                status_priority.sort_values(["_candidate_key", "_eleito_rank"], ascending=[True, False])
+                .drop_duplicates(subset=["_candidate_key"], keep="first")
+                .loc[:, ["_candidate_key", col_situacao]]
+            )
+        else:
+            status_priority = None
+
+        agg_spec: dict[str, str] = {}
+        for col in df.columns:
+            if col == col_votos:
+                agg_spec[col] = "sum"
+            elif col != col_situacao:
+                agg_spec[col] = "first"
+
+        grouped = dedup.groupby("_candidate_key", as_index=False).agg(agg_spec)
+        if col_situacao and status_priority is not None:
+            grouped = grouped.merge(status_priority, on="_candidate_key", how="left")
+        if col_votos:
+            grouped.loc[:, col_votos] = pd.to_numeric(grouped[col_votos], errors="coerce").fillna(0).astype(int)
+        return grouped.drop(columns=["_candidate_key"], errors="ignore")
 
     def _df(self, query: str, params: list | None = None) -> pd.DataFrame:
         with self._query_lock:
@@ -1206,10 +1298,14 @@ class DuckDBAnalyticsService:
         ufs: list[str] = []
         col_uf = self._pick_col(["SG_UF"])
         if col_uf:
+            valid_ufs_sql = ", ".join(f"'{uf}'" for uf in sorted(VALID_UF_CODES))
             rows = self._rows(
                 (
                     f"SELECT DISTINCT UPPER(TRIM(CAST({col_uf} AS VARCHAR))) AS uf "
-                    "FROM analytics WHERE COALESCE(TRIM(CAST(SG_UF AS VARCHAR)), '') <> '' ORDER BY uf"
+                    "FROM analytics "
+                    "WHERE COALESCE(TRIM(CAST(SG_UF AS VARCHAR)), '') <> '' "
+                    f"AND UPPER(TRIM(CAST({col_uf} AS VARCHAR))) IN ({valid_ufs_sql}) "
+                    "ORDER BY uf"
                 )
             )
             ufs = [str(r[0]) for r in rows if r[0] is not None]
@@ -1235,6 +1331,25 @@ class DuckDBAnalyticsService:
         cargo: str | None = None,
         municipio: str | None = None,
     ) -> dict:
+        if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio):
+            df = self._filtered_df(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+            df = self._dedupe_national_presidential_candidates(df)
+            col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+            col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+            col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+            total_eleitos = int(self._is_elected_series(df[col_situacao]).sum()) if col_situacao and col_situacao in df.columns else None
+            total_votos = (
+                int(pd.to_numeric(df[col_votos], errors="coerce").fillna(0).sum())
+                if col_votos and col_votos in df.columns
+                else None
+            )
+            return {
+                "total_registros": int(len(df)),
+                "total_candidatos": int(df[col_candidato].nunique()) if col_candidato and col_candidato in df.columns else None,
+                "total_eleitos": total_eleitos,
+                "total_votos_nominais": total_votos,
+            }
+
         where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
         col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
@@ -1431,6 +1546,32 @@ class DuckDBAnalyticsService:
             municipio=municipio,
             somente_eleitos=somente_eleitos,
         )
+        if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio) and group_by != "uf":
+            df = self._filtered_df(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+            if somente_eleitos:
+                col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+                if col_situacao and col_situacao in df.columns:
+                    df = df[self._is_elected_series(df[col_situacao])]
+            df = self._dedupe_national_presidential_candidates(df)
+            counts = (
+                df[target_col]
+                .fillna("N/A")
+                .astype(str)
+                .str.strip()
+                .replace("", "N/A")
+                .value_counts(dropna=False)
+                .rename_axis("label")
+                .reset_index(name="value")
+            )
+            total = float(counts["value"].sum()) or 1.0
+            return [
+                {
+                    "label": str(row["label"]),
+                    "value": float(row["value"]),
+                    "percentage": round((float(row["value"]) / total) * 100, 2),
+                }
+                for _, row in counts.iterrows()
+            ]
         rows = self._rows(
             (
                 "SELECT "
@@ -1745,6 +1886,64 @@ class DuckDBAnalyticsService:
         metric_sql = self._metric_sql(metric)
         if not target_col or not metric_sql:
             return []
+
+        if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio) and group_by != "uf":
+            df = self._filtered_df(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+            if somente_eleitos:
+                col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+                if col_situacao and col_situacao in df.columns:
+                    df = df[self._is_elected_series(df[col_situacao])]
+            df = self._dedupe_national_presidential_candidates(df)
+            if df.empty:
+                return []
+
+            col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+            col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+            col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+            prepared = df.assign(
+                _group=df[target_col].fillna("N/A").astype(str).str.strip().replace("", "N/A")
+            )
+            if metric == "registros":
+                agg = prepared.groupby("_group", dropna=False).size().reset_index(name="value")
+            elif metric == "votos_nominais":
+                if not col_votos or col_votos not in prepared.columns:
+                    return []
+                agg = (
+                    prepared.assign(_value=pd.to_numeric(prepared[col_votos], errors="coerce").fillna(0))
+                    .groupby("_group", dropna=False)["_value"]
+                    .sum()
+                    .reset_index(name="value")
+                )
+            elif metric == "candidatos":
+                if not col_candidato or col_candidato not in prepared.columns:
+                    return []
+                agg = (
+                    prepared.groupby("_group", dropna=False)[col_candidato]
+                    .nunique(dropna=True)
+                    .reset_index(name="value")
+                )
+            elif metric == "eleitos":
+                if not col_situacao or col_situacao not in prepared.columns:
+                    return []
+                agg = (
+                    prepared.assign(_value=self._is_elected_series(prepared[col_situacao]).astype(int))
+                    .groupby("_group", dropna=False)["_value"]
+                    .sum()
+                    .reset_index(name="value")
+                )
+            else:
+                return []
+
+            agg = agg.sort_values("value", ascending=False).head(min(top_n or self.default_top_n, self.max_top_n))
+            total = float(agg["value"].sum()) or 1.0
+            return [
+                {
+                    "label": str(row["_group"]),
+                    "value": float(row["value"] or 0),
+                    "percentage": round((float(row["value"] or 0) / total) * 100, 2),
+                }
+                for _, row in agg.iterrows()
+            ]
 
         where, params = self._where(
             ano=ano,
@@ -3401,7 +3600,7 @@ class DuckDBAnalyticsService:
                 f"  FROM analytics {filter_sql} "
                 "  GROUP BY 1"
                 ") ranked "
-                "ORDER BY score DESC, COALESCE(votos, 0) DESC, candidato ASC LIMIT ? OFFSET ?"
+                "ORDER BY COALESCE(votos, 0) DESC, score DESC, candidato ASC LIMIT ? OFFSET ?"
             ),
             [q_norm, f"{q_norm}%"] + base_params + [page_size, offset],
         )
