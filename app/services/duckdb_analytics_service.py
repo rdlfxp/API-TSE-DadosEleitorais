@@ -1225,8 +1225,7 @@ class DuckDBAnalyticsService:
             )
             cargos = [str(r[0]) for r in rows if r[0] is not None]
 
-        years = sorted(set(anos).union(SUPPORTED_ANALYTICS_YEARS))
-        return {"anos": years, "ufs": ufs, "cargos": cargos}
+        return {"anos": anos, "ufs": ufs, "cargos": cargos}
 
     def overview(
         self,
