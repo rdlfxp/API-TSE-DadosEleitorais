@@ -69,6 +69,7 @@ MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
     "/v1/analytics/candidatos/search": 120,
     "/v1/analytics/candidatos": 120,
     "/v1/analytics/distribuicao": 600,
+    "/v1/analytics/polarizacao": 1200,
 }
 
 EDGE_CACHE_TTL_BY_PATH: dict[str, int] = {
@@ -262,6 +263,18 @@ def _resolve_year_param(ano: int | None, year: int | None) -> int | None:
     if ano is not None:
         return int(ano)
     return None
+
+
+def _normalize_search_cache_key(query: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(query or "").strip())
+    ascii_only = "".join(char for char in normalized if not unicodedata.combining(char))
+    return " ".join(ascii_only.lower().split())
+
+
+def _is_unscoped_candidate_search(query: str, uf: str | None, cargo: str | None, partido: str | None) -> bool:
+    if uf or cargo or partido:
+        return False
+    return len(_normalize_search_cache_key(query).replace(" ", "")) < 8
 
 
 def _run_municipal_vote_flow(
@@ -851,8 +864,10 @@ def analytics_candidates_text_search(
     resolved_ano = _resolve_year_param(ano=ano, year=year)
     if resolved_ano is None:
         raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente: ano (ou year).")
+    if _is_unscoped_candidate_search(q, uf=uf, cargo=cargo, partido=partido):
+        return CandidateSearchResponse(page=page, page_size=page_size, total=0, total_pages=0, items=[])
     filters = {
-        "q": q,
+        "q": _normalize_search_cache_key(q),
         "ano": resolved_ano,
         "turno": turno,
         "uf": uf,
@@ -901,8 +916,10 @@ def analytics_candidates_search_legacy(
     resolved_ano = _resolve_year_param(ano=ano, year=year)
     if resolved_ano is None:
         raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente: ano (ou year).")
+    if _is_unscoped_candidate_search(query, uf=uf, cargo=cargo, partido=partido):
+        return CandidateSearchResponse(page=page, page_size=page_size, total=0, total_pages=0, items=[])
     filters = {
-        "query": query,
+        "query": _normalize_search_cache_key(query),
         "ano": resolved_ano,
         "turno": turno,
         "uf": uf,
@@ -1385,6 +1402,7 @@ def analytics_official_vacancies(
 
 @app.get("/v1/analytics/polarizacao", response_model=PolarizacaoResponse, responses=ERROR_RESPONSES)
 def analytics_polarizacao(
+    request: Request,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     ano: int | None = None,
     year: int | None = None,
@@ -1405,12 +1423,26 @@ def analytics_polarizacao(
             ano_governador = resolved_ano
             ano_municipal = resolved_ano
 
-    data = get_service().polarizacao(
-        uf=uf,
-        ano_governador=ano_governador,
-        turno_governador=turno_governador,
-        ano_municipal=ano_municipal,
-        turno_municipal=turno_municipal,
-        map_mode=map_mode,
+    filters = {
+        "uf": uf,
+        "ano_governador": ano_governador,
+        "turno_governador": turno_governador,
+        "ano_municipal": ano_municipal,
+        "turno_municipal": turno_municipal,
+        "map_mode": mode,
+    }
+    data = _run_analytics_query(
+        request=request,
+        endpoint="/v1/analytics/polarizacao",
+        filters=filters,
+        operation=lambda: get_service().polarizacao(
+            uf=uf,
+            ano_governador=ano_governador,
+            turno_governador=turno_governador,
+            ano_municipal=ano_municipal,
+            turno_municipal=turno_municipal,
+            map_mode=map_mode,
+        ),
+        cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/polarizacao"],
     )
     return PolarizacaoResponse(**data)
