@@ -1,10 +1,12 @@
 import json
 import logging
 import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from email.utils import formatdate
 import hashlib
 from pathlib import Path
+import resource
 from threading import Lock
 from typing import Any, Callable, Literal
 import unicodedata
@@ -59,7 +61,7 @@ METRICS = {
 RATE_LIMIT_COUNTERS: dict[tuple[str, int], int] = {}
 RATE_LIMIT_LAST_CLEANUP_BUCKET = -1
 ANALYTICS_CACHE_LOCK = Lock()
-ANALYTICS_CACHE: dict[str, tuple[float, Any]] = {}
+ANALYTICS_CACHE: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
 DATA_LAST_MODIFIED_TS: float | None = None
 
 MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
@@ -148,6 +150,7 @@ async def lifespan(_: FastAPI):
                 create_indexes=settings.duckdb_create_indexes,
                 memory_limit_mb=settings.duckdb_memory_limit_mb,
                 threads=settings.duckdb_threads,
+                database_path=settings.duckdb_database_path,
             )
         else:
             service = AnalyticsService.from_file(
@@ -173,6 +176,7 @@ async def lifespan(_: FastAPI):
                     "duckdb_create_indexes": bool(settings.duckdb_create_indexes),
                     "duckdb_memory_limit_mb": int(settings.duckdb_memory_limit_mb),
                     "duckdb_threads": int(settings.duckdb_threads),
+                    "duckdb_database_path": str(settings.duckdb_database_path),
                     "rows": rows_loaded,
                 },
                 ensure_ascii=False,
@@ -190,6 +194,8 @@ async def lifespan(_: FastAPI):
             )
         )
     yield
+    if isinstance(service, DuckDBAnalyticsService):
+        service.close()
     service = None
     DATA_LAST_MODIFIED_TS = None
 
@@ -275,6 +281,16 @@ def _is_unscoped_candidate_search(query: str, uf: str | None, cargo: str | None,
     if uf or cargo or partido:
         return False
     return len(_normalize_search_cache_key(query).replace(" ", "")) < 8
+
+
+def _is_broad_top_candidates_scope(
+    *,
+    uf: str | None,
+    cargo: str | None,
+    partido: str | None,
+    municipio: str | None,
+) -> bool:
+    return not any([uf, cargo, partido, municipio])
 
 
 def _run_municipal_vote_flow(
@@ -420,9 +436,10 @@ def _cache_get(cache_key: str, allow_stale: bool = False) -> Any | None:
         cached = ANALYTICS_CACHE.get(cache_key)
         if cached is None:
             return None
-        expires_at, payload = cached
+        expires_at, serialized_payload = cached
         if allow_stale or expires_at >= now:
-            return payload
+            ANALYTICS_CACHE.move_to_end(cache_key)
+            return json.loads(serialized_payload)
         ANALYTICS_CACHE.pop(cache_key, None)
         return None
 
@@ -433,17 +450,89 @@ def _cache_prune_locked(now: float) -> None:
         ANALYTICS_CACHE.pop(key, None)
 
 
-def _cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> None:
+def _cache_total_bytes_locked() -> int:
+    return sum(len(serialized_payload) for _, serialized_payload in ANALYTICS_CACHE.values())
+
+
+def _cache_stats() -> tuple[int, int]:
+    with ANALYTICS_CACHE_LOCK:
+        return len(ANALYTICS_CACHE), _cache_total_bytes_locked()
+
+
+def _estimate_payload_rows(payload: Any) -> int | None:
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        items = payload.get("items")
+        if isinstance(items, list):
+            return len(items)
+    return None
+
+
+def _process_memory_mb() -> float | None:
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:
+        return None
+    if usage <= 0:
+        return None
+    # Linux reports KB, macOS reports bytes.
+    memory_mb = usage / 1024 if usage > 1024 * 1024 else usage / (1024 * 1024)
+    return round(float(memory_mb), 2)
+
+
+def _cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> dict[str, Any]:
     if ttl_seconds <= 0:
-        return
+        return {"stored": False, "reason": "ttl_disabled", "entry_bytes": 0, "cache_entries": 0, "cache_bytes": 0}
+
+    try:
+        serialized_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    except Exception:
+        return {"stored": False, "reason": "serialize_failed", "entry_bytes": 0, "cache_entries": 0, "cache_bytes": 0}
+
+    entry_bytes = len(serialized_payload)
     max_entries = max(1, int(settings.analytics_cache_max_entries))
+    max_total_bytes = max(0, int(settings.analytics_cache_max_total_mb)) * 1024 * 1024
+    max_entry_bytes = max(0, int(settings.analytics_cache_max_entry_kb)) * 1024
+
+    if max_entry_bytes and entry_bytes > max_entry_bytes:
+        cache_entries, cache_bytes = _cache_stats()
+        return {
+            "stored": False,
+            "reason": "entry_too_large",
+            "entry_bytes": entry_bytes,
+            "cache_entries": cache_entries,
+            "cache_bytes": cache_bytes,
+        }
+    if max_total_bytes and entry_bytes > max_total_bytes:
+        cache_entries, cache_bytes = _cache_stats()
+        return {
+            "stored": False,
+            "reason": "exceeds_total_budget",
+            "entry_bytes": entry_bytes,
+            "cache_entries": cache_entries,
+            "cache_bytes": cache_bytes,
+        }
+
     now = time.time()
     with ANALYTICS_CACHE_LOCK:
         _cache_prune_locked(now)
+        ANALYTICS_CACHE.pop(cache_key, None)
+        if max_total_bytes > 0:
+            while ANALYTICS_CACHE and (_cache_total_bytes_locked() + entry_bytes) > max_total_bytes:
+                ANALYTICS_CACHE.popitem(last=False)
         if len(ANALYTICS_CACHE) >= max_entries:
-            for key, _ in sorted(ANALYTICS_CACHE.items(), key=lambda item: item[1][0])[: len(ANALYTICS_CACHE) - max_entries + 1]:
-                ANALYTICS_CACHE.pop(key, None)
-        ANALYTICS_CACHE[cache_key] = (now + ttl_seconds, payload)
+            while ANALYTICS_CACHE and len(ANALYTICS_CACHE) >= max_entries:
+                ANALYTICS_CACHE.popitem(last=False)
+        ANALYTICS_CACHE[cache_key] = (now + ttl_seconds, serialized_payload)
+        ANALYTICS_CACHE.move_to_end(cache_key)
+        return {
+            "stored": True,
+            "reason": "stored",
+            "entry_bytes": entry_bytes,
+            "cache_entries": len(ANALYTICS_CACHE),
+            "cache_bytes": _cache_total_bytes_locked(),
+        }
 
 
 def _edge_cache_ttl_for_path(path: str) -> int | None:
@@ -534,6 +623,8 @@ def _run_analytics_query(
     try:
         payload = operation()
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        response_bytes = 0
+        cache_store = {"stored": False, "reason": "cache_disabled", "entry_bytes": 0, "cache_entries": 0, "cache_bytes": 0}
         logger.info(
             json.dumps(
                 {
@@ -542,12 +633,33 @@ def _run_analytics_query(
                     "endpoint": endpoint,
                     "filters": filters,
                     "duration_ms": duration_ms,
+                    "rows_returned": _estimate_payload_rows(payload),
+                    "process_memory_mb": _process_memory_mb(),
                 },
                 ensure_ascii=False,
             )
         )
         if cache_key:
-            _cache_set(cache_key, cache_ttl_seconds, payload)
+            cache_store = _cache_set(cache_key, cache_ttl_seconds, payload)
+            response_bytes = int(cache_store.get("entry_bytes") or 0)
+        if settings.analytics_cache_log_metrics:
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "analytics_cache_store",
+                        "trace_id": _trace_id_from_request(request),
+                        "endpoint": endpoint,
+                        "filters": filters,
+                        "stored": bool(cache_store.get("stored")),
+                        "reason": str(cache_store.get("reason")),
+                        "entry_bytes": int(cache_store.get("entry_bytes") or 0),
+                        "cache_entries": int(cache_store.get("cache_entries") or 0),
+                        "cache_bytes": int(cache_store.get("cache_bytes") or 0),
+                        "response_bytes": response_bytes,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return payload
     except HTTPException:
         raise
@@ -667,6 +779,7 @@ async def observability_middleware(request: Request, call_next):
                     "cache_policy": cache_policy,
                     "cache_ttl_seconds": cache_ttl_seconds,
                     "memory_cache": memory_cache_status,
+                    "process_memory_mb": _process_memory_mb(),
                 },
                 ensure_ascii=False,
             )
@@ -804,7 +917,13 @@ def analytics_top_candidates(
     page_size: int | None = Query(default=None, ge=1, le=settings.max_top_n),
 ) -> TopCandidatesResponse:
     resolved_ano = _resolve_year_param(ano=ano, year=year)
-    effective_page_size = min(page_size or top_n or settings.default_top_n, settings.max_top_n)
+    requested_page_size = min(page_size or top_n or settings.default_top_n, settings.max_top_n)
+    effective_page_size = requested_page_size
+    if _is_broad_top_candidates_scope(uf=uf, cargo=cargo, partido=partido, municipio=municipio):
+        effective_page_size = min(
+            requested_page_size,
+            max(1, int(settings.analytics_broad_query_max_page_size)),
+        )
     filters = {
         "ano": resolved_ano,
         "turno": turno,
@@ -815,6 +934,7 @@ def analytics_top_candidates(
         "top_n": top_n,
         "page": page,
         "page_size": page_size,
+        "effective_page_size": effective_page_size,
     }
 
     def fallback_payload() -> dict[str, Any]:
@@ -838,9 +958,9 @@ def analytics_top_candidates(
             cargo=cargo,
             partido=partido,
             municipio=municipio,
-            top_n=top_n,
+            top_n=effective_page_size,
             page=page,
-            page_size=page_size,
+            page_size=effective_page_size,
         ),
         cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/top-candidatos"],
         fallback_factory=fallback_payload,

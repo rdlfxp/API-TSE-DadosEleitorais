@@ -26,11 +26,16 @@ class Settings(BaseSettings):
     rate_limit_max_requests_per_ip: int = 120
     analytics_cache_ttl_seconds: int = 60
     analytics_top_candidates_cache_ttl_seconds: int = 45
-    analytics_cache_max_entries: int = 1024
+    analytics_cache_max_entries: int = 256
+    analytics_cache_max_total_mb: int = 16
+    analytics_cache_max_entry_kb: int = 256
+    analytics_cache_log_metrics: bool = True
+    analytics_broad_query_max_page_size: int = 50
     duckdb_materialize_table: bool = False
     duckdb_create_indexes: bool = False
     duckdb_memory_limit_mb: int = 384
     duckdb_threads: int = 1
+    duckdb_database_path: str = "/tmp/meucandidato_analytics.duckdb"
     r2_connect_timeout_seconds: int = 5
     r2_read_timeout_seconds: int = 30
 

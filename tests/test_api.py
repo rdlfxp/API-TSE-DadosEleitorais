@@ -2138,6 +2138,48 @@ def test_polarizacao_uses_memory_cache_after_first_request(client: TestClient):
     assert second.headers["X-Memory-Cache"] == "HIT"
 
 
+def test_memory_cache_skips_large_entries(monkeypatch: pytest.MonkeyPatch):
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
+
+    monkeypatch.setattr(main_module.settings, "analytics_cache_max_entry_kb", 1, raising=False)
+    monkeypatch.setattr(main_module.settings, "analytics_cache_max_total_mb", 4, raising=False)
+
+    result = main_module._cache_set("large-entry", 60, {"items": ["x" * 4096]})
+
+    assert result["stored"] is False
+    assert result["reason"] == "entry_too_large"
+    assert main_module._cache_get("large-entry") is None
+
+
+def test_memory_cache_enforces_total_budget_with_lru_eviction(monkeypatch: pytest.MonkeyPatch):
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
+
+    monkeypatch.setattr(main_module.settings, "analytics_cache_max_entry_kb", 800, raising=False)
+    monkeypatch.setattr(main_module.settings, "analytics_cache_max_total_mb", 1, raising=False)
+
+    first = main_module._cache_set("first", 60, {"items": ["a" * 700_000]})
+    second = main_module._cache_set("second", 60, {"items": ["b" * 700_000]})
+
+    assert first["stored"] is True
+    assert second["stored"] is True
+    assert main_module._cache_get("first") is None
+    assert main_module._cache_get("second") == {"items": ["b" * 700_000]}
+
+
+def test_top_candidates_broad_scope_caps_extreme_page_size(client: TestClient):
+    response = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"year": 2022, "page_size": 80},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page_size"] == 50
+    assert payload["top_n"] == 50
+
+
 def test_turno_validation_returns_422(client: TestClient):
     response = client.get("/v1/analytics/overview", params={"ano": 2024, "turno": 3})
     assert response.status_code == 422
