@@ -211,10 +211,20 @@ class VoteHistoryItem(BaseModel):
     votes: int
     vote_share: float
     status: str | None = None
+    office: str | None = None
+    state: str | None = None
+    municipality: str | None = None
+    round: int | None = None
+    candidate_number: str | None = None
+    party: str | None = None
+    source_id: str | None = None
+    person_id: str | None = None
 
 
 class VoteHistoryResponse(BaseModel):
     candidate_id: str
+    canonical_candidate_id: str | None = None
+    person_id: str | None = None
     items: list[VoteHistoryItem] = Field(default_factory=list)
 
 

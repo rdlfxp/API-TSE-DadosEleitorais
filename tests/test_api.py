@@ -865,6 +865,17 @@ def test_candidates_search_with_partido_filter(client: TestClient):
     assert payload["items"][0]["numero"] == "8"
 
 
+def test_candidates_search_short_unscoped_query_returns_empty_payload(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos/search",
+        params={"q": "Fabio", "ano": 2024},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {"page": 1, "page_size": 20, "total": 0, "total_pages": 0, "items": []}
+
+
 def test_candidates_search_legacy_route_keeps_query_param(client: TestClient):
     response = client.get(
         "/v1/analytics/candidatos",
@@ -893,10 +904,100 @@ def test_candidate_vote_history_endpoint(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "4"
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["year"] == 2024
-    assert payload["items"][0]["votes"] == 1050000
-    assert payload["items"][0]["status"] == "ELEITO"
+    assert payload["canonical_candidate_id"] == "4"
+    assert len(payload["items"]) == 2
+    assert [item["round"] for item in payload["items"]] == [1, 2]
+    assert [item["year"] for item in payload["items"]] == [2024, 2024]
+    assert [item["votes"] for item in payload["items"]] == [500000, 550000]
+    assert all(item["status"] == "ELEITO" for item in payload["items"])
+    assert all(item["office"] == "Prefeito" for item in payload["items"])
+    assert all(item["state"] == "SP" for item in payload["items"])
+
+
+def test_candidate_vote_history_returns_multicargo_multiyear_series(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2020,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SANTOS",
+                "DS_CARGO": "Vereador",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 700,
+                "NR_CANDIDATO": 10123,
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "SG_PARTIDO": "PT",
+                "DT_NASCIMENTO": "01/02/1980",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 12000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 800,
+                "NR_CANDIDATO": 13123,
+                "NM_CANDIDATO": "FABIO ROGERIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "SG_PARTIDO": "PSB",
+                "DT_NASCIMENTO": "01/02/1980",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 220000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 900,
+                "NR_CANDIDATO": 45,
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "SG_PARTIDO": "PL",
+                "DT_NASCIMENTO": "01/02/1980",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 510000,
+            },
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "RJ",
+                "NM_UE": "RIO DE JANEIRO",
+                "DS_CARGO": "Deputado Federal",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 901,
+                "NR_CANDIDATO": 4545,
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "SG_PARTIDO": "PL",
+                "DT_NASCIMENTO": "05/06/1991",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 99999,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        response = client.get("/v1/candidates/900/vote-history", params={"state": "SP", "office": "Prefeito"})
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "900"
+    assert payload["canonical_candidate_id"] == "900"
+    assert payload["person_id"].endswith("1980-02-01")
+    assert [item["year"] for item in payload["items"]] == [2020, 2022, 2024]
+    assert [item["office"] for item in payload["items"]] == ["Vereador", "Governador", "Prefeito"]
+    assert [item["party"] for item in payload["items"]] == ["PT", "PSB", "PL"]
+    assert payload["items"][0]["municipality"] == "SANTOS"
+    assert payload["items"][1]["state"] == "SP"
+    assert payload["items"][2]["round"] == 2
+    assert all(item["person_id"] == payload["person_id"] for item in payload["items"])
 
 
 def test_candidate_electorate_profile_endpoint(client: TestClient):
@@ -1998,6 +2099,43 @@ def test_polarizacao_supports_legacy_map_mode_and_ano(client: TestClient):
     assert len(municipal_uf_payload["municipal_uf"]) == 1
     assert municipal_uf_payload["municipal_uf"][0]["municipio"] == "SAO PAULO"
     assert municipal_uf_payload["municipal_uf"][0]["ano"] == 2024
+
+
+def test_polarizacao_uses_memory_cache_after_first_request(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 300000,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.ANALYTICS_CACHE.clear()
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        first = client.get(
+            "/v1/analytics/polarizacao",
+            params={"ano": 2024, "uf": "SP", "map_mode": "municipalityByMayor"},
+        )
+        second = client.get(
+            "/v1/analytics/polarizacao",
+            params={"ano": 2024, "uf": "SP", "map_mode": "municipalityByMayor"},
+        )
+    finally:
+        main_module.service = original_service
+        main_module.ANALYTICS_CACHE.clear()
+
+    assert first.status_code == 200
+    assert first.headers["X-Memory-Cache"] == "MISS"
+    assert second.status_code == 200
+    assert second.headers["X-Memory-Cache"] == "HIT"
 
 
 def test_turno_validation_returns_422(client: TestClient):

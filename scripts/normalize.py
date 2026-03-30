@@ -355,7 +355,7 @@ def _normalize_votacao_file(
         col_ano = _find_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         if col_ano and col_ano != "ANO_ELEICAO":
             rename_map[col_ano] = "ANO_ELEICAO"
-        col_votos = _find_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL"])
+        col_votos = _find_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if col_votos and col_votos != "QT_VOTOS_NOMINAIS_VALIDOS":
             rename_map[col_votos] = "QT_VOTOS_NOMINAIS_VALIDOS"
         col_turno = _find_col(df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
@@ -659,6 +659,36 @@ def _write_output(df: pd.DataFrame, output_path: Path) -> None:
     raise ValueError("Formato de saida nao suportado. Use extensao .parquet ou .csv.")
 
 
+def _finalize_normalized_frames(normalized_frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not normalized_frames:
+        return pd.DataFrame(columns=CANONICAL_COLUMNS)
+
+    final_df = pd.concat(normalized_frames, ignore_index=True)
+    for col in CANONICAL_COLUMNS:
+        if col not in final_df.columns:
+            final_df.loc[:, col] = pd.NA
+
+    vote_col = "QT_VOTOS_NOMINAIS_VALIDOS"
+    profile_cols = ["IDADE", "FAIXA_ETARIA"]
+    group_cols = [c for c in CANONICAL_COLUMNS if c not in [vote_col, *profile_cols]]
+
+    dedup_subset = group_cols + [vote_col]
+    final_df = final_df.drop_duplicates(subset=dedup_subset, keep="last").copy()
+    final_df.loc[:, vote_col] = pd.to_numeric(final_df[vote_col], errors="coerce").fillna(0).astype("int64")
+
+    final_df = (
+        final_df[group_cols + [vote_col]]
+        .groupby(group_cols, dropna=False, as_index=False)[vote_col]
+        .sum()
+        .copy()
+    )
+    final_df.loc[:, "ANO_ELEICAO"] = pd.to_numeric(final_df["ANO_ELEICAO"], errors="coerce").astype("Int64")
+    final_df.loc[:, "NR_TURNO"] = _normalize_turno(final_df["NR_TURNO"])
+    final_df.loc[:, "IDADE"] = _compute_age(final_df)
+    final_df.loc[:, "FAIXA_ETARIA"] = final_df["IDADE"].apply(_classify_age)
+    return final_df[CANONICAL_COLUMNS].copy()
+
+
 def main() -> None:
     args = parse_args()
 
@@ -713,13 +743,7 @@ def main() -> None:
             )
         )
 
-    final_df = pd.concat(normalized_frames, ignore_index=True)
-    final_df = final_df.drop_duplicates(
-        subset=["ANO_ELEICAO", "NR_TURNO", "SQ_CANDIDATO", "NR_CANDIDATO", "DS_CARGO", "SG_UF"],
-        keep="last",
-    ).copy()
-    final_df.loc[:, "ANO_ELEICAO"] = pd.to_numeric(final_df["ANO_ELEICAO"], errors="coerce").astype("Int64")
-    final_df.loc[:, "NR_TURNO"] = _normalize_turno(final_df["NR_TURNO"])
+    final_df = _finalize_normalized_frames(normalized_frames)
 
     report = _quality_report(final_df)
     report_path = Path(args.report)
