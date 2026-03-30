@@ -54,6 +54,26 @@ def test_from_file_loads_parquet(tmp_path, sample_df: pd.DataFrame):
     assert service.filter_options()["ufs"] == ["SP"]
 
 
+def test_duckdb_from_file_supports_file_backed_database(tmp_path, sample_df: pd.DataFrame):
+    pytest.importorskip("pyarrow")
+    path = tmp_path / "analytics.parquet"
+    db_path = tmp_path / "runtime" / "analytics.duckdb"
+    sample_df.to_parquet(path, index=False)
+
+    service = DuckDBAnalyticsService.from_file(
+        file_path=str(path),
+        default_top_n=20,
+        max_top_n=100,
+        database_path=str(db_path),
+    )
+
+    try:
+        assert db_path.exists()
+        assert service.filter_options()["anos"] == [2022]
+    finally:
+        service.close()
+
+
 def test_filter_options_excludes_non_official_uf_codes(tmp_path):
     df = pd.DataFrame(
         [

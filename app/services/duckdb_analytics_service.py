@@ -231,12 +231,16 @@ class DuckDBAnalyticsService:
         create_indexes: bool = True,
         memory_limit_mb: int | None = None,
         threads: int | None = None,
+        database_path: str | None = None,
     ) -> "DuckDBAnalyticsService":
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(path)
 
-        conn = duckdb.connect(database=":memory:")
+        db_path = str(database_path or ":memory:").strip() or ":memory:"
+        if db_path != ":memory:":
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(database=db_path)
         if memory_limit_mb is not None and int(memory_limit_mb) > 0:
             try:
                 conn.execute(f"SET memory_limit='{int(memory_limit_mb)}MB'")
@@ -288,6 +292,12 @@ class DuckDBAnalyticsService:
         if create_indexes and materialize_table:
             service._create_indexes()
         return service
+
+    def close(self) -> None:
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
     def _create_index(self, index_name: str, columns: list[str]) -> None:
         try:
@@ -1539,25 +1549,16 @@ class DuckDBAnalyticsService:
             "WHERE candidate_key IS NOT NULL AND candidate_key <> '' "
             "GROUP BY candidate_key"
         )
+        total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
         rows = self._rows(
             (
-                "WITH grouped AS ("
-                f"  {grouped_sql}"
-                "), ranked AS ("
-                "  SELECT "
-                "  candidate_id, candidato, partido, cargo, uf, votos, situacao, "
-                "  ROW_NUMBER() OVER (ORDER BY votos DESC, candidato ASC) AS rn, "
-                "  COUNT(*) OVER () AS total_rows "
-                "  FROM grouped"
-                ") "
-                "SELECT candidate_id, candidato, partido, cargo, uf, votos, situacao, total_rows "
-                "FROM ranked "
-                "WHERE rn > ? AND rn <= ? "
-                "ORDER BY rn"
+                "SELECT candidate_id, candidato, partido, cargo, uf, votos, situacao "
+                f"FROM ({grouped_sql}) g "
+                "ORDER BY votos DESC, candidato ASC "
+                "LIMIT ? OFFSET ?"
             ),
-            params + [offset, offset + effective_page_size],
+            params + [effective_page_size, offset],
         )
-        total = int(rows[0][7] or 0) if rows else 0
         if total == 0 and page > 1:
             total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
         total_pages = (total + effective_page_size - 1) // effective_page_size if total else 0
