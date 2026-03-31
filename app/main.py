@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal
 import unicodedata
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -281,6 +281,15 @@ def _is_unscoped_candidate_search(query: str, uf: str | None, cargo: str | None,
     if uf or cargo or partido:
         return False
     return len(_normalize_search_cache_key(query).replace(" ", "")) < 8
+
+
+def _mark_legacy_candidate_search(response: Response) -> None:
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Wed, 30 Sep 2026 23:59:59 GMT"
+    response.headers["Link"] = '</v1/analytics/candidatos/search>; rel="successor-version"'
+    response.headers["Warning"] = (
+        '299 - "Endpoint legado. Use /v1/analytics/candidatos/search com o parametro q."'
+    )
 
 
 def _is_broad_top_candidates_scope(
@@ -1023,6 +1032,7 @@ def analytics_candidates_text_search(
 )
 def analytics_candidates_search_legacy(
     request: Request,
+    response: Response,
     query: str = Query(..., min_length=2, description="Parametro legado. Use q em /v1/analytics/candidatos/search"),
     ano: int | None = Query(default=None),
     year: int | None = Query(default=None),
@@ -1033,6 +1043,7 @@ def analytics_candidates_search_legacy(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateSearchResponse:
+    _mark_legacy_candidate_search(response)
     resolved_ano = _resolve_year_param(ano=ano, year=year)
     if resolved_ano is None:
         raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente: ano (ou year).")
@@ -1070,38 +1081,65 @@ def analytics_candidates_search_legacy(
 @app.get("/v1/candidates/{candidate_id}/summary", response_model=CandidateSummaryResponse, responses=ERROR_RESPONSES)
 def candidate_summary(
     candidate_id: str,
+    ano: int | None = Query(default=None),
     year: int | None = None,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
     office: str | None = None,
 ) -> CandidateSummaryResponse:
-    data = get_service().candidate_summary(candidate_id=candidate_id, year=year, state=state, office=office)
+    resolved_year = _resolve_year_param(ano=ano, year=year)
+    resolved_state = _resolve_state_param(state=state, uf=uf)
+    resolved_office = office or cargo
+    data = get_service().candidate_summary(
+        candidate_id=candidate_id,
+        year=resolved_year,
+        state=resolved_state,
+        office=resolved_office,
+    )
     return CandidateSummaryResponse(**data)
 
 
 @app.get("/v1/candidates/{candidate_id}/vote-history", response_model=VoteHistoryResponse, responses=ERROR_RESPONSES)
 def candidate_vote_history(
     candidate_id: str,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
     office: str | None = None,
 ) -> VoteHistoryResponse:
-    data = get_service().candidate_vote_history(candidate_id=candidate_id, state=state, office=office)
+    resolved_state = _resolve_state_param(state=state, uf=uf)
+    resolved_office = office or cargo
+    data = get_service().candidate_vote_history(
+        candidate_id=candidate_id,
+        state=resolved_state,
+        office=resolved_office,
+    )
     return VoteHistoryResponse(**data)
 
 
 @app.get("/v1/candidates/{candidate_id}/electorate-profile", response_model=ElectorateProfileResponse, responses=ERROR_RESPONSES)
 def candidate_electorate_profile(
     candidate_id: str,
+    ano: int | None = Query(default=None),
     year: int | None = None,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
     office: str | None = None,
+    municipio: str | None = None,
     municipality: str | None = None,
 ) -> ElectorateProfileResponse:
+    resolved_year = _resolve_year_param(ano=ano, year=year)
+    resolved_state = _resolve_state_param(state=state, uf=uf)
+    resolved_office = office or cargo
+    resolved_municipality = _resolve_municipality_param(municipality=municipality, municipio=municipio)
     data = get_service().candidate_electorate_profile(
         candidate_id=candidate_id,
-        year=year,
-        state=state,
-        office=office,
-        municipality=municipality,
+        year=resolved_year,
+        state=resolved_state,
+        office=resolved_office,
+        municipality=resolved_municipality,
     )
     return ElectorateProfileResponse(**data)
 
@@ -1287,8 +1325,11 @@ def candidates_compare(
         description="IDs de candidatos (CSV: 1,2 ou repetido: ?candidate_ids=1&candidate_ids=2)",
         openapi_extra={"style": "form", "explode": False},
     ),
+    ano: int | None = Query(default=None),
     year: int | None = None,
+    uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
+    cargo: str | None = None,
     office: str | None = None,
 ) -> CompareResponse:
     parsed_ids: list[str] = []
@@ -1296,7 +1337,15 @@ def candidates_compare(
         parsed_ids.extend([token.strip() for token in str(value).split(",") if token.strip()])
     if len(parsed_ids) < 2 or len(parsed_ids) > 4:
         raise HTTPException(status_code=400, detail="candidate_ids deve conter de 2 a 4 IDs.")
-    data = get_service().candidates_compare(candidate_ids=parsed_ids, year=year, state=state, office=office)
+    resolved_year = _resolve_year_param(ano=ano, year=year)
+    resolved_state = _resolve_state_param(state=state, uf=uf)
+    resolved_office = office or cargo
+    data = get_service().candidates_compare(
+        candidate_ids=parsed_ids,
+        year=resolved_year,
+        state=resolved_state,
+        office=resolved_office,
+    )
     return CompareResponse(**data)
 
 

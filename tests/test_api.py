@@ -886,6 +886,9 @@ def test_candidates_search_legacy_route_keeps_query_param(client: TestClient):
     assert payload["total"] == 2
     assert payload["items"][0]["candidate_id"] == "1"
     assert payload["items"][1]["candidate_id"] == "2"
+    assert response.headers["Deprecation"] == "true"
+    assert "/v1/analytics/candidatos/search" in response.headers["Link"]
+    assert "Endpoint legado" in response.headers["Warning"]
 
 
 def test_candidate_summary_endpoint(client: TestClient):
@@ -893,10 +896,49 @@ def test_candidate_summary_endpoint(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "1"
+    assert payload["source_id"] == "1"
+    assert payload["canonical_candidate_id"] == "1"
+    assert payload["person_id"]
     assert payload["name"] == "Candidato A"
     assert payload["party"] == "AAA"
     assert payload["latest_election"]["votes"] == 12000
     assert payload["latest_election"]["state_rank"] == 1
+
+
+def test_candidate_summary_endpoint_accepts_official_param_aliases(client: TestClient):
+    response = client.get("/v1/candidates/1/summary", params={"ano": 2022, "uf": "SP", "cargo": "Deputado Estadual"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "1"
+    assert payload["latest_election"]["votes"] == 12000
+
+
+def test_candidate_search_includes_stable_identity_fields(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos/search",
+        params={"q": "candidato", "ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    first = payload["items"][0]
+    assert first["source_id"] == "1"
+    assert first["canonical_candidate_id"] == "1"
+    assert first["person_id"]
+
+
+def test_top_candidates_includes_stable_identity_fields(client: TestClient):
+    response = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual", "page": 1, "page_size": 10},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    first = payload["items"][0]
+    assert first["source_id"] == first["candidate_id"]
+    assert first["canonical_candidate_id"] == first["candidate_id"]
+    assert first["person_id"]
 
 
 def test_candidate_vote_history_endpoint(client: TestClient):
@@ -906,12 +948,22 @@ def test_candidate_vote_history_endpoint(client: TestClient):
     assert payload["candidate_id"] == "4"
     assert payload["canonical_candidate_id"] == "4"
     assert len(payload["items"]) == 2
-    assert [item["round"] for item in payload["items"]] == [1, 2]
+    assert [item["round"] for item in payload["items"]] == [2, 1]
     assert [item["year"] for item in payload["items"]] == [2024, 2024]
-    assert [item["votes"] for item in payload["items"]] == [500000, 550000]
+    assert [item["votes"] for item in payload["items"]] == [550000, 500000]
     assert all(item["status"] == "ELEITO" for item in payload["items"])
     assert all(item["office"] == "Prefeito" for item in payload["items"])
     assert all(item["state"] == "SP" for item in payload["items"])
+    assert all(item["canonical_candidate_id"] == "4" for item in payload["items"])
+    assert all(item["is_projection"] is False for item in payload["items"])
+
+
+def test_candidate_vote_history_endpoint_accepts_official_param_aliases(client: TestClient):
+    response = client.get("/v1/candidates/4/vote-history", params={"uf": "SP", "cargo": "Prefeito"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert len(payload["items"]) == 2
 
 
 def test_candidate_vote_history_returns_multicargo_multiyear_series(client: TestClient):
@@ -991,13 +1043,15 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
     assert payload["candidate_id"] == "900"
     assert payload["canonical_candidate_id"] == "900"
     assert payload["person_id"].endswith("1980-02-01")
-    assert [item["year"] for item in payload["items"]] == [2020, 2022, 2024]
-    assert [item["office"] for item in payload["items"]] == ["Vereador", "Governador", "Prefeito"]
-    assert [item["party"] for item in payload["items"]] == ["PT", "PSB", "PL"]
-    assert payload["items"][0]["municipality"] == "SANTOS"
+    assert [item["year"] for item in payload["items"]] == [2024, 2022, 2020]
+    assert [item["office"] for item in payload["items"]] == ["Prefeito", "Governador", "Vereador"]
+    assert [item["party"] for item in payload["items"]] == ["PL", "PSB", "PT"]
+    assert payload["items"][2]["municipality"] == "SANTOS"
     assert payload["items"][1]["state"] == "SP"
-    assert payload["items"][2]["round"] == 2
+    assert payload["items"][0]["round"] == 2
     assert all(item["person_id"] == payload["person_id"] for item in payload["items"])
+    assert all(item["canonical_candidate_id"] == payload["canonical_candidate_id"] for item in payload["items"])
+    assert all(item["is_projection"] is False for item in payload["items"])
 
 
 def test_candidate_electorate_profile_endpoint(client: TestClient):
@@ -1008,10 +1062,23 @@ def test_candidate_electorate_profile_endpoint(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "6"
+    assert payload["source_id"] == "6"
+    assert payload["canonical_candidate_id"] == "6"
+    assert payload["person_id"]
     assert payload["gender"]["female_share"] == 100.0
     assert payload["age_bands"]["a35_59"] == 100.0
     assert payload["dominant_education"] == "SUPERIOR COMPLETO"
     assert payload["dominant_income_band"] == "2-5 SM"
+
+
+def test_candidate_electorate_profile_endpoint_accepts_official_param_aliases(client: TestClient):
+    response = client.get(
+        "/v1/candidates/6/electorate-profile",
+        params={"ano": 2024, "uf": "SP", "cargo": "Vereador"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "6"
 
 
 def test_candidate_vote_distribution_endpoint(client: TestClient):
@@ -1589,11 +1656,28 @@ def test_candidates_compare_endpoint(client: TestClient):
     assert payload["context"]["year"] == 2022
     assert len(payload["candidates"]) == 2
     by_id = {item["candidate_id"]: item for item in payload["candidates"]}
+    assert by_id["1"]["source_id"] == "1"
+    assert by_id["1"]["canonical_candidate_id"] == "1"
+    assert by_id["1"]["person_id"]
+    assert by_id["2"]["source_id"] == "2"
+    assert by_id["2"]["canonical_candidate_id"] == "2"
+    assert by_id["2"]["person_id"]
     assert by_id["1"]["votes"] == 12000
     assert by_id["2"]["votes"] == 8000
     metric_map = {item["metric"]: item for item in payload["deltas"]}
     assert metric_map["votes"]["best_candidate_id"] == "1"
     assert metric_map["votes"]["gap_to_second"] == 4000.0
+
+
+def test_candidates_compare_endpoint_accepts_official_param_aliases(client: TestClient):
+    response = client.get(
+        "/v1/candidates/compare",
+        params=[("candidate_ids", "1"), ("candidate_ids", "2"), ("ano", 2022), ("uf", "SP"), ("cargo", "Deputado Estadual")],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["context"]["year"] == 2022
+    assert len(payload["candidates"]) == 2
 
 
 def test_candidates_compare_endpoint_accepts_csv_format(client: TestClient):

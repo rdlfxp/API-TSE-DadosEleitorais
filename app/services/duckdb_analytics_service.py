@@ -973,6 +973,24 @@ class DuckDBAnalyticsService:
             "birth_tokens": birth_tokens,
         }
 
+    def _candidate_source_id(self, df: pd.DataFrame, fallback: str) -> str:
+        col_source_id = "SQ_CANDIDATO" if "SQ_CANDIDATO" in df.columns else ("NR_CANDIDATO" if "NR_CANDIDATO" in df.columns else None)
+        if col_source_id:
+            values = df[col_source_id].fillna("").astype(str).str.strip()
+            values = values[values != ""]
+            if not values.empty:
+                return str(values.iloc[0])
+        return str(fallback)
+
+    def _candidate_identity_payload(self, df: pd.DataFrame, fallback: str) -> dict[str, str]:
+        identity = self._candidate_person_identity(df, fallback)
+        source_id = self._candidate_source_id(df, str(identity["canonical_candidate_id"]))
+        return {
+            "source_id": str(source_id),
+            "canonical_candidate_id": str(identity["canonical_candidate_id"]),
+            "person_id": str(identity["person_id"]),
+        }
+
     def _historical_candidate_rows(self, candidate_id: str, state: str | None = None, office: str | None = None) -> tuple[pd.DataFrame, dict[str, object]]:
         scoped = self._filtered_df(uf=state, cargo=office)
         seed_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
@@ -1549,6 +1567,22 @@ class DuckDBAnalyticsService:
             "WHERE candidate_key IS NOT NULL AND candidate_key <> '' "
             "GROUP BY candidate_key"
         )
+        scoped_df = self._filtered_df(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio).copy()
+        if partido:
+            partido_col = self._pick_col(["SG_PARTIDO"])
+            if partido_col and partido_col in scoped_df.columns:
+                scoped_df = scoped_df[
+                    self._normalize_text(scoped_df[partido_col]).str.upper()
+                    == self._normalize_value(partido, uppercase=True)
+                ].copy()
+        if col_candidate_key:
+            scoped_df = scoped_df.assign(
+                _candidate_key=scoped_df[col_candidate_key].fillna("").astype(str).str.strip().replace("", pd.NA)
+            )
+        else:
+            scoped_df = scoped_df.assign(
+                _candidate_key=scoped_df[col_candidato].fillna("").astype(str).str.strip().str.lower().replace("", pd.NA)
+            )
         total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
         rows = self._rows(
             (
@@ -1563,15 +1597,19 @@ class DuckDBAnalyticsService:
             total = int(self._scalar(f"SELECT COUNT(*) FROM ({grouped_sql}) g", params) or 0)
         total_pages = (total + effective_page_size - 1) // effective_page_size if total else 0
 
-        return {
-            "top_n": effective_page_size,
-            "page": page,
-            "page_size": effective_page_size,
-            "total": total,
-            "total_pages": total_pages,
-            "items": [
+        items = []
+        for r in rows:
+            candidate_id = str(r[0] or "").strip()
+            if not candidate_id:
+                continue
+            candidate_rows = scoped_df[scoped_df["_candidate_key"] == candidate_id].copy()
+            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+            items.append(
                 {
-                    "candidate_id": r[0] or "",
+                    "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
                     "candidato": r[1] or "",
                     "partido": r[2],
                     "cargo": r[3],
@@ -1579,8 +1617,14 @@ class DuckDBAnalyticsService:
                     "votos": int(r[5] or 0),
                     "situacao": r[6],
                 }
-                for r in rows
-            ],
+            )
+        return {
+            "top_n": effective_page_size,
+            "page": page,
+            "page_size": effective_page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "items": items,
         }
 
     def distribution(
@@ -2315,6 +2359,9 @@ class DuckDBAnalyticsService:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
+                "source_id": str(candidate_id),
+                "canonical_candidate_id": str(candidate_id),
+                "person_id": str(candidate_id),
                 "name": "",
                 "number": None,
                 "party": None,
@@ -2413,8 +2460,13 @@ class DuckDBAnalyticsService:
             if not statuses.empty:
                 latest_status = str(statuses.iloc[0])
 
+        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+
         return {
             "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "source_id": identity_payload["source_id"],
+            "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+            "person_id": identity_payload["person_id"],
             "name": (
                 str(candidate_rows[col_name].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0])
                 if col_name and candidate_rows[col_name].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
@@ -2531,7 +2583,7 @@ class DuckDBAnalyticsService:
                 source_id=("_source_id", "first"),
             )
             .merge(total_by_context, on=context_cols, how="left")
-            .sort_values(["_year", "_round", "_office", "votes"], ascending=[True, True, True, False])
+            .sort_values(["_year", "_round", "_office", "votes"], ascending=[False, False, True, False])
         )
 
         status_by_context: dict[tuple[int, str, str, str, int], str | None] = {}
@@ -2578,7 +2630,9 @@ class DuckDBAnalyticsService:
                     "candidate_number": (str(row["candidate_number"]).strip() or None) if pd.notna(row["candidate_number"]) else None,
                     "party": (str(row["party"]).strip() or None) if pd.notna(row["party"]) else None,
                     "source_id": (str(row["source_id"]).strip() or None) if pd.notna(row["source_id"]) else None,
+                    "canonical_candidate_id": str(identity["canonical_candidate_id"]),
                     "person_id": str(identity["person_id"]),
+                    "is_projection": False,
                 }
             )
         return {
@@ -2601,6 +2655,9 @@ class DuckDBAnalyticsService:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
+                "source_id": str(candidate_id),
+                "canonical_candidate_id": str(candidate_id),
+                "person_id": str(candidate_id),
                 "gender": {"male_share": 0.0, "female_share": 0.0},
                 "age_bands": {"a18_34": 0.0, "a35_59": 0.0, "a60_plus": 0.0},
                 "dominant_education": "N/A",
@@ -2665,8 +2722,13 @@ class DuckDBAnalyticsService:
             ).str.contains("URBAN", na=False)
             urban_concentration = round((weights[urban_mask].sum() / total_weight) * 100, 4)
 
+        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+
         return {
             "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "source_id": identity_payload["source_id"],
+            "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+            "person_id": identity_payload["person_id"],
             "gender": {"male_share": male_share, "female_share": female_share},
             "age_bands": {"a18_34": a18_34, "a35_59": a35_59, "a60_plus": a60_plus},
             "dominant_education": dominant_education,
@@ -3624,10 +3686,14 @@ class DuckDBAnalyticsService:
                 if previous_items:
                     prev_votes = float(previous_items[-1]["votes"])
                     retention = round((float(current["votes"]) / prev_votes) * 100, 4) if prev_votes > 0 else 100.0
+            identity_payload = self._candidate_identity_payload(candidate_rows, cid)
 
             candidates_out.append(
                 {
                     "candidate_id": self._candidate_output_id(candidate_rows, cid),
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
                     "name": str(candidate_rows[name_col].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]),
                     "party": (
                         str(candidate_rows["SG_PARTIDO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0])
@@ -3700,6 +3766,22 @@ class DuckDBAnalyticsService:
         filter_sql = f"{where} {'AND' if where else 'WHERE'} {normalized_name_expr} LIKE ?"
         base_params = params + [pattern]
 
+        scoped_df = self._filtered_df(ano=ano, turno=turno, uf=uf, cargo=cargo).copy()
+        if partido:
+            if col_partido and col_partido in scoped_df.columns:
+                scoped_df = scoped_df[
+                    self._normalize_text(scoped_df[col_partido]).str.upper()
+                    == self._normalize_value(partido, uppercase=True)
+                ].copy()
+        if col_candidate_id:
+            scoped_df = scoped_df.assign(
+                _candidate_id=scoped_df[col_candidate_id].fillna("").astype(str).str.strip().replace("", pd.NA)
+            )
+        else:
+            scoped_df = scoped_df.assign(
+                _candidate_id=scoped_df[col_candidato].fillna("").astype(str).str.strip()
+            )
+
         total = int(
             self._scalar(
                 (
@@ -3755,20 +3837,28 @@ class DuckDBAnalyticsService:
         )
 
         total_pages = (total + page_size - 1) // page_size
-        items = [
-            {
-                "candidate_id": str(r[0] or ""),
-                "candidato": r[1] or "",
-                "partido": r[2],
-                "cargo": r[3],
-                "uf": r[4],
-                "numero": (str(r[5]) if r[5] is not None and str(r[5]).strip() else str(r[0] or "")),
-                "situacao": r[6],
-                "votos": (int(r[7]) if r[7] is not None else None),
-            }
-            for r in rows
-            if str(r[0] or "").strip()
-        ]
+        items = []
+        for r in rows:
+            candidate_id = str(r[0] or "").strip()
+            if not candidate_id:
+                continue
+            candidate_rows = scoped_df[scoped_df["_candidate_id"] == candidate_id].copy()
+            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+            items.append(
+                {
+                    "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
+                    "candidato": r[1] or "",
+                    "partido": r[2],
+                    "cargo": r[3],
+                    "uf": r[4],
+                    "numero": (str(r[5]) if r[5] is not None and str(r[5]).strip() else candidate_id),
+                    "situacao": r[6],
+                    "votos": (int(r[7]) if r[7] is not None else None),
+                }
+            )
 
         return {
             "page": page,
