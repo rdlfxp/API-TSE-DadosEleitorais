@@ -1,0 +1,46 @@
+name: Deploy EasyPanel
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL de produção para o smoke test"
+        required: false
+        default: "https://apitse.safeartlabs.com"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  production-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Wait for EasyPanel auto deploy
+        if: github.event_name == 'push'
+        run: sleep 40
+
+      - name: Run production smoke test
+        run: |
+          PROD_BASE_URL="${{ secrets.PROD_BASE_URL }}"
+          if [ -n "${{ github.event.inputs.base_url }}" ]; then
+            PROD_BASE_URL="${{ github.event.inputs.base_url }}"
+          fi
+          if [ -z "${PROD_BASE_URL}" ]; then
+            PROD_BASE_URL="https://apitse.safeartlabs.com"
+          fi
+          python scripts/smoke_test_api.py \
+            --base-url "${PROD_BASE_URL}" \
+            --timeout 12

@@ -1,13 +1,126 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+    image: ${API_IMAGE:-meucandidato-api:local}
     container_name: meucandidato-api
-    ports:
-      - "8000:8000"
+    env_file:
+      - .env
     environment:
-      ANALYTICS_DATA_PATH: data/curated/analytics.parquet
-      ANALYTICS_SEPARATOR: ","
-      ANALYTICS_ENCODING: "utf-8"
+      APP_ENV: ${APP_ENV:-production}
+      ANALYTICS_ENGINE: ${ANALYTICS_ENGINE:-duckdb}
+      ANALYTICS_DATA_PATH: ${ANALYTICS_DATA_PATH:-data/curated/analytics.parquet}
+      ANALYTICS_SEPARATOR: ${ANALYTICS_SEPARATOR:-,}
+      ANALYTICS_ENCODING: ${ANALYTICS_ENCODING:-utf-8}
+      PREFER_PARQUET_IF_AVAILABLE: ${PREFER_PARQUET_IF_AVAILABLE:-true}
+      DUCKDB_DATABASE_PATH: ${DUCKDB_DATABASE_PATH:-/tmp/meucandidato_analytics.duckdb}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-90}
+    command:
+      - /bin/sh
+      - -c
+      - >
+        exec gunicorn app.main:app
+        -k uvicorn.workers.UvicornWorker
+        --bind 0.0.0.0:8000
+        --workers "${GUNICORN_WORKERS:-3}"
+        --timeout "${GUNICORN_TIMEOUT:-90}"
+        --graceful-timeout 30
+        --keep-alive 30
+        --access-logfile -
+        --error-logfile -
+        --forwarded-allow-ips="*"
+    expose:
+      - "8000"
     volumes:
       - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "5"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: meucandidato-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-meucandidato}
+      POSTGRES_USER: ${POSTGRES_USER:-meucandidato}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - wal_compression=on
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - min_wal_size=1GB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - log_rotation_age=1d
+      - -c
+      - log_rotation_size=100MB
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-meucandidato} -d ${POSTGRES_DB:-meucandidato}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "5"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: meucandidato-nginx
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/www:/var/www/certbot:ro
+      - ${SSL_CERT_DIR:-./deploy/nginx/certs}:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "5"
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
