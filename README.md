@@ -657,7 +657,66 @@ Smoke test via GitHub Actions:
 - preencher `base_url` com a URL de staging
 - o job falha automaticamente se algum endpoint crítico falhar
 
-Variáveis recomendadas no Render (para bootstrap de dados via R2):
+### 11.1) Producao no EasyPanel
+
+Fluxo recomendado para a VPS Hostinger com EasyPanel:
+
+- serviço `App` apontando para o repo GitHub
+- build via `Dockerfile`
+- domínio público `https://apitse.safeartlabs.com`
+- bootstrap de dados pelo Cloudflare R2
+- SSL gerenciado pelo EasyPanel/Traefik
+
+Variáveis mínimas de produção no EasyPanel:
+
+```env
+ANALYTICS_DATA_PATH=data/curated/analytics.parquet
+ANALYTICS_ENCODING=utf-8
+ANALYTICS_ENGINE=duckdb
+ANALYTICS_SEPARATOR=,
+APP_NAME=MeuCandidato Analytics API
+APP_VERSION=1.0.0
+DEFAULT_TOP_N=20
+DUCKDB_CREATE_INDEXES=false
+DUCKDB_DATABASE_PATH=/tmp/meucandidato_analytics.duckdb
+DUCKDB_MATERIALIZE_TABLE=false
+DUCKDB_MEMORY_LIMIT_MB=2048
+DUCKDB_THREADS=4
+GUNICORN_TIMEOUT=120
+GUNICORN_WORKERS=2
+MAX_TOP_N=100
+PREFER_PARQUET_IF_AVAILABLE=true
+R2_ACCOUNT_ID=<cloudflare_account_id>
+R2_ACCESS_KEY_ID=<r2_access_key_id>
+R2_BUCKET=tse-curated
+R2_CONNECT_TIMEOUT_SECONDS=5
+R2_ENDPOINT=https://<cloudflare_account_id>.r2.cloudflarestorage.com
+R2_OBJECT_KEY_CSV=latest/analytics.csv
+R2_OBJECT_KEY_PARQUET=latest/analytics.parquet
+R2_READ_TIMEOUT_SECONDS=30
+R2_REGION_NAME=auto
+R2_SECRET_ACCESS_KEY=<r2_secret_access_key>
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_MAX_REQUESTS_PER_IP=120
+RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+Checklist de smoke test após cada deploy:
+
+1. `GET /health` deve retornar `status=ok` e `data_loaded=true`.
+2. `GET /v1/analytics/filtros` deve retornar listas não vazias.
+3. `GET /v1/analytics/overview?ano=<ano>` deve responder `200`.
+4. `GET /v1/analytics/candidatos?query=ca&page=1&page_size=5` deve responder com `items` e `total`.
+5. `GET /v1/analytics/distribuicao?group_by=genero&ano=<ano>` deve responder `200`.
+
+Deploy via GitHub Actions em produção:
+
+- workflow: `.github/workflows/deploy.yml`
+- secret recomendado: `PROD_BASE_URL` com `https://apitse.safeartlabs.com`
+- o EasyPanel faz auto deploy a partir do GitHub
+- o workflow aguarda o rollout e executa `scripts/smoke_test_api.py`
+
+Variáveis recomendadas para bootstrap de dados via R2:
 - `R2_ACCOUNT_ID`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
