@@ -586,6 +586,23 @@ class AnalyticsService:
             "birth_tokens": birth_tokens,
         }
 
+    def _candidate_source_id(self, df: pd.DataFrame, fallback: str) -> str:
+        col_source_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        if col_source_id and col_source_id in df.columns:
+            values = self._normalize_text(df[col_source_id]).replace("", pd.NA).dropna()
+            if not values.empty:
+                return str(values.iloc[0])
+        return str(fallback)
+
+    def _candidate_identity_payload(self, df: pd.DataFrame, fallback: str) -> dict[str, str]:
+        identity = self._candidate_person_identity(df, fallback)
+        source_id = self._candidate_source_id(df, str(identity["canonical_candidate_id"]))
+        return {
+            "source_id": str(source_id),
+            "canonical_candidate_id": str(identity["canonical_candidate_id"]),
+            "person_id": str(identity["person_id"]),
+        }
+
     def _historical_candidate_rows(self, candidate_id: str, state: str | None = None, office: str | None = None) -> tuple[pd.DataFrame, dict[str, object]]:
         scoped = self._apply_filters(uf=state, cargo=office)
         seed_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
@@ -1263,13 +1280,19 @@ class AnalyticsService:
 
         out: list[dict] = []
         for _, row in grouped.iterrows():
+            candidate_id = (
+                str(row[col_candidate_id])
+                if col_candidate_id and pd.notna(row[col_candidate_id]) and str(row[col_candidate_id]).strip()
+                else str(row["_candidate_key"])
+            )
+            candidate_rows = df[df["_candidate_key"] == row["_candidate_key"]].copy()
+            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
             out.append(
                 {
-                    "candidate_id": (
-                        str(row[col_candidate_id])
-                        if col_candidate_id and pd.notna(row[col_candidate_id]) and str(row[col_candidate_id]).strip()
-                        else str(row["_candidate_key"])
-                    ),
+                    "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
                     "candidato": str(row[col_candidato]),
                     "partido": str(row[col_partido]) if col_partido else None,
                     "cargo": str(row[col_cargo]) if col_cargo else None,
@@ -1902,6 +1925,9 @@ class AnalyticsService:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
+                "source_id": str(candidate_id),
+                "canonical_candidate_id": str(candidate_id),
+                "person_id": str(candidate_id),
                 "name": "",
                 "number": None,
                 "party": None,
@@ -2000,8 +2026,13 @@ class AnalyticsService:
             status_vals = self._normalize_text(latest_rows[col_status]).replace("", pd.NA).dropna()
             latest_status = str(status_vals.iloc[0]) if not status_vals.empty else None
 
+        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+
         return {
             "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "source_id": identity_payload["source_id"],
+            "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+            "person_id": identity_payload["person_id"],
             "name": str(self._normalize_text(candidate_rows[col_name]).replace("", pd.NA).dropna().iloc[0]) if col_name else "",
             "number": (
                 str(self._normalize_text(candidate_rows[col_number]).replace("", pd.NA).dropna().iloc[0])
@@ -2111,7 +2142,7 @@ class AnalyticsService:
                 source_id=("_source_id", "first"),
             )
             .merge(total_by_context, on=context_cols, how="left")
-            .sort_values(["_year", "_round", "_office", "votes"], ascending=[True, True, True, False])
+            .sort_values(["_year", "_round", "_office", "votes"], ascending=[False, False, True, False])
         )
 
         status_by_context: dict[tuple[int, str, str, str, int], str | None] = {}
@@ -2157,7 +2188,9 @@ class AnalyticsService:
                     "candidate_number": (str(row["candidate_number"]).strip() or None) if pd.notna(row["candidate_number"]) else None,
                     "party": (str(row["party"]).strip() or None) if pd.notna(row["party"]) else None,
                     "source_id": (str(row["source_id"]).strip() or None) if pd.notna(row["source_id"]) else None,
+                    "canonical_candidate_id": str(identity["canonical_candidate_id"]),
                     "person_id": str(identity["person_id"]),
+                    "is_projection": False,
                 }
             )
 
@@ -2181,6 +2214,9 @@ class AnalyticsService:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
+                "source_id": str(candidate_id),
+                "canonical_candidate_id": str(candidate_id),
+                "person_id": str(candidate_id),
                 "gender": {"male_share": 0.0, "female_share": 0.0},
                 "age_bands": {"a18_34": 0.0, "a35_59": 0.0, "a60_plus": 0.0},
                 "dominant_education": "N/A",
@@ -2243,8 +2279,13 @@ class AnalyticsService:
             )
             urban_concentration = round((weights[urban_mask].sum() / total_weight) * 100, 4)
 
+        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+
         return {
             "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "source_id": identity_payload["source_id"],
+            "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+            "person_id": identity_payload["person_id"],
             "gender": {"male_share": male_share, "female_share": female_share},
             "age_bands": {"a18_34": a18_34, "a35_59": a35_59, "a60_plus": a60_plus},
             "dominant_education": dominant_education,
@@ -3123,10 +3164,14 @@ class AnalyticsService:
                     retention = round((float(current["votes"]) / prev_votes) * 100, 4) if prev_votes > 0 else 100.0
                 else:
                     retention = 100.0
+            identity_payload = self._candidate_identity_payload(candidate_rows, cid)
 
             candidates_out.append(
                 {
                     "candidate_id": self._candidate_output_id(candidate_rows, cid),
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
                     "name": name,
                     "party": party,
                     "votes": votes,
@@ -3251,10 +3296,15 @@ class AnalyticsService:
             candidate_id = str(candidate_id_raw).strip() if pd.notna(candidate_id_raw) else ""
             if not candidate_id:
                 continue
+            candidate_rows = ranked[ranked["_candidate_id"] == row["_candidate_id"]].copy()
+            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
             numero_raw = row["_numero"] if pd.notna(row["_numero"]) and str(row["_numero"]).strip() else candidate_id
             items.append(
                 {
                     "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
                     "candidato": (str(row["_candidato"]) if pd.notna(row["_candidato"]) else ""),
                     "partido": (str(row["_partido"]) if pd.notna(row["_partido"]) else None),
                     "cargo": (str(row["_cargo"]) if pd.notna(row["_cargo"]) else None),

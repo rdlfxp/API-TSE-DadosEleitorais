@@ -23,6 +23,9 @@ class OverviewResponse(BaseModel):
 
 class TopCandidateItem(BaseModel):
     candidate_id: str
+    source_id: str | None = None
+    canonical_candidate_id: str | None = None
+    person_id: str | None = None
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -42,6 +45,9 @@ class TopCandidatesResponse(BaseModel):
 
 class CandidateSearchItem(BaseModel):
     candidate_id: str
+    source_id: str | None = None
+    canonical_candidate_id: str | None = None
+    person_id: str | None = None
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -195,6 +201,9 @@ class CandidateLatestElection(BaseModel):
 
 class CandidateSummaryResponse(BaseModel):
     candidate_id: str
+    source_id: str | None = None
+    canonical_candidate_id: str | None = None
+    person_id: str | None = None
     name: str
     number: str | None = None
     party: str | None = None
@@ -218,7 +227,9 @@ class VoteHistoryItem(BaseModel):
     candidate_number: str | None = None
     party: str | None = None
     source_id: str | None = None
+    canonical_candidate_id: str | None = None
     person_id: str | None = None
+    is_projection: bool = False
 
 
 class VoteHistoryResponse(BaseModel):
@@ -241,6 +252,9 @@ class AgeBandsProfile(BaseModel):
 
 class ElectorateProfileResponse(BaseModel):
     candidate_id: str
+    source_id: str | None = None
+    canonical_candidate_id: str | None = None
+    person_id: str | None = None
     gender: GenderProfile
     age_bands: AgeBandsProfile
     dominant_education: str
@@ -340,6 +354,9 @@ class CompareContext(BaseModel):
 
 class CompareCandidateItem(BaseModel):
     candidate_id: str
+    source_id: str | None = None
+    canonical_candidate_id: str | None = None
+    person_id: str | None = None
     name: str
     party: str | None = None
     votes: int

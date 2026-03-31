@@ -59,14 +59,24 @@ def main() -> None:
     assert_true(status == 200, "overview status != 200")
     print("[smoke] ok: /v1/analytics/overview")
 
-    query = "a"
+    query = "ca"
     if cargos:
         query = str(cargos[0]).split(" ")[0]
+    candidate_params = {
+        "query": query[:2] if len(query) > 1 else "ca",
+        "ano": anos[0],
+        "page": 1,
+        "page_size": 5,
+    }
+    if ufs:
+        candidate_params["uf"] = ufs[0]
+    if cargos:
+        candidate_params["cargo"] = cargos[0]
     status, busca = fetch_json(
         base_url,
         "/v1/analytics/candidatos",
         args.timeout,
-        {"query": query[:2] if len(query) > 1 else "ca", "page": 1, "page_size": 5},
+        candidate_params,
     )
     assert_true(status == 200, "candidatos status != 200")
     assert_true("items" in busca and "total" in busca, "resposta candidatos invalida")
