@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import urllib.parse
 import urllib.request
@@ -27,6 +28,17 @@ def fetch_json(base_url: str, path: str, timeout: float, params: dict | None = N
         return status, payload
 
 
+def _prefer_ipv4() -> None:
+    original_getaddrinfo = socket.getaddrinfo
+
+    def ipv4_first_getaddrinfo(host: str, port: int, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0):
+        infos = original_getaddrinfo(host, port, family, type, proto, flags)
+        ipv4_infos = [info for info in infos if info[0] == socket.AF_INET]
+        return ipv4_infos or infos
+
+    socket.getaddrinfo = ipv4_first_getaddrinfo
+
+
 def assert_true(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(f"[smoke] FAIL: {message}")
@@ -35,6 +47,7 @@ def assert_true(condition: bool, message: str) -> None:
 def main() -> None:
     args = parse_args()
     base_url = args.base_url
+    _prefer_ipv4()
 
     status, health = fetch_json(base_url, "/health", args.timeout)
     assert_true(status == 200, "health status != 200")
@@ -63,7 +76,7 @@ def main() -> None:
     if cargos:
         query = str(cargos[0]).split(" ")[0]
     candidate_params = {
-        "query": query[:2] if len(query) > 1 else "ca",
+        "q": query[:2] if len(query) > 1 else "ca",
         "ano": anos[0],
         "page": 1,
         "page_size": 5,
@@ -74,13 +87,13 @@ def main() -> None:
         candidate_params["cargo"] = cargos[0]
     status, busca = fetch_json(
         base_url,
-        "/v1/analytics/candidatos",
+        "/v1/analytics/candidatos/search",
         args.timeout,
         candidate_params,
     )
-    assert_true(status == 200, "candidatos status != 200")
+    assert_true(status == 200, "candidatos/search status != 200")
     assert_true("items" in busca and "total" in busca, "resposta candidatos invalida")
-    print("[smoke] ok: /v1/analytics/candidatos")
+    print("[smoke] ok: /v1/analytics/candidatos/search")
 
     status, _ = fetch_json(
         base_url,
