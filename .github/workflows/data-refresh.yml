@@ -45,9 +45,17 @@ jobs:
         run: |
           if [ -n "${{ secrets.TSE_SOURCES_JSON }}" ]; then
             printf '%s' '${{ secrets.TSE_SOURCES_JSON }}' > /tmp/tse_sources.json
-            python scripts/fetch_sources.py --config /tmp/tse_sources.json --raw-dir data/raw
+            python -u scripts/fetch_sources.py \
+              --config /tmp/tse_sources.json \
+              --raw-dir data/raw \
+              --timeout 180 \
+              --retries 3
           elif [ -f config/tse_sources.json ]; then
-            python scripts/fetch_sources.py --config config/tse_sources.json --raw-dir data/raw
+            python -u scripts/fetch_sources.py \
+              --config config/tse_sources.json \
+              --raw-dir data/raw \
+              --timeout 180 \
+              --retries 3
           else
             echo "No remote source config found (secret/local file); skipping remote fetch."
           fi

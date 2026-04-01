@@ -81,7 +81,7 @@ def test_duckdb_resolves_process_scoped_database_path(tmp_path):
     resolved = DuckDBAnalyticsService._resolve_database_path(str(requested))
 
     assert resolved != str(requested)
-    assert f".pid" in Path(resolved).name
+    assert ".pid" in Path(resolved).name
     assert Path(resolved).suffix == ".duckdb"
     assert Path(resolved).parent == requested.parent
 
