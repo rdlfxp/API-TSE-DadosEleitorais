@@ -30,4 +30,6 @@ jobs:
         run: |
           python scripts/smoke_test_api.py \
             --base-url "${{ inputs.base_url }}" \
-            --timeout "${{ inputs.timeout }}"
+            --timeout "${{ inputs.timeout }}" \
+            --retries 6 \
+            --retry-delay 5
