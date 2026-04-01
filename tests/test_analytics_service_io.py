@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -72,6 +74,16 @@ def test_duckdb_from_file_supports_file_backed_database(tmp_path, sample_df: pd.
         assert service.filter_options()["anos"] == [2022]
     finally:
         service.close()
+
+
+def test_duckdb_resolves_process_scoped_database_path(tmp_path):
+    requested = tmp_path / "runtime" / "analytics.duckdb"
+    resolved = DuckDBAnalyticsService._resolve_database_path(str(requested))
+
+    assert resolved != str(requested)
+    assert ".pid" in Path(resolved).name
+    assert Path(resolved).suffix == ".duckdb"
+    assert Path(resolved).parent == requested.parent
 
 
 def test_filter_options_excludes_non_official_uf_codes(tmp_path):

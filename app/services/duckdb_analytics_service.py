@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import logging
 import math
+import os
 from pathlib import Path
 from threading import Lock
 import unicodedata
@@ -215,9 +216,24 @@ class DuckDBAnalyticsService:
     _query_lock: Lock
     _columns: set[str]
     _source_path: Path | None = field(default=None, init=False, repr=False)
+    _database_path: str | None = field(default=None, init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
     _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
+
+    @staticmethod
+    def _resolve_database_path(database_path: str | None) -> str:
+        db_path = str(database_path or ":memory:").strip() or ":memory:"
+        if db_path == ":memory:":
+            return db_path
+
+        base_path = Path(db_path)
+        suffix = base_path.suffix
+        stem = base_path.stem if suffix else base_path.name
+        scoped_name = f"{stem}.pid{os.getpid()}{suffix}" if suffix else f"{stem}.pid{os.getpid()}"
+        scoped_path = base_path.with_name(scoped_name)
+        scoped_path.parent.mkdir(parents=True, exist_ok=True)
+        return str(scoped_path)
 
     @classmethod
     def from_file(
@@ -237,9 +253,7 @@ class DuckDBAnalyticsService:
         if not path.exists():
             raise FileNotFoundError(path)
 
-        db_path = str(database_path or ":memory:").strip() or ":memory:"
-        if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        db_path = cls._resolve_database_path(database_path)
         conn = duckdb.connect(database=db_path)
         if memory_limit_mb is not None and int(memory_limit_mb) > 0:
             try:
@@ -289,6 +303,7 @@ class DuckDBAnalyticsService:
             _columns=cols,
         )
         service._source_path = path
+        service._database_path = db_path
         if create_indexes and materialize_table:
             service._create_indexes()
         return service
