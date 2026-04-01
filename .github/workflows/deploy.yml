@@ -43,4 +43,6 @@ jobs:
           fi
           python scripts/smoke_test_api.py \
             --base-url "${PROD_BASE_URL}" \
-            --timeout 12
+            --timeout 12 \
+            --retries 6 \
+            --retry-delay 5

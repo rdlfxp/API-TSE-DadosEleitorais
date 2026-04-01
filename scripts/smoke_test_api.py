@@ -5,27 +5,53 @@ import argparse
 import json
 import socket
 import sys
+import time
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError, URLError
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke tests da API de analytics.")
     parser.add_argument("--base-url", default="http://localhost:8000", help="URL base da API.")
     parser.add_argument("--timeout", type=float, default=8.0, help="Timeout em segundos por request.")
+    parser.add_argument("--retries", type=int, default=0, help="Tentativas extras para erros transitórios.")
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=2.0,
+        help="Espera entre tentativas extras em segundos.",
+    )
     return parser.parse_args()
 
 
-def fetch_json(base_url: str, path: str, timeout: float, params: dict | None = None) -> tuple[int, dict]:
+def fetch_json(base_url: str, path: str, timeout: float, params: dict | None = None, retries: int = 0, retry_delay: float = 2.0) -> tuple[int, dict]:
     query = ""
     if params:
         query = "?" + urllib.parse.urlencode(params)
     url = f"{base_url.rstrip('/')}{path}{query}"
     req = urllib.request.Request(url, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        status = int(response.getcode())
-        payload = json.loads(response.read().decode("utf-8"))
-        return status, payload
+
+    last_error: Exception | None = None
+    attempts = max(0, retries) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                status = int(response.getcode())
+                payload = json.loads(response.read().decode("utf-8"))
+                return status, payload
+        except HTTPError as exc:
+            if exc.code not in {502, 503, 504} or attempt >= attempts:
+                raise
+            last_error = exc
+        except URLError as exc:
+            if attempt >= attempts:
+                raise
+            last_error = exc
+        time.sleep(retry_delay * attempt)
+
+    assert last_error is not None
+    raise last_error
 
 
 def _prefer_ipv4() -> None:
@@ -49,13 +75,13 @@ def main() -> None:
     base_url = args.base_url
     _prefer_ipv4()
 
-    status, health = fetch_json(base_url, "/health", args.timeout)
+    status, health = fetch_json(base_url, "/health", args.timeout, retries=args.retries, retry_delay=args.retry_delay)
     assert_true(status == 200, "health status != 200")
     assert_true(health.get("status") == "ok", "health.status != ok")
     assert_true(bool(health.get("data_loaded")), "health.data_loaded = false")
     print("[smoke] ok: /health")
 
-    status, filtros = fetch_json(base_url, "/v1/analytics/filtros", args.timeout)
+    status, filtros = fetch_json(base_url, "/v1/analytics/filtros", args.timeout, retries=args.retries, retry_delay=args.retry_delay)
     assert_true(status == 200, "filtros status != 200")
     anos = filtros.get("anos", [])
     ufs = filtros.get("ufs", [])
@@ -68,7 +94,7 @@ def main() -> None:
         overview_params["uf"] = ufs[0]
     if cargos:
         overview_params["cargo"] = cargos[0]
-    status, _ = fetch_json(base_url, "/v1/analytics/overview", args.timeout, overview_params)
+    status, _ = fetch_json(base_url, "/v1/analytics/overview", args.timeout, overview_params, retries=args.retries, retry_delay=args.retry_delay)
     assert_true(status == 200, "overview status != 200")
     print("[smoke] ok: /v1/analytics/overview")
 
@@ -90,6 +116,8 @@ def main() -> None:
         "/v1/analytics/candidatos/search",
         args.timeout,
         candidate_params,
+        retries=args.retries,
+        retry_delay=args.retry_delay,
     )
     assert_true(status == 200, "candidatos/search status != 200")
     assert_true("items" in busca and "total" in busca, "resposta candidatos invalida")
@@ -100,6 +128,8 @@ def main() -> None:
         "/v1/analytics/distribuicao",
         args.timeout,
         {"group_by": "genero", "ano": anos[0]},
+        retries=args.retries,
+        retry_delay=args.retry_delay,
     )
     assert_true(status == 200, "distribuicao status != 200")
     print("[smoke] ok: /v1/analytics/distribuicao")
