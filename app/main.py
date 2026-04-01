@@ -176,7 +176,9 @@ async def lifespan(_: FastAPI):
                     "duckdb_create_indexes": bool(settings.duckdb_create_indexes),
                     "duckdb_memory_limit_mb": int(settings.duckdb_memory_limit_mb),
                     "duckdb_threads": int(settings.duckdb_threads),
-                    "duckdb_database_path": str(settings.duckdb_database_path),
+                    "duckdb_database_path": (
+                        getattr(service, "_database_path", None) if isinstance(service, DuckDBAnalyticsService) else None
+                    ),
                     "rows": rows_loaded,
                 },
                 ensure_ascii=False,
