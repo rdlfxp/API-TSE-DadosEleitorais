@@ -1795,407 +1795,6 @@
         }
       }
     },
-    "/v1/candidates/{candidate_id}/vote-map": {
-      "get": {
-        "summary": "Candidate Vote Map",
-        "operationId": "candidate_vote_map_v1_candidates__candidate_id__vote_map_get",
-        "parameters": [
-          {
-            "name": "candidate_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Candidate Id"
-            }
-          },
-          {
-            "name": "level",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "enum": [
-                "auto",
-                "municipio",
-                "zona"
-              ],
-              "type": "string",
-              "default": "auto",
-              "title": "Level"
-            }
-          },
-          {
-            "name": "year",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Year"
-            }
-          },
-          {
-            "name": "ano",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Ano"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 2,
-                  "maxLength": 2
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "State"
-            }
-          },
-          {
-            "name": "uf",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 2,
-                  "maxLength": 2
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Uf"
-            }
-          },
-          {
-            "name": "office",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Office"
-            }
-          },
-          {
-            "name": "cargo",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cargo"
-            }
-          },
-          {
-            "name": "round",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "maximum": 2,
-                  "minimum": 1
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Round"
-            }
-          },
-          {
-            "name": "turno",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "maximum": 2,
-                  "minimum": 1
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Turno"
-            }
-          },
-          {
-            "name": "municipality",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Municipality"
-            }
-          },
-          {
-            "name": "municipio",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Municipio"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CandidateVoteMapResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too Many Requests",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Service Unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/candidates/{candidate_id}/zone-fidelity": {
-      "get": {
-        "summary": "Candidate Zone Fidelity",
-        "operationId": "candidate_zone_fidelity_v1_candidates__candidate_id__zone_fidelity_get",
-        "parameters": [
-          {
-            "name": "candidate_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Candidate Id"
-            }
-          },
-          {
-            "name": "year",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Year"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 2,
-                  "maxLength": 2
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "State"
-            }
-          },
-          {
-            "name": "office",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Office"
-            }
-          },
-          {
-            "name": "include_geometry",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Include Geometry"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ZoneFidelityResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too Many Requests",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Service Unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/candidates/compare": {
       "get": {
         "summary": "Candidates Compare",
@@ -4188,7 +3787,8 @@
                 "type": "null"
               }
             ],
-            "title": "Source Id"
+            "title": "Source Id",
+            "description": "Origem do registro eleitoral retornado."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -4199,7 +3799,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -4210,7 +3811,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "candidato": {
             "type": "string",
@@ -4330,7 +3932,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador de consulta usado na rota."
           },
           "source_id": {
             "anyOf": [
@@ -4341,7 +3944,8 @@
                 "type": "null"
               }
             ],
-            "title": "Source Id"
+            "title": "Source Id",
+            "description": "Origem do registro eleitoral usado para montar a resposta."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -4352,7 +3956,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -4363,7 +3968,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "name": {
             "type": "string",
@@ -4452,260 +4058,6 @@
         ],
         "title": "CandidateSummaryResponse"
       },
-      "CandidateVoteMapPoint": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "votes": {
-            "type": "integer",
-            "title": "Votes"
-          },
-          "vote_share": {
-            "type": "number",
-            "title": "Vote Share"
-          },
-          "tier": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tier"
-          },
-          "color_rgb": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Color Rgb"
-          },
-          "marker_size": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Marker Size"
-          },
-          "cluster_size": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cluster Size"
-          },
-          "lat": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lat"
-          },
-          "lng": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lng"
-          },
-          "uf": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Uf"
-          },
-          "municipio": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Municipio"
-          },
-          "zona": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Zona"
-          },
-          "tooltip": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tooltip"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key",
-          "label",
-          "votes",
-          "vote_share"
-        ],
-        "title": "CandidateVoteMapPoint"
-      },
-      "CandidateVoteMapRegionCluster": {
-        "properties": {
-          "region_type": {
-            "type": "string",
-            "title": "Region Type"
-          },
-          "region_key": {
-            "type": "string",
-            "title": "Region Key"
-          },
-          "region_label": {
-            "type": "string",
-            "title": "Region Label"
-          },
-          "votes": {
-            "type": "integer",
-            "title": "Votes"
-          },
-          "points": {
-            "type": "integer",
-            "title": "Points"
-          },
-          "lat": {
-            "type": "number",
-            "title": "Lat"
-          },
-          "lng": {
-            "type": "number",
-            "title": "Lng"
-          }
-        },
-        "type": "object",
-        "required": [
-          "region_type",
-          "region_key",
-          "region_label",
-          "votes",
-          "points",
-          "lat",
-          "lng"
-        ],
-        "title": "CandidateVoteMapRegionCluster"
-      },
-      "CandidateVoteMapResponse": {
-        "properties": {
-          "candidate_id": {
-            "type": "string",
-            "title": "Candidate Id"
-          },
-          "level": {
-            "type": "string",
-            "title": "Level"
-          },
-          "quantile_q1": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quantile Q1"
-          },
-          "quantile_q2": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quantile Q2"
-          },
-          "total_votes": {
-            "type": "integer",
-            "title": "Total Votes"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/CandidateVoteMapPoint"
-            },
-            "type": "array",
-            "title": "Items"
-          },
-          "region_clusters": {
-            "items": {
-              "$ref": "#/components/schemas/CandidateVoteMapRegionCluster"
-            },
-            "type": "array",
-            "title": "Region Clusters"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          }
-        },
-        "type": "object",
-        "required": [
-          "candidate_id",
-          "level",
-          "quantile_q1",
-          "quantile_q2",
-          "total_votes"
-        ],
-        "title": "CandidateVoteMapResponse"
-      },
       "CompareCandidateItem": {
         "properties": {
           "candidate_id": {
@@ -4721,7 +4073,8 @@
                 "type": "null"
               }
             ],
-            "title": "Source Id"
+            "title": "Source Id",
+            "description": "Origem do registro eleitoral retornado."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -4732,7 +4085,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -4743,7 +4097,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "name": {
             "type": "string",
@@ -4932,7 +4287,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador de consulta usado na rota."
           },
           "source_id": {
             "anyOf": [
@@ -4943,7 +4299,8 @@
                 "type": "null"
               }
             ],
-            "title": "Source Id"
+            "title": "Source Id",
+            "description": "Origem do registro eleitoral usado para montar a resposta."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -4954,7 +4311,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -4965,7 +4323,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "gender": {
             "$ref": "#/components/schemas/GenderProfile"
@@ -5599,7 +4958,8 @@
                 "type": "null"
               }
             ],
-            "title": "Source Id"
+            "title": "Source Id",
+            "description": "Origem do registro eleitoral retornado."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -5610,7 +4970,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -5621,7 +4982,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "candidato": {
             "type": "string",
@@ -6109,7 +5471,8 @@
                 "type": "null"
               }
             ],
-            "title": "Source Id"
+            "title": "Source Id",
+            "description": "Origem do registro eleitoral daquele item do histórico."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -6120,7 +5483,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -6131,7 +5495,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "is_projection": {
             "type": "boolean",
@@ -6151,7 +5516,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador de consulta usado na rota."
           },
           "canonical_candidate_id": {
             "anyOf": [
@@ -6162,7 +5528,8 @@
                 "type": "null"
               }
             ],
-            "title": "Canonical Candidate Id"
+            "title": "Canonical Candidate Id",
+            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
           },
           "person_id": {
             "anyOf": [
@@ -6173,7 +5540,8 @@
                 "type": "null"
               }
             ],
-            "title": "Person Id"
+            "title": "Person Id",
+            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
           },
           "items": {
             "items": {
@@ -6188,84 +5556,6 @@
           "candidate_id"
         ],
         "title": "VoteHistoryResponse"
-      },
-      "ZoneFidelityItem": {
-        "properties": {
-          "zone_id": {
-            "type": "string",
-            "title": "Zone Id"
-          },
-          "zone_name": {
-            "type": "string",
-            "title": "Zone Name"
-          },
-          "city": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "City"
-          },
-          "votes": {
-            "type": "integer",
-            "title": "Votes"
-          },
-          "retention": {
-            "type": "number",
-            "title": "Retention"
-          },
-          "lat": {
-            "type": "number",
-            "title": "Lat"
-          },
-          "lng": {
-            "type": "number",
-            "title": "Lng"
-          },
-          "geometry": {
-            "anyOf": [
-              {},
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Geometry"
-          }
-        },
-        "type": "object",
-        "required": [
-          "zone_id",
-          "zone_name",
-          "votes",
-          "retention",
-          "lat",
-          "lng"
-        ],
-        "title": "ZoneFidelityItem"
-      },
-      "ZoneFidelityResponse": {
-        "properties": {
-          "candidate_id": {
-            "type": "string",
-            "title": "Candidate Id"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ZoneFidelityItem"
-            },
-            "type": "array",
-            "title": "Items"
-          }
-        },
-        "type": "object",
-        "required": [
-          "candidate_id"
-        ],
-        "title": "ZoneFidelityResponse"
       }
     }
   }

@@ -23,9 +23,9 @@ class OverviewResponse(BaseModel):
 
 class TopCandidateItem(BaseModel):
     candidate_id: str
-    source_id: str | None = None
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -45,9 +45,9 @@ class TopCandidatesResponse(BaseModel):
 
 class CandidateSearchItem(BaseModel):
     candidate_id: str
-    source_id: str | None = None
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -200,10 +200,10 @@ class CandidateLatestElection(BaseModel):
 
 
 class CandidateSummaryResponse(BaseModel):
-    candidate_id: str
-    source_id: str | None = None
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    candidate_id: str = Field(description="Identificador de consulta usado na rota.")
+    source_id: str | None = Field(default=None, description="Origem do registro eleitoral usado para montar a resposta.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     name: str
     number: str | None = None
     party: str | None = None
@@ -226,16 +226,16 @@ class VoteHistoryItem(BaseModel):
     round: int | None = None
     candidate_number: str | None = None
     party: str | None = None
-    source_id: str | None = None
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    source_id: str | None = Field(default=None, description="Origem do registro eleitoral daquele item do histórico.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     is_projection: bool = False
 
 
 class VoteHistoryResponse(BaseModel):
-    candidate_id: str
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    candidate_id: str = Field(description="Identificador de consulta usado na rota.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     items: list[VoteHistoryItem] = Field(default_factory=list)
 
 
@@ -251,10 +251,10 @@ class AgeBandsProfile(BaseModel):
 
 
 class ElectorateProfileResponse(BaseModel):
-    candidate_id: str
-    source_id: str | None = None
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    candidate_id: str = Field(description="Identificador de consulta usado na rota.")
+    source_id: str | None = Field(default=None, description="Origem do registro eleitoral usado para montar a resposta.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     gender: GenderProfile
     age_bands: AgeBandsProfile
     dominant_education: str
@@ -309,43 +309,6 @@ class CandidateVoteMapPoint(BaseModel):
     tooltip: str | None = None
 
 
-class CandidateVoteMapRegionCluster(BaseModel):
-    region_type: str
-    region_key: str
-    region_label: str
-    votes: int
-    points: int
-    lat: float
-    lng: float
-
-
-class CandidateVoteMapResponse(BaseModel):
-    candidate_id: str
-    level: str
-    quantile_q1: int | None
-    quantile_q2: int | None
-    total_votes: int
-    items: list[CandidateVoteMapPoint] = Field(default_factory=list)
-    region_clusters: list[CandidateVoteMapRegionCluster] = Field(default_factory=list)
-    metadata: dict | None = None
-
-
-class ZoneFidelityItem(BaseModel):
-    zone_id: str
-    zone_name: str
-    city: str | None = None
-    votes: int
-    retention: float
-    lat: float
-    lng: float
-    geometry: object | None = None
-
-
-class ZoneFidelityResponse(BaseModel):
-    candidate_id: str
-    items: list[ZoneFidelityItem] = Field(default_factory=list)
-
-
 class CompareContext(BaseModel):
     year: int | None = None
     state: str | None = None
@@ -354,9 +317,9 @@ class CompareContext(BaseModel):
 
 class CompareCandidateItem(BaseModel):
     candidate_id: str
-    source_id: str | None = None
-    canonical_candidate_id: str | None = None
-    person_id: str | None = None
+    source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
     name: str
     party: str | None = None
     votes: int

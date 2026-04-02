@@ -10,6 +10,8 @@ import unicodedata
 
 import pandas as pd
 
+from app.services.candidate_history_mixin import CandidateHistoryMixin
+
 
 ELEITO_LABELS = {
     "ELEITO",
@@ -207,7 +209,7 @@ UF_CENTROIDS = {
 
 
 @dataclass
-class AnalyticsService:
+class AnalyticsService(CandidateHistoryMixin):
     dataframe: pd.DataFrame
     default_top_n: int
     max_top_n: int
@@ -275,8 +277,11 @@ class AnalyticsService:
         partido: str | None = None,
         municipio: str | None = None,
         somente_eleitos: bool = False,
+        columns: list[str] | None = None,
     ) -> pd.DataFrame:
-        df = self.dataframe.copy()
+        # Avoid cloning the whole dataset on every request; the chained filters
+        # below already materialize new frames only where needed.
+        df = self.dataframe
         normalized_uf = self._normalize_uf_filter(uf)
         col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
@@ -312,6 +317,10 @@ class AnalyticsService:
             df = df[col_municipio_norm == municipio_norm]
         if somente_eleitos and col_situacao:
             df = df[self._is_elected(df[col_situacao])]
+        if columns:
+            available = [col for col in dict.fromkeys(columns) if col in df.columns]
+            if available:
+                df = df.loc[:, available]
         return df
 
     def _normalize_text(self, series: pd.Series) -> pd.Series:
@@ -551,39 +560,12 @@ class AnalyticsService:
         return str(fallback)
 
     def _candidate_person_identity(self, df: pd.DataFrame, fallback: str) -> dict[str, object]:
-        col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
-        col_urna = self._pick_col(["NM_URNA_CANDIDATO"])
-        col_birth = self._pick_col(["DT_NASCIMENTO"])
-
-        name_tokens: set[str] = set()
-        canonical_name = self._normalize_ascii_upper(str(fallback))
-        if col_name:
-            names = self._normalize_text(df[col_name]).replace("", pd.NA).dropna()
-            normalized_names = names.apply(self._normalize_ascii_upper)
-            name_tokens.update(value for value in normalized_names.tolist() if value)
-            if not names.empty:
-                canonical_name = self._normalize_ascii_upper(str(names.iloc[0]))
-        if col_urna:
-            urna_names = self._normalize_text(df[col_urna]).replace("", pd.NA).dropna()
-            name_tokens.update(self._normalize_ascii_upper(str(value)) for value in urna_names.tolist() if str(value).strip())
-
-        birth_tokens: set[str] = set()
-        if col_birth:
-            birth_series = pd.to_datetime(df[col_birth], errors="coerce", dayfirst=True)
-            birth_tokens.update(
-                birth_series.dropna().dt.strftime("%Y-%m-%d").tolist()
-            )
-
-        canonical_candidate_id = self._candidate_output_id(df, fallback)
-        person_id = canonical_name or str(canonical_candidate_id)
-        if birth_tokens:
-            person_id = f"{person_id}|{sorted(birth_tokens)[0]}"
-
+        person_id = self._stable_person_id(df)
         return {
-            "canonical_candidate_id": str(canonical_candidate_id),
+            "canonical_candidate_id": person_id,
             "person_id": person_id,
-            "name_tokens": name_tokens,
-            "birth_tokens": birth_tokens,
+            "name_tokens": set(),
+            "birth_tokens": set(),
         }
 
     def _candidate_source_id(self, df: pd.DataFrame, fallback: str) -> str:
@@ -596,20 +578,29 @@ class AnalyticsService:
 
     def _candidate_identity_payload(self, df: pd.DataFrame, fallback: str) -> dict[str, str]:
         identity = self._candidate_person_identity(df, fallback)
-        source_id = self._candidate_source_id(df, str(identity["canonical_candidate_id"]))
+        source_id = self._candidate_source_id(df, str(fallback))
         return {
             "source_id": str(source_id),
             "canonical_candidate_id": str(identity["canonical_candidate_id"]),
             "person_id": str(identity["person_id"]),
         }
 
-    def _historical_candidate_rows(self, candidate_id: str, state: str | None = None, office: str | None = None) -> tuple[pd.DataFrame, dict[str, object]]:
-        scoped = self._apply_filters(uf=state, cargo=office)
+    def _historical_candidate_rows(
+        self,
+        candidate_id: str,
+        state: str | None = None,
+        office: str | None = None,
+        all_rows: pd.DataFrame | None = None,
+    ) -> tuple[pd.DataFrame, dict[str, object]]:
+        scoped_source = all_rows if all_rows is not None else self._apply_filters(uf=state, cargo=office)
+        scoped = self._scope_history_rows(scoped_source, state=state, office=office) if all_rows is not None else scoped_source
         seed_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         if seed_rows.empty and (state or office):
-            seed_rows = self.dataframe[self._candidate_mask(self.dataframe, candidate_id)].copy()
+            fallback_source = all_rows if all_rows is not None else self.dataframe
+            seed_rows = fallback_source[self._candidate_mask(fallback_source, candidate_id)].copy()
         if seed_rows.empty:
-            return self.dataframe.iloc[0:0].copy(), {
+            empty_base = all_rows if all_rows is not None else self.dataframe
+            return empty_base.iloc[0:0].copy(), {
                 "canonical_candidate_id": str(candidate_id),
                 "person_id": str(candidate_id),
                 "name_tokens": set(),
@@ -617,24 +608,67 @@ class AnalyticsService:
             }
 
         identity = self._candidate_person_identity(seed_rows, candidate_id)
-        all_rows = self.dataframe.copy()
-        name_mask = pd.Series([False] * len(all_rows), index=all_rows.index)
-        if identity["name_tokens"]:
-            for col in ["NM_CANDIDATO", "NM_URNA_CANDIDATO"]:
-                if col in all_rows.columns:
-                    normalized = self._normalize_text(all_rows[col]).apply(self._normalize_ascii_upper)
-                    name_mask = name_mask | normalized.isin(identity["name_tokens"])
-
-        if identity["birth_tokens"] and "DT_NASCIMENTO" in all_rows.columns:
-            birth_series = pd.to_datetime(all_rows["DT_NASCIMENTO"], errors="coerce", dayfirst=True)
-            birth_mask = birth_series.dt.strftime("%Y-%m-%d").isin(identity["birth_tokens"])
-            candidate_rows = all_rows[name_mask & birth_mask].copy()
-        elif name_mask.any():
-            candidate_rows = all_rows[name_mask].copy()
-        else:
+        all_rows = all_rows if all_rows is not None else self.dataframe
+        candidate_rows = all_rows[self._person_id_series(all_rows) == str(identity["person_id"])].copy()
+        if candidate_rows.empty:
             candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
 
         return candidate_rows, identity
+
+    def _candidate_retention_from_history(self, candidate_rows: pd.DataFrame, resolved_year: int | None) -> float:
+        if candidate_rows.empty:
+            return 100.0
+
+        col_year = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_round = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_state = self._pick_col(["SG_UF"])
+        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        if not col_year or not col_votes:
+            return 100.0
+
+        history = candidate_rows.assign(
+            _year=pd.to_numeric(candidate_rows[col_year], errors="coerce"),
+            _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
+            _round=(self._extract_turno(candidate_rows[col_round]) if col_round else 0),
+            _office=(self._normalize_text(candidate_rows[col_cargo]) if col_cargo else ""),
+            _state=(self._normalize_text(candidate_rows[col_state]).str.upper() if col_state else ""),
+            _municipality=(self._normalize_text(candidate_rows[col_municipio]) if col_municipio else ""),
+        ).dropna(subset=["_year"])
+        if history.empty:
+            return 100.0
+
+        history = history.assign(
+            _scope=history["_office"].apply(self._cargo_scope),
+            _context_state=history["_state"].where(history["_office"].apply(self._cargo_scope) != "nacional", ""),
+            _context_municipality=history["_municipality"].where(history["_office"].apply(self._cargo_scope) == "municipio", ""),
+        )
+        grouped = (
+            history.groupby(["_year", "_office", "_context_state", "_context_municipality", "_round"], as_index=False)
+            .agg(votes=("_votes", "sum"))
+            .sort_values(["_year", "_round", "_office", "votes"], ascending=[False, False, True, False])
+        )
+        if grouped.empty:
+            return 100.0
+
+        current = None
+        if resolved_year is not None:
+            matches = grouped[grouped["_year"] == resolved_year]
+            if not matches.empty:
+                current = matches.iloc[0]
+        if current is None:
+            current = grouped.iloc[-1]
+
+        previous = grouped[grouped["_year"] < int(current["_year"])]
+        if previous.empty:
+            return 100.0
+
+        prev_votes = float(previous.iloc[-1]["votes"])
+        if prev_votes <= 0:
+            return 100.0
+        current_votes = float(current["votes"])
+        return round((current_votes / prev_votes) * 100, 4)
 
     def resolve_municipal_scope(
         self,
@@ -1243,6 +1277,7 @@ class AnalyticsService:
                 "total_pages": 0,
                 "items": [],
             }
+        candidate_index = df.groupby("_candidate_key", sort=False).indices
 
         agg_spec: dict[str, str] = {"_votos": "sum", col_candidato: "first"}
         col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
@@ -1263,12 +1298,9 @@ class AnalyticsService:
                 .agg(_uf_count=("_uf_norm", "nunique"), _uf_first=("_uf_norm", "first"))
             )
             grouped = grouped.merge(uf_stats, on="_candidate_key", how="left")
-            grouped["_uf_out"] = grouped.apply(
-                lambda row: row["_uf_first"] if int(row["_uf_count"] or 0) == 1 else None,
-                axis=1,
-            )
+            grouped.loc[:, "_uf_out"] = grouped["_uf_first"].where(grouped["_uf_count"].fillna(0).astype(int).eq(1))
         else:
-            grouped["_uf_out"] = None
+            grouped.loc[:, "_uf_out"] = None
 
         grouped = grouped.assign(_candidato_sort=self._normalize_text(grouped[col_candidato]).str.lower())
         grouped = grouped.sort_values(["_votos", "_candidato_sort"], ascending=[False, True])
@@ -1285,7 +1317,11 @@ class AnalyticsService:
                 if col_candidate_id and pd.notna(row[col_candidate_id]) and str(row[col_candidate_id]).strip()
                 else str(row["_candidate_key"])
             )
-            candidate_rows = df[df["_candidate_key"] == row["_candidate_key"]].copy()
+            candidate_key = str(row["_candidate_key"])
+            candidate_positions = candidate_index.get(candidate_key)
+            if candidate_positions is None:
+                continue
+            candidate_rows = df.iloc[candidate_positions].copy()
             identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
             out.append(
                 {
@@ -1762,7 +1798,8 @@ class AnalyticsService:
         if any(col is None for col in required):
             return {"federal": [], "municipal_brasil": [], "municipal_uf": []}
 
-        base = self.dataframe.copy()
+        # Keep the base frame shared; later operations build derived frames.
+        base = self.dataframe
         base = base.assign(
             _uf=self._normalize_text(base[col_uf]).str.upper().replace("", pd.NA),
             _cargo=self._normalize_text(base[col_cargo]),
@@ -1925,9 +1962,9 @@ class AnalyticsService:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
-                "source_id": str(candidate_id),
-                "canonical_candidate_id": str(candidate_id),
-                "person_id": str(candidate_id),
+                "source_id": None,
+                "canonical_candidate_id": None,
+                "person_id": None,
                 "name": "",
                 "number": None,
                 "party": None,
@@ -2067,139 +2104,7 @@ class AnalyticsService:
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
-        candidate_rows, identity = self._historical_candidate_rows(candidate_id=candidate_id, state=state, office=office)
-        col_year = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
-        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_status = self._pick_col(["DS_SIT_TOT_TURNO"])
-        col_round = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
-        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
-        col_state = self._pick_col(["SG_UF"])
-        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
-        col_party = self._pick_col(["SG_PARTIDO"])
-        col_number = self._pick_col(["NR_CANDIDATO"])
-        col_source_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
-        if candidate_rows.empty or not col_year or not col_votes:
-            return {
-                "candidate_id": str(candidate_id),
-                "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-                "person_id": str(identity["person_id"]),
-                "items": [],
-            }
-
-        candidate_rows = candidate_rows.assign(
-            _year=pd.to_numeric(candidate_rows[col_year], errors="coerce"),
-            _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
-            _round=(self._extract_turno(candidate_rows[col_round]) if col_round else 0),
-            _office=(self._normalize_text(candidate_rows[col_cargo]) if col_cargo else ""),
-            _state=(self._normalize_text(candidate_rows[col_state]).str.upper() if col_state else ""),
-            _municipality=(self._normalize_text(candidate_rows[col_municipio]) if col_municipio else ""),
-            _party=(self._normalize_text(candidate_rows[col_party]) if col_party else ""),
-            _number=(self._normalize_text(candidate_rows[col_number]) if col_number else ""),
-            _source_id=(self._normalize_text(candidate_rows[col_source_id]) if col_source_id else ""),
-        ).dropna(subset=["_year"])
-        if candidate_rows.empty:
-            return {
-                "candidate_id": str(candidate_id),
-                "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-                "person_id": str(identity["person_id"]),
-                "items": [],
-            }
-
-        candidate_rows = candidate_rows.assign(
-            _scope=candidate_rows["_office"].apply(self._cargo_scope),
-            _context_state=candidate_rows["_state"].where(candidate_rows["_office"].apply(self._cargo_scope) != "nacional", ""),
-            _context_municipality=candidate_rows["_municipality"].where(candidate_rows["_office"].apply(self._cargo_scope) == "municipio", ""),
-        )
-
-        all_rows = self.dataframe.assign(
-            _year=pd.to_numeric(self.dataframe[col_year], errors="coerce"),
-            _votes=pd.to_numeric(self.dataframe[col_votes], errors="coerce").fillna(0),
-            _round=(self._extract_turno(self.dataframe[col_round]) if col_round else 0),
-            _office=(self._normalize_text(self.dataframe[col_cargo]) if col_cargo else ""),
-            _state=(self._normalize_text(self.dataframe[col_state]).str.upper() if col_state else ""),
-            _municipality=(self._normalize_text(self.dataframe[col_municipio]) if col_municipio else ""),
-        ).dropna(subset=["_year"])
-        all_rows = all_rows.assign(
-            _scope=all_rows["_office"].apply(self._cargo_scope),
-            _context_state=all_rows["_state"].where(all_rows["_office"].apply(self._cargo_scope) != "nacional", ""),
-            _context_municipality=all_rows["_municipality"].where(all_rows["_office"].apply(self._cargo_scope) == "municipio", ""),
-        )
-
-        context_cols = ["_year", "_office", "_context_state", "_context_municipality", "_round"]
-        total_by_context = (
-            all_rows.groupby(context_cols, as_index=False)
-            .agg(total_votes=("_votes", "sum"))
-        )
-
-        grouped = (
-            candidate_rows.groupby(context_cols, as_index=False)
-            .agg(
-                votes=("_votes", "sum"),
-                state=("_state", "first"),
-                municipality=("_municipality", "first"),
-                party=("_party", "first"),
-                candidate_number=("_number", "first"),
-                source_id=("_source_id", "first"),
-            )
-            .merge(total_by_context, on=context_cols, how="left")
-            .sort_values(["_year", "_round", "_office", "votes"], ascending=[False, False, True, False])
-        )
-
-        status_by_context: dict[tuple[int, str, str, str, int], str | None] = {}
-        if col_status:
-            for key_vals, year_df in candidate_rows.groupby(context_cols):
-                statuses = self._normalize_text(year_df[col_status]).replace("", pd.NA).dropna()
-                if statuses.empty:
-                    status_by_context[tuple(key_vals)] = None
-                elif self._is_elected(statuses).any():
-                    status_by_context[tuple(key_vals)] = "ELEITO"
-                else:
-                    status_by_context[tuple(key_vals)] = str(statuses.iloc[0])
-
-        items = []
-        for _, row in grouped.iterrows():
-            year_int = int(row["_year"])
-            votes_int = int(row["votes"])
-            total_votes = float(row["total_votes"] or 0)
-            round_int = int(row["_round"]) if int(row["_round"] or 0) > 0 else None
-            state_value = str(row["state"]).strip() if pd.notna(row["state"]) and str(row["state"]).strip() else None
-            municipality_value = (
-                str(row["municipality"]).strip()
-                if pd.notna(row["municipality"]) and str(row["municipality"]).strip() and self._cargo_scope(str(row["_office"])) == "municipio"
-                else None
-            )
-            context_key = (
-                year_int,
-                str(row["_office"]),
-                str(row["_context_state"]),
-                str(row["_context_municipality"]),
-                int(row["_round"] or 0),
-            )
-            items.append(
-                {
-                    "year": year_int,
-                    "votes": votes_int,
-                    "vote_share": round((votes_int / total_votes) * 100, 4) if total_votes > 0 else 0.0,
-                    "status": status_by_context.get(context_key),
-                    "office": (str(row["_office"]).strip() or None),
-                    "state": state_value,
-                    "municipality": municipality_value,
-                    "round": round_int,
-                    "candidate_number": (str(row["candidate_number"]).strip() or None) if pd.notna(row["candidate_number"]) else None,
-                    "party": (str(row["party"]).strip() or None) if pd.notna(row["party"]) else None,
-                    "source_id": (str(row["source_id"]).strip() or None) if pd.notna(row["source_id"]) else None,
-                    "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-                    "person_id": str(identity["person_id"]),
-                    "is_projection": False,
-                }
-            )
-
-        return {
-            "candidate_id": str(candidate_id),
-            "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-            "person_id": str(identity["person_id"]),
-            "items": items,
-        }
+        return CandidateHistoryMixin.candidate_vote_history(self, candidate_id, state=state, office=office)
 
     def candidate_electorate_profile(
         self,
@@ -2214,9 +2119,9 @@ class AnalyticsService:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
-                "source_id": str(candidate_id),
-                "canonical_candidate_id": str(candidate_id),
-                "person_id": str(candidate_id),
+                "source_id": None,
+                "canonical_candidate_id": None,
+                "person_id": None,
                 "gender": {"male_share": 0.0, "female_share": 0.0},
                 "age_bands": {"a18_34": 0.0, "a35_59": 0.0, "a60_plus": 0.0},
                 "dominant_education": "N/A",
@@ -2602,472 +2507,6 @@ class AnalyticsService:
             "items": items,
         }
 
-    def candidate_vote_map(
-        self,
-        candidate_id: str,
-        level: str = "auto",
-        year: int | None = None,
-        state: str | None = None,
-        office: str | None = None,
-        round_filter: int | None = None,
-        municipality: str | None = None,
-        trace_id: str | None = None,
-    ) -> dict:
-        requested_level = (level or "auto").strip().lower()
-        if requested_level not in {"auto", "municipio", "zona"}:
-            requested_level = "auto"
-        normalized_state = (state or "").strip().upper() or None
-        if normalized_state in {"BR", "BRASIL"}:
-            normalized_state = None
-        normalized_municipio = self._normalize_municipio_filter(municipality) if municipality else None
-
-        scoped = self._apply_filters(ano=year, turno=round_filter, uf=normalized_state, cargo=office, municipio=normalized_municipio)
-        candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
-        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        if candidate_rows.empty or not col_votes:
-            return {
-                "candidate_id": str(candidate_id),
-                "level": "municipio" if requested_level == "auto" else requested_level,
-                "quantile_q1": 0,
-                "quantile_q2": 0,
-                "total_votes": 0,
-                "items": [],
-            }
-
-        col_uf = self._pick_col(["SG_UF"])
-        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
-        col_municipio = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
-        col_cd_municipio = self._pick_col(["CD_MUNICIPIO", "COD_MUNICIPIO", "ID_MUNICIPIO"])
-        col_zona = self._pick_col(["NR_ZONA", "CD_ZONA", "SQ_ZONA"])
-        col_lat = self._pick_col(["LATITUDE", "LAT", "VL_LATITUDE"])
-        col_lng = self._pick_col(["LONGITUDE", "LON", "LNG", "VL_LONGITUDE"])
-
-        resolved_level = requested_level
-        if resolved_level == "auto":
-            if office:
-                resolved_level = "zona" if self._cargo_scope(office) == "municipio" else "municipio"
-            elif col_cargo:
-                cargo_norm = self._normalize_text(candidate_rows[col_cargo]).apply(self._normalize_ascii_upper)
-                municipal_mask = cargo_norm.isin(MUNICIPAL_CARGOS)
-                if municipal_mask.any() and (~municipal_mask).any():
-                    votes_series = pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0)
-                    municipal_votes = float(votes_series[municipal_mask].sum())
-                    other_votes = float(votes_series[~municipal_mask].sum())
-                    resolved_level = "zona" if municipal_votes >= other_votes else "municipio"
-                else:
-                    resolved_level = "zona" if municipal_mask.any() else "municipio"
-            else:
-                resolved_level = "municipio"
-
-        if resolved_level == "zona" and not col_zona:
-            resolved_level = "municipio"
-        if resolved_level == "municipio" and not col_municipio:
-            return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
-                "level": resolved_level,
-                "quantile_q1": 0,
-                "quantile_q2": 0,
-                "total_votes": 0,
-                "items": [],
-            }
-        if office:
-            municipal_scope = self._cargo_scope(office) == "municipio"
-        elif col_cargo:
-            cargo_norm = self._normalize_text(candidate_rows[col_cargo]).apply(self._normalize_ascii_upper)
-            municipal_scope = cargo_norm.isin(MUNICIPAL_CARGOS).any()
-        else:
-            municipal_scope = False
-
-        normalized = candidate_rows.assign(
-            _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
-            _uf=(
-                self._normalize_text(candidate_rows[col_uf]).str.upper().replace("", pd.NA)
-                if col_uf
-                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
-            ),
-            _municipio=(
-                self._normalize_text(candidate_rows[col_municipio]).replace("", pd.NA)
-                if col_municipio
-                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
-            ),
-            _cd_municipio=(
-                self._normalize_text(candidate_rows[col_cd_municipio]).replace("", pd.NA)
-                if col_cd_municipio
-                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
-            ),
-            _zona=(
-                self._normalize_text(candidate_rows[col_zona]).replace("", pd.NA)
-                if col_zona
-                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
-            ),
-            _lat=(
-                pd.to_numeric(candidate_rows[col_lat], errors="coerce")
-                if col_lat
-                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
-            ),
-            _lng=(
-                pd.to_numeric(candidate_rows[col_lng], errors="coerce")
-                if col_lng
-                else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
-            ),
-        )
-
-        if resolved_level == "municipio":
-            normalized = normalized.dropna(subset=["_municipio"]).copy()
-            normalized = normalized.assign(
-                _key=normalized["_municipio"].astype(str),
-                _label=normalized["_municipio"].astype(str),
-            )
-            grouped = (
-                normalized.groupby(["_key", "_label", "_uf", "_municipio"], as_index=False)
-                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
-                .sort_values("votes", ascending=False)
-            )
-        else:
-            normalized = normalized.dropna(subset=["_zona"]).copy()
-            if municipal_scope:
-                normalized = normalized.assign(
-                    _key="zona-" + normalized["_zona"].astype(str),
-                    _label="Zona " + normalized["_zona"].astype(str),
-                )
-            else:
-                normalized = normalized.assign(
-                    _key=(
-                        normalized["_uf"].fillna("N/A").astype(str)
-                        + "|"
-                        + normalized["_municipio"].fillna("N/A").astype(str)
-                        + "|"
-                        + normalized["_zona"].fillna("N/A").astype(str)
-                    ),
-                    _label=(
-                        normalized["_municipio"].fillna("N/A").astype(str)
-                        + " - Zona "
-                        + normalized["_zona"].fillna("N/A").astype(str)
-                    ),
-                )
-            grouped = (
-                normalized.groupby(["_key", "_label", "_uf", "_municipio", "_zona"], as_index=False)
-                .agg(votes=("_votes", "sum"), lat=("_lat", "mean"), lng=("_lng", "mean"), _cd_municipio=("_cd_municipio", "first"))
-                .sort_values("votes", ascending=False)
-            )
-            if municipal_scope:
-                self._log_municipal_zone_debug(
-                    event="candidate_vote_map_municipal_zone_base",
-                    trace_id=trace_id,
-                    normalized_filters={
-                        "candidate_id": str(candidate_id),
-                        "ano": year,
-                        "cargo": office,
-                        "uf": normalized_state,
-                        "municipio": normalized_municipio,
-                        "turno": round_filter,
-                        "level": "zona",
-                    },
-                    plan="pandas_groupby(candidate_rows by key/zona after normalized filters)",
-                    counts={
-                        "rows_candidate": int(len(candidate_rows)),
-                        "rows_grouped": int(len(grouped)),
-                        "total_candidate_votes": int(float(grouped["votes"].sum())) if not grouped.empty else 0,
-                    },
-                )
-
-        valid_coord_indices: list[int] = []
-        for idx, row in grouped.iterrows():
-            try:
-                lat, lng = self._coerce_valid_coords(row.get("lat"), row.get("lng"))
-                if lat is None or lng is None:
-                    lat, lng = self._resolve_municipality_coords(
-                        city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
-                        uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
-                        code=(row["_cd_municipio"] if "_cd_municipio" in row.index else None),
-                        lat=lat,
-                        lng=lng,
-                    )
-                if (lat is None or lng is None) and resolved_level == "zona":
-                    geometry = None
-                    try:
-                        geometry = self._resolve_zone_geometry(
-                            zone_id=str(row["_zona"]),
-                            city=(str(row["_municipio"]) if pd.notna(row["_municipio"]) else None),
-                            uf=(str(row["_uf"]) if pd.notna(row["_uf"]) else None),
-                            lat=float("nan"),
-                            lng=float("nan"),
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            json.dumps(
-                                {
-                                    "event": "candidate_vote_map_zone_geometry_error",
-                                    "trace_id": trace_id or "n/a",
-                                    "zona": str(row["_zona"]) if "_zona" in row.index else None,
-                                    "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
-                                    "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
-                                    "error_type": exc.__class__.__name__,
-                                    "error_message": str(exc),
-                                },
-                                ensure_ascii=False,
-                            )
-                        )
-                    geo_lat, geo_lng = self._geometry_centroid(geometry)
-                    lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
-            except Exception as exc:
-                logger.warning(
-                    json.dumps(
-                        {
-                            "event": "candidate_vote_map_geo_resolution_error",
-                            "trace_id": trace_id or "n/a",
-                            "zona": str(row["_zona"]) if "_zona" in row.index else None,
-                            "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
-                            "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
-                            "error_type": exc.__class__.__name__,
-                            "error_message": str(exc),
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-                lat, lng = None, None
-            if lat is None or lng is None:
-                logger.warning(
-                    json.dumps(
-                        {
-                            "event": "candidate_vote_map_zone_missing_coords_dropped",
-                            "trace_id": trace_id or "n/a",
-                            "zona": str(row["_zona"]) if "_zona" in row.index else None,
-                            "municipio": str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None,
-                            "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-                continue
-            grouped.at[idx, "lat"] = lat
-            grouped.at[idx, "lng"] = lng
-            valid_coord_indices.append(idx)
-
-        if valid_coord_indices:
-            grouped = grouped.loc[valid_coord_indices].copy()
-        else:
-            grouped = grouped.iloc[0:0].copy()
-
-        if grouped.empty:
-            return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
-                "level": resolved_level,
-                "quantile_q1": 0,
-                "quantile_q2": 0,
-                "total_votes": 0,
-                "items": [],
-            }
-
-        votes = pd.to_numeric(grouped["votes"], errors="coerce").dropna()
-        if votes.empty:
-            return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
-                "level": resolved_level,
-                "quantile_q1": 0,
-                "quantile_q2": 0,
-                "total_votes": 0,
-                "items": [],
-            }
-        q1 = int(votes.quantile(0.33))
-        q2 = int(votes.quantile(0.66))
-        if q2 < q1:
-            q2 = q1
-
-        tiers = {
-            0: {"rgb": "#22C55E", "marker_size": 32, "cluster_size": 40},
-            1: {"rgb": "#FACC15", "marker_size": 34, "cluster_size": 52},
-            2: {"rgb": "#EF4444", "marker_size": 42, "cluster_size": 60},
-        }
-
-        total_votes = int(votes.sum())
-        total_votes_safe = float(total_votes) if total_votes > 0 else 1.0
-        items: list[dict] = []
-        for _, row in grouped.sort_values("votes", ascending=False).iterrows():
-            row_votes_num = pd.to_numeric(row["votes"], errors="coerce")
-            row_votes = int(float(row_votes_num)) if pd.notna(row_votes_num) else 0
-            tier = 0 if row_votes <= q1 else (1 if row_votes <= q2 else 2)
-            cfg = tiers[tier]
-            label = str(row["_label"])
-            tooltip_votes = f"{row_votes:,}".replace(",", ".")
-            items.append(
-                {
-                    "key": str(row["_key"]),
-                    "label": label,
-                    "votes": row_votes,
-                    "vote_share": round((row_votes / total_votes_safe) * 100, 4),
-                    "tier": tier,
-                    "color_rgb": cfg["rgb"],
-                    "marker_size": cfg["marker_size"],
-                    "cluster_size": cfg["cluster_size"],
-                    "lat": float(row["lat"]) if pd.notna(row["lat"]) else None,
-                    "lng": float(row["lng"]) if pd.notna(row["lng"]) else None,
-                    "uf": str(row["_uf"]) if "_uf" in row.index and pd.notna(row["_uf"]) else None,
-                    "municipio": (
-                        str(row["_municipio"]) if "_municipio" in row.index and pd.notna(row["_municipio"]) else None
-                    ),
-                    "zona": str(row["_zona"]) if "_zona" in row.index and pd.notna(row["_zona"]) else None,
-                    "tooltip": f"{label} • {tooltip_votes} votos",
-                }
-            )
-
-        return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
-            "level": resolved_level,
-            "quantile_q1": q1,
-            "quantile_q2": q2,
-            "total_votes": total_votes,
-            "items": items,
-            "region_clusters": [] if (resolved_level == "zona" and municipal_scope) else self._region_clusters_from_points(items),
-        }
-
-    def candidate_zone_fidelity(
-        self,
-        candidate_id: str,
-        year: int | None = None,
-        state: str | None = None,
-        office: str | None = None,
-        include_geometry: bool = False,
-    ) -> dict:
-        scoped_all_years = self._apply_filters(uf=state, cargo=office)
-        candidate_all_years = scoped_all_years[self._candidate_mask(scoped_all_years, candidate_id)].copy()
-        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_zona = self._pick_col(["NR_ZONA", "CD_ZONA", "SQ_ZONA"])
-        col_year = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
-        if candidate_all_years.empty or not col_votes or not col_zona:
-            return {"candidate_id": str(candidate_id), "items": []}
-
-        col_zone_name = self._pick_col(["NM_ZONA", "DS_ZONA"])
-        col_city = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
-        col_uf = self._pick_col(["SG_UF"])
-        col_lat = self._pick_col(["LATITUDE", "LAT", "VL_LATITUDE"])
-        col_lng = self._pick_col(["LONGITUDE", "LON", "LNG", "VL_LONGITUDE"])
-
-        resolved_year = year
-        if col_year:
-            year_series = pd.to_numeric(candidate_all_years[col_year], errors="coerce").dropna().astype(int)
-            if resolved_year is None and not year_series.empty:
-                resolved_year = int(year_series.max())
-            if resolved_year is not None:
-                candidate_current = candidate_all_years[pd.to_numeric(candidate_all_years[col_year], errors="coerce") == int(resolved_year)].copy()
-                prev_years = year_series[year_series < int(resolved_year)] if not year_series.empty else pd.Series(dtype=int)
-                previous_year = int(prev_years.max()) if not prev_years.empty else None
-                candidate_previous = (
-                    candidate_all_years[pd.to_numeric(candidate_all_years[col_year], errors="coerce") == previous_year].copy()
-                    if previous_year is not None
-                    else candidate_all_years.iloc[0:0].copy()
-                )
-            else:
-                candidate_current = candidate_all_years.copy()
-                candidate_previous = candidate_all_years.iloc[0:0].copy()
-        else:
-            candidate_current = candidate_all_years.copy()
-            candidate_previous = candidate_all_years.iloc[0:0].copy()
-
-        if candidate_current.empty:
-            return {"candidate_id": str(candidate_id), "items": []}
-
-        tmp = candidate_current.assign(
-            _zone_id=self._normalize_text(candidate_current[col_zona]).replace("", "N/A"),
-            _zone_name=(
-                self._normalize_text(candidate_current[col_zone_name]).replace("", pd.NA)
-                if col_zone_name
-                else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)
-            ),
-            _city=(
-                self._normalize_text(candidate_current[col_city]).replace("", pd.NA)
-                if col_city
-                else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)
-            ),
-            _uf=(
-                self._normalize_text(candidate_current[col_uf]).str.upper().replace("", pd.NA)
-                if col_uf
-                else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)
-            ),
-            _votes=pd.to_numeric(candidate_current[col_votes], errors="coerce").fillna(0),
-            _lat=(pd.to_numeric(candidate_current[col_lat], errors="coerce") if col_lat else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)),
-            _lng=(pd.to_numeric(candidate_current[col_lng], errors="coerce") if col_lng else pd.Series([pd.NA] * len(candidate_current), index=candidate_current.index)),
-        )
-
-        previous_votes_by_zone: dict[str, float] = {}
-        if not candidate_previous.empty:
-            prev_tmp = candidate_previous.assign(
-                _zone_id=self._normalize_text(candidate_previous[col_zona]).replace("", "N/A"),
-                _votes=pd.to_numeric(candidate_previous[col_votes], errors="coerce").fillna(0),
-            )
-            previous_votes_by_zone = (
-                prev_tmp.groupby("_zone_id", as_index=False)
-                .agg(votes=("_votes", "sum"))
-                .set_index("_zone_id")["votes"]
-                .to_dict()
-            )
-
-        grouped = (
-            tmp.groupby("_zone_id", as_index=False)
-            .agg(
-                votes=("_votes", "sum"),
-                zone_name=("_zone_name", "first"),
-                city=("_city", "first"),
-                uf=("_uf", "first"),
-                lat=("_lat", "mean"),
-                lng=("_lng", "mean"),
-            )
-            .sort_values("votes", ascending=False)
-        )
-
-        with_geometry_items: list[dict] = []
-        without_geometry_items: list[dict] = []
-        for _, row in grouped.iterrows():
-            zone_name = str(row["zone_name"]) if pd.notna(row["zone_name"]) and str(row["zone_name"]).strip() else f"Zona {row['_zone_id']}"
-            prev_votes = float(previous_votes_by_zone.get(str(row["_zone_id"]), 0.0))
-            if prev_votes > 0:
-                retention = min(round((float(row["votes"]) / prev_votes) * 100, 4), 100.0)
-            else:
-                retention = 100.0
-            lat, lng = self._coerce_valid_coords(row["lat"], row["lng"])
-            geometry = None
-            if include_geometry or lat is None or lng is None:
-                geometry = self._resolve_zone_geometry(
-                    zone_id=str(row["_zone_id"]),
-                    city=(str(row["city"]) if pd.notna(row["city"]) else None),
-                    uf=(str(row["uf"]) if pd.notna(row["uf"]) else None),
-                    lat=(lat if lat is not None else float("nan")),
-                    lng=(lng if lng is not None else float("nan")),
-                )
-            if lat is None or lng is None:
-                geo_lat, geo_lng = self._geometry_centroid(geometry)
-                lat, lng = self._coerce_valid_coords(geo_lat, geo_lng)
-            if lat is None or lng is None:
-                continue
-            item = {
-                "zone_id": str(row["_zone_id"]),
-                "zone_name": zone_name,
-                "city": str(row["city"]) if pd.notna(row["city"]) else None,
-                "votes": int(row["votes"]),
-                "retention": retention,
-                "lat": float(lat),
-                "lng": float(lng),
-            }
-            if include_geometry:
-                if geometry is None:
-                    geometry = self._resolve_zone_geometry(
-                        zone_id=str(row["_zone_id"]),
-                        city=(str(row["city"]) if pd.notna(row["city"]) else None),
-                        uf=(str(row["uf"]) if pd.notna(row["uf"]) else None),
-                        lat=float(lat),
-                        lng=float(lng),
-                    )
-                item["geometry"] = geometry
-                if geometry is not None:
-                    with_geometry_items.append(item)
-                else:
-                    without_geometry_items.append(item)
-            else:
-                without_geometry_items.append(item)
-
-        items = with_geometry_items + without_geometry_items if include_geometry else without_geometry_items
-        return {"candidate_id": self._candidate_output_id(candidate_current, candidate_id), "items": items}
-
     def candidates_compare(
         self,
         candidate_ids: list[str],
@@ -3075,130 +2514,7 @@ class AnalyticsService:
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
-        candidate_ids_clean = [str(v).strip() for v in candidate_ids if str(v).strip()]
-        if len(candidate_ids_clean) < 2:
-            return {"context": {"year": year, "state": state, "office": office}, "candidates": [], "deltas": []}
-
-        base_scoped = self._apply_filters(uf=state, cargo=office)
-        col_year = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
-        resolved_year = year
-        if resolved_year is None and col_year and not base_scoped.empty:
-            year_series = pd.to_numeric(base_scoped[col_year], errors="coerce").dropna()
-            if not year_series.empty:
-                resolved_year = int(year_series.max())
-        resolved_year = int(resolved_year) if resolved_year is not None else None
-
-        if resolved_year is not None:
-            context_df = self._apply_filters(ano=resolved_year, uf=state, cargo=office)
-        else:
-            context_df = base_scoped.copy()
-
-        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_party = self._pick_col(["SG_PARTIDO"])
-        col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
-        if context_df.empty or not col_votes:
-            return {
-                "context": {"year": resolved_year, "state": state, "office": office},
-                "candidates": [],
-                "deltas": [],
-            }
-
-        context_df = context_df.assign(_votes=pd.to_numeric(context_df[col_votes], errors="coerce").fillna(0))
-        total_context_votes = float(context_df["_votes"].sum()) or 1.0
-
-        ranking_df = context_df.assign(
-            _candidate_key=(
-                self._normalize_text(context_df["SQ_CANDIDATO"])
-                if "SQ_CANDIDATO" in context_df.columns
-                else (
-                    self._normalize_text(context_df["NR_CANDIDATO"])
-                    if "NR_CANDIDATO" in context_df.columns
-                    else self._normalize_text(context_df[col_name]).str.lower()
-                )
-            )
-        )
-        ranking = (
-            ranking_df.groupby("_candidate_key", as_index=False)
-            .agg(votes=("_votes", "sum"))
-            .sort_values("votes", ascending=False)
-            .reset_index(drop=True)
-        )
-        rank_map = {str(row["_candidate_key"]): idx + 1 for idx, (_, row) in enumerate(ranking.iterrows())}
-
-        candidates_out: list[dict] = []
-        for cid in candidate_ids_clean:
-            candidate_rows = context_df[self._candidate_mask(context_df, cid)].copy()
-            if candidate_rows.empty:
-                continue
-            votes = int(candidate_rows["_votes"].sum())
-            name = (
-                str(self._normalize_text(candidate_rows[col_name]).replace("", pd.NA).dropna().iloc[0])
-                if col_name and self._normalize_text(candidate_rows[col_name]).replace("", pd.NA).dropna().any()
-                else ""
-            )
-            party = (
-                str(self._normalize_text(candidate_rows[col_party]).replace("", pd.NA).dropna().iloc[0])
-                if col_party and self._normalize_text(candidate_rows[col_party]).replace("", pd.NA).dropna().any()
-                else None
-            )
-            key = (
-                str(self._normalize_text(candidate_rows["SQ_CANDIDATO"]).replace("", pd.NA).dropna().iloc[0])
-                if "SQ_CANDIDATO" in candidate_rows.columns
-                and self._normalize_text(candidate_rows["SQ_CANDIDATO"]).replace("", pd.NA).dropna().any()
-                else (
-                    str(self._normalize_text(candidate_rows["NR_CANDIDATO"]).replace("", pd.NA).dropna().iloc[0])
-                    if "NR_CANDIDATO" in candidate_rows.columns
-                    and self._normalize_text(candidate_rows["NR_CANDIDATO"]).replace("", pd.NA).dropna().any()
-                    else self._normalize_text(candidate_rows[col_name]).str.lower().iloc[0]
-                )
-            )
-
-            history = self.candidate_vote_history(candidate_id=cid, state=state, office=office).get("items", [])
-            history_sorted = sorted(history, key=lambda item: int(item["year"]))
-            retention = 100.0
-            if history_sorted:
-                current = next((h for h in history_sorted if int(h["year"]) == int(resolved_year or h["year"])), history_sorted[-1])
-                previous_items = [h for h in history_sorted if int(h["year"]) < int(current["year"])]
-                if previous_items:
-                    prev_votes = float(previous_items[-1]["votes"])
-                    retention = round((float(current["votes"]) / prev_votes) * 100, 4) if prev_votes > 0 else 100.0
-                else:
-                    retention = 100.0
-            identity_payload = self._candidate_identity_payload(candidate_rows, cid)
-
-            candidates_out.append(
-                {
-                    "candidate_id": self._candidate_output_id(candidate_rows, cid),
-                    "source_id": identity_payload["source_id"],
-                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
-                    "person_id": identity_payload["person_id"],
-                    "name": name,
-                    "party": party,
-                    "votes": votes,
-                    "vote_share": round((votes / total_context_votes) * 100, 4),
-                    "retention": retention,
-                    "state_rank": rank_map.get(str(key)),
-                }
-            )
-
-        deltas = []
-        for metric in ["votes", "vote_share", "retention"]:
-            ranked_metric = sorted(candidates_out, key=lambda item: float(item.get(metric) or 0), reverse=True)
-            if len(ranked_metric) >= 2:
-                gap = float(ranked_metric[0].get(metric) or 0) - float(ranked_metric[1].get(metric) or 0)
-                deltas.append(
-                    {
-                        "metric": metric,
-                        "best_candidate_id": ranked_metric[0]["candidate_id"],
-                        "gap_to_second": round(gap, 4),
-                    }
-                )
-
-        return {
-            "context": {"year": resolved_year, "state": state, "office": office},
-            "candidates": candidates_out,
-            "deltas": deltas,
-        }
+        return CandidateHistoryMixin.candidates_compare(self, candidate_ids, year=year, state=state, office=office)
 
     def search_candidates(
         self,
@@ -3400,18 +2716,25 @@ class AnalyticsService:
                 _qt_vagas=pd.to_numeric(df[col_qt_vagas], errors="coerce").fillna(0),
             )
             tmp["_scope"] = tmp["_cargo"].apply(self._cargo_scope)
-            tmp["_unit_key"] = tmp.apply(
-                lambda row: (
-                    f"{row['_ano']}|{row['_cargo']}"
-                    if row["_scope"] == "nacional"
-                    else (
-                        f"{row['_ano']}|{row['_uf']}|{row['_cargo']}"
-                        if row["_scope"] == "uf"
-                        else f"{row['_ano']}|{row['_uf']}|{row['_cargo']}|{row['_municipio']}"
-                    )
-                ),
-                axis=1,
+            tmp["_unit_key"] = (
+                tmp["_ano"].astype(str) + "|" + tmp["_uf"] + "|" + tmp["_cargo"] + "|" + tmp["_municipio"]
             )
+            mask_uf = tmp["_scope"] == "uf"
+            if mask_uf.any():
+                tmp.loc[mask_uf, "_unit_key"] = (
+                    tmp.loc[mask_uf, "_ano"].astype(str)
+                    + "|"
+                    + tmp.loc[mask_uf, "_uf"]
+                    + "|"
+                    + tmp.loc[mask_uf, "_cargo"]
+                )
+            mask_nacional = tmp["_scope"] == "nacional"
+            if mask_nacional.any():
+                tmp.loc[mask_nacional, "_unit_key"] = (
+                    tmp.loc[mask_nacional, "_ano"].astype(str)
+                    + "|"
+                    + tmp.loc[mask_nacional, "_cargo"]
+                )
             unit = (
                 tmp.groupby("_unit_key", as_index=False)
                 .agg(

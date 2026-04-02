@@ -61,11 +61,44 @@ Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap tenta primeiro `latest/analy
 Os endpoints de analytics aceitam tanto `ano` quanto `year`.
 Se ambos forem enviados com valores diferentes, a API retorna `400`.
 
+## Contrato de identidade
+
+Nos endpoints que retornam dados de candidato, os campos de identidade seguem esta regra:
+
+- `candidate_id`: identificador de consulta da rota.
+- `source_id`: origem do registro eleitoral retornado.
+- `person_id`: identidade estavel da pessoa, independente de `SQ_CANDIDATO` e `NR_CANDIDATO`.
+- `canonical_candidate_id`: identidade canonica interna da API. Atualmente espelha `person_id`.
+
+Observacoes:
+
+- `SQ_CANDIDATO` e `NR_CANDIDATO` nao sao usados como identidade historica da pessoa.
+- `person_id` e derivado de nome normalizado + data de nascimento, quando disponivel.
+- Quando o candidato nao e encontrado no recorte consultado, `source_id`, `canonical_candidate_id` e `person_id` podem vir como `null`.
+
 ## 3) Run
 
 ```bash
 uvicorn app.main:app --reload
 ```
+
+### 3.1) Profiling de custo por endpoint
+
+Para medir RAM e CPU endpoint por endpoint, rode:
+
+```bash
+python3 scripts/profile_endpoint_costs.py
+```
+
+O script sobe um servidor local, executa cada rota de forma isolada e mostra:
+
+- `duration_ms`
+- `rss_before_mb`
+- `rss_peak_mb`
+- `rss_after_mb`
+- `cpu_peak_pct`
+
+Se a API já estiver rodando, use `--base-url` e informe `--pid`.
 
 ## 4) Normalizacao multi-ano (2000-2024)
 
@@ -137,77 +170,6 @@ Notas:
 - Se `consulta_cand` nao for enviada, ainda gera arquivo normalizado com colunas disponiveis.
 - A API passa a funcionar para qualquer ano/cargo disponivel no arquivo final.
 - O relatorio JSON traz checagens por ano: colunas faltantes, nulos criticos, duplicidade e total de votos.
-
-### 4.3) Coordenadas de municipios para vote-map (MapKit)
-
-O endpoint `/v1/candidates/{candidate_id}/vote-map` procura coordenadas municipais em `data/geo`.
-Para preparar a base de municipios:
-
-```bash
-python3 scripts/prepare_municipality_coords.py \
-  --analytics data/curated/analytics.csv \
-  --output data/geo/municipios_centroids.csv \
-  --missing-report data/geo/municipios_missing_coords.csv
-```
-
-Se voce ja tiver uma fonte de coordenadas (CSV/Parquet), use merge automatico por
-`CD_MUNICIPIO` (prioritario) e fallback por `SG_UF + NM_MUNICIPIO`:
-
-```bash
-python3 scripts/prepare_municipality_coords.py \
-  --analytics data/curated/analytics.csv \
-  --coords-input /caminho/coords_municipios.csv \
-  --output data/geo/municipios_centroids.csv \
-  --missing-report data/geo/municipios_missing_coords.csv
-```
-
-Formato esperado na saida:
-- `CD_MUNICIPIO`
-- `SG_UF`
-- `NM_MUNICIPIO`
-- `LATITUDE`
-- `LONGITUDE`
-
-Sem planilha externa (geopy/Nominatim), geocodificando por municipio:
-
-```bash
-python3 scripts/prepare_municipality_coords.py \
-  --analytics data/curated/analytics.csv \
-  --geocode-missing \
-  --geocode-cache data/geo/geocode_cache.csv \
-  --output data/geo/municipios_centroids.csv \
-  --missing-report data/geo/municipios_missing_coords.csv
-```
-
-Para processar em lotes e retomar depois (recomendado):
-
-```bash
-python3 scripts/prepare_municipality_coords.py \
-  --analytics data/curated/analytics.csv \
-  --geocode-missing \
-  --geocode-max-rows 300 \
-  --geocode-cache data/geo/geocode_cache.csv \
-  --output data/geo/municipios_centroids.csv \
-  --missing-report data/geo/municipios_missing_coords.csv
-```
-
-Se o progresso "travar" no mesmo total, rode uma passada com reprocessamento de cache MISS:
-
-```bash
-python3 scripts/prepare_municipality_coords.py \
-  --analytics data/curated/analytics.csv \
-  --geocode-missing \
-  --retry-miss \
-  --geocode-max-rows 300 \
-  --geocode-cache data/geo/geocode_cache.csv \
-  --output data/geo/municipios_centroids.csv \
-  --missing-report data/geo/municipios_missing_coords.csv
-```
-
-Observacoes:
-- instale `geopy` (`pip install -r requirements.txt`)
-- Nominatim exige `rate limit` (o script usa delay minimo por chamada)
-- o cache permite continuar de onde parou sem repetir municipios ja resolvidos
 
 Quality gate (bloqueio por qualidade):
 
@@ -683,7 +645,7 @@ DUCKDB_MATERIALIZE_TABLE=false
 DUCKDB_MEMORY_LIMIT_MB=2048
 DUCKDB_THREADS=4
 GUNICORN_TIMEOUT=120
-GUNICORN_WORKERS=2
+GUNICORN_WORKERS=1
 MAX_TOP_N=100
 PREFER_PARQUET_IF_AVAILABLE=true
 R2_ACCOUNT_ID=<cloudflare_account_id>
