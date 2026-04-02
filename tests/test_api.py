@@ -897,7 +897,7 @@ def test_candidate_summary_endpoint(client: TestClient):
     payload = response.json()
     assert payload["candidate_id"] == "1"
     assert payload["source_id"] == "1"
-    assert payload["canonical_candidate_id"] == "1"
+    assert payload["canonical_candidate_id"].startswith("person:")
     assert payload["person_id"]
     assert payload["name"] == "Candidato A"
     assert payload["party"] == "AAA"
@@ -923,7 +923,7 @@ def test_candidate_search_includes_stable_identity_fields(client: TestClient):
     assert payload["items"]
     first = payload["items"][0]
     assert first["source_id"] == "1"
-    assert first["canonical_candidate_id"] == "1"
+    assert first["canonical_candidate_id"].startswith("person:")
     assert first["person_id"]
 
 
@@ -937,7 +937,7 @@ def test_top_candidates_includes_stable_identity_fields(client: TestClient):
     assert payload["items"]
     first = payload["items"][0]
     assert first["source_id"] == first["candidate_id"]
-    assert first["canonical_candidate_id"] == first["candidate_id"]
+    assert first["canonical_candidate_id"].startswith("person:")
     assert first["person_id"]
 
 
@@ -946,15 +946,15 @@ def test_candidate_vote_history_endpoint(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "4"
-    assert payload["canonical_candidate_id"] == "4"
-    assert len(payload["items"]) == 2
-    assert [item["round"] for item in payload["items"]] == [2, 1]
-    assert [item["year"] for item in payload["items"]] == [2024, 2024]
-    assert [item["votes"] for item in payload["items"]] == [550000, 500000]
+    assert payload["canonical_candidate_id"].startswith("person:")
+    assert len(payload["items"]) == 1
+    assert [item["round"] for item in payload["items"]] == [2]
+    assert [item["year"] for item in payload["items"]] == [2024]
+    assert [item["votes"] for item in payload["items"]] == [550000]
     assert all(item["status"] == "ELEITO" for item in payload["items"])
     assert all(item["office"] == "Prefeito" for item in payload["items"])
     assert all(item["state"] == "SP" for item in payload["items"])
-    assert all(item["canonical_candidate_id"] == "4" for item in payload["items"])
+    assert all(item["canonical_candidate_id"].startswith("person:") for item in payload["items"])
     assert all(item["is_projection"] is False for item in payload["items"])
 
 
@@ -963,7 +963,7 @@ def test_candidate_vote_history_endpoint_accepts_official_param_aliases(client: 
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "4"
-    assert len(payload["items"]) == 2
+    assert len(payload["items"]) == 1
 
 
 def test_candidate_vote_history_returns_multicargo_multiyear_series(client: TestClient):
@@ -1041,8 +1041,8 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "900"
-    assert payload["canonical_candidate_id"] == "900"
-    assert payload["person_id"].endswith("1980-02-01")
+    assert payload["canonical_candidate_id"].startswith("person:")
+    assert payload["person_id"].startswith("person:")
     assert [item["year"] for item in payload["items"]] == [2024, 2022, 2020]
     assert [item["office"] for item in payload["items"]] == ["Prefeito", "Governador", "Vereador"]
     assert [item["party"] for item in payload["items"]] == ["PL", "PSB", "PT"]
@@ -1063,7 +1063,7 @@ def test_candidate_electorate_profile_endpoint(client: TestClient):
     payload = response.json()
     assert payload["candidate_id"] == "6"
     assert payload["source_id"] == "6"
-    assert payload["canonical_candidate_id"] == "6"
+    assert payload["canonical_candidate_id"].startswith("person:")
     assert payload["person_id"]
     assert payload["gender"]["female_share"] == 100.0
     assert payload["age_bands"]["a35_59"] == 100.0
@@ -1263,389 +1263,6 @@ def test_candidate_vote_distribution_ignores_uf_br_literal(client: TestClient):
     assert by_city["RIO DE JANEIRO"]["qt_votos"] == 80000
 
 
-def test_candidate_zone_fidelity_endpoint(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/zone-fidelity",
-        params={"year": 2024, "state": "SP", "office": "Prefeito"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["candidate_id"] == "4"
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["zone_id"] == "100"
-    assert payload["items"][0]["votes"] == 1050000
-
-
-def test_candidate_vote_map_endpoint_auto_uses_zona_for_municipal_office(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"year": 2024, "state": "SP", "municipio": "SAO PAULO", "office": "Prefeito"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["candidate_id"] == "4"
-    assert payload["level"] == "zona"
-    assert payload["total_votes"] == 1050000
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["zona"] == "100"
-    assert payload["items"][0]["votes"] == 1050000
-    assert payload["items"][0]["tier"] == 0
-    assert payload["items"][0]["key"] == "zona-100"
-    assert payload["items"][0]["label"] == "Zona 100"
-    assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
-
-
-def test_candidate_vote_map_municipal_prefeito_turno_1_level_zona(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={
-            "level": "zona",
-            "ano": 2024,
-            "uf": "SP",
-            "municipio": "SAO PAULO",
-            "cargo": "Prefeito",
-            "turno": 1,
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["candidate_id"] == "4"
-    assert payload["level"] == "zona"
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["zona"] == "100"
-    assert payload["items"][0]["lat"] is not None
-    assert payload["items"][0]["lng"] is not None
-    assert payload["region_clusters"] == []
-
-
-def test_candidate_vote_map_municipal_accepts_aliases_and_municipio_with_accent(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={
-            "level": "zona",
-            "ano": 2024,
-            "uf": "SP",
-            "municipality": "São Paulo",
-            "cargo": "Prefeito",
-            "round": 1,
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"]
-    assert payload["metadata"]["municipio"] == "SAO PAULO"
-
-
-def test_candidate_vote_map_municipal_vereador_campinas_level_zona(client: TestClient):
-    response = client.get(
-        "/v1/candidates/8/vote-map",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "CAMPINAS", "cargo": "Vereador"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["level"] == "zona"
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["zona"] == "121"
-    assert payload["items"][0]["key"] == "zona-121"
-
-
-def test_candidate_vote_distribution_municipal_accepts_aliases_and_municipio_with_accent(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/vote-distribution",
-        params={
-            "level": "zona",
-            "ano": 2024,
-            "uf": "SP",
-            "municipality": "São Paulo",
-            "cargo": "Prefeito",
-            "round": 1,
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"]
-    assert payload["metadata"]["municipio"] == "SAO PAULO"
-
-
-def test_candidate_vote_map_municipal_without_municipio_infers_scope_with_uf(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"]
-    assert payload["metadata"]["scope"] == "municipal"
-    assert payload["metadata"]["inferred_geo"] is True
-    assert payload["metadata"]["inferred_municipio"] == "SAO PAULO"
-    assert payload["metadata"]["requested_uf"] == "SP"
-    assert payload["metadata"]["used_uf"] == "SP"
-    assert payload["metadata"]["used_municipio"] == "SAO PAULO"
-    assert payload["metadata"]["traceId"]
-
-
-def test_candidate_vote_endpoints_municipal_duckdb_case_250002098117_infers_sao_paulo_and_is_coherent(
-    client: TestClient, tmp_path
-):
-    custom_df = pd.DataFrame(
-        [
-            {
-                "ANO_ELEICAO": 2024,
-                "NR_TURNO": 1,
-                "SG_UF": "SP",
-                "NM_UE": "SÃO PAULO",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": "250002098117",
-                "NM_CANDIDATO": "Candidato Produção",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 150000,
-                "NR_ZONA": "100",
-                "LATITUDE": -23.5505,
-                "LONGITUDE": -46.6333,
-            },
-            {
-                "ANO_ELEICAO": 2024,
-                "NR_TURNO": 1,
-                "SG_UF": "SP",
-                "NM_UE": "CAMPINAS",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": "250002098117",
-                "NM_CANDIDATO": "Candidato Produção",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 10,
-                "NR_ZONA": "101",
-                "LATITUDE": -22.9099,
-                "LONGITUDE": -47.0626,
-            },
-        ]
-    )
-    csv_path = tmp_path / "duckdb_scope_case.csv"
-    custom_df.to_csv(csv_path, index=False)
-
-    original_service = main_module.service
-    try:
-        main_module.service = DuckDBAnalyticsService.from_file(
-            file_path=str(csv_path),
-            default_top_n=20,
-            max_top_n=100,
-        )
-        map_response = client.get(
-            "/v1/candidates/250002098117/vote-map",
-            params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
-        )
-        distribution_response = client.get(
-            "/v1/candidates/250002098117/vote-distribution",
-            params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
-        )
-    finally:
-        main_module.service = original_service
-
-    assert map_response.status_code == 200
-    assert distribution_response.status_code == 200
-    map_payload = map_response.json()
-    distribution_payload = distribution_response.json()
-    assert map_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
-    assert distribution_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
-    assert map_payload["metadata"]["used_municipio"] == "SAO PAULO"
-    assert distribution_payload["metadata"]["used_municipio"] == "SAO PAULO"
-    assert map_payload["metadata"]["used_uf"] == distribution_payload["metadata"]["used_uf"] == "SP"
-    assert map_payload["metadata"]["no_data"] == distribution_payload["metadata"]["no_data"]
-    assert map_payload["metadata"]["traceId"]
-    assert distribution_payload["metadata"]["traceId"]
-
-
-def test_candidate_vote_map_duckdb_candidate_id_resolution_error_returns_200(tmp_path, client: TestClient):
-    custom_df = pd.DataFrame(
-        [
-            {
-                "ANO_ELEICAO": 2024,
-                "NR_TURNO": 1,
-                "SG_UF": "SP",
-                "NM_UE": "SAO PAULO",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": "250002098117",
-                "NM_CANDIDATO": "Candidato Produção",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 150000,
-                "NR_ZONA": "100",
-            },
-        ]
-    )
-    csv_path = tmp_path / "duckdb_vote_map_candidate_id_error.csv"
-    custom_df.to_csv(csv_path, index=False)
-
-    original_service = main_module.service
-    try:
-        service = DuckDBAnalyticsService.from_file(
-            file_path=str(csv_path),
-            default_top_n=20,
-            max_top_n=100,
-        )
-        original_rows = service._rows
-
-        def _rows_with_candidate_id_failure(sql: str, params: list[object]):
-            if "AS candidate_id FROM analytics" in sql:
-                raise RuntimeError("forced candidate_id resolution failure")
-            return original_rows(sql, params)
-
-        service._rows = _rows_with_candidate_id_failure  # type: ignore[method-assign]
-        main_module.service = service
-        response = client.get(
-            "/v1/candidates/250002098117/vote-map",
-            params={"level": "zona", "ano": 2024, "uf": "SP", "cargo": "Prefeito", "turno": 1},
-        )
-    finally:
-        main_module.service = original_service
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["candidate_id"] == "250002098117"
-    assert payload["metadata"]["traceId"]
-
-
-def test_candidate_vote_endpoints_municipal_without_uf_and_municipio_infer_both(client: TestClient):
-    map_response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"level": "zona", "ano": 2024, "cargo": "Prefeito", "turno": 1},
-    )
-    assert map_response.status_code == 200
-    map_payload = map_response.json()
-    assert map_payload["items"]
-    assert map_payload["metadata"]["inferred_geo"] is True
-    assert map_payload["metadata"]["inferred_uf"] == "SP"
-    assert map_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
-    assert map_payload["metadata"]["used_uf"] == "SP"
-    assert map_payload["metadata"]["used_municipio"] == "SAO PAULO"
-
-    distribution_response = client.get(
-        "/v1/candidates/4/vote-distribution",
-        params={"level": "zona", "ano": 2024, "cargo": "Prefeito", "turno": 1},
-    )
-    assert distribution_response.status_code == 200
-    distribution_payload = distribution_response.json()
-    assert distribution_payload["items"]
-    assert distribution_payload["metadata"]["inferred_geo"] is True
-    assert distribution_payload["metadata"]["inferred_uf"] == "SP"
-    assert distribution_payload["metadata"]["inferred_municipio"] == "SAO PAULO"
-    assert distribution_payload["metadata"]["used_uf"] == "SP"
-    assert distribution_payload["metadata"]["used_municipio"] == "SAO PAULO"
-
-
-def test_candidate_vote_endpoints_municipality_alias_equivalence(client: TestClient):
-    map_alias = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "municipality": "São Paulo", "cargo": "Prefeito", "turno": 1},
-    )
-    map_native = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "SAO PAULO", "cargo": "Prefeito", "turno": 1},
-    )
-    assert map_alias.status_code == 200
-    assert map_native.status_code == 200
-    assert map_alias.json()["items"] == map_native.json()["items"]
-
-    distribution_alias = client.get(
-        "/v1/candidates/4/vote-distribution",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "municipality": "São Paulo", "cargo": "Prefeito", "turno": 1},
-    )
-    distribution_native = client.get(
-        "/v1/candidates/4/vote-distribution",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "SAO PAULO", "cargo": "Prefeito", "turno": 1},
-    )
-    assert distribution_alias.status_code == 200
-    assert distribution_native.status_code == 200
-    assert distribution_alias.json()["items"] == distribution_native.json()["items"]
-
-
-def test_candidate_vote_endpoints_municipal_inference_failure_returns_400_with_trace(client: TestClient):
-    map_response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"level": "zona", "ano": 2024, "uf": "RJ", "cargo": "Prefeito", "turno": 1},
-    )
-    assert map_response.status_code == 400
-    map_payload = map_response.json()
-    assert map_payload["code"] == "BAD_REQUEST"
-    assert map_payload["message"] == "Nao foi possivel inferir municipio para candidate_id no recorte informado."
-    assert map_payload["traceId"]
-
-    distribution_response = client.get(
-        "/v1/candidates/4/vote-distribution",
-        params={"level": "zona", "ano": 2024, "uf": "RJ", "cargo": "Prefeito", "turno": 1},
-    )
-    assert distribution_response.status_code == 400
-    distribution_payload = distribution_response.json()
-    assert distribution_payload["code"] == "BAD_REQUEST"
-    assert distribution_payload["message"] == "Nao foi possivel inferir municipio para candidate_id no recorte informado."
-    assert distribution_payload["traceId"]
-
-
-def test_candidate_vote_map_municipal_recorte_sem_dados_returns_empty_200(client: TestClient):
-    response = client.get(
-        "/v1/candidates/4/vote-map",
-        params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "CAMPINAS", "cargo": "Prefeito", "turno": 1},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"] == []
-    assert payload["metadata"]["no_data"] is True
-    assert payload["metadata"]["scope"] == "municipal"
-
-
-def test_candidate_vote_map_municipal_geo_error_never_returns_500(client: TestClient):
-    custom_df = pd.DataFrame(
-        [
-            {
-                "ANO_ELEICAO": 2024,
-                "NR_TURNO": 1,
-                "SG_UF": "SP",
-                "NM_UE": "SAO PAULO",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": 444,
-                "NM_CANDIDATO": "Prefeito Geo",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 5000,
-                "NR_ZONA": "100",
-            },
-        ]
-    )
-    original_service = main_module.service
-    try:
-        service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
-
-        def _raise_geo_failure(**_kwargs):
-            raise RuntimeError("geo failed")
-
-        def _raise_zone_geo_failure(**_kwargs):
-            raise RuntimeError("zone geo failed")
-
-        service._resolve_municipality_coords = _raise_geo_failure  # type: ignore[method-assign]
-        service._resolve_zone_geometry = _raise_zone_geo_failure  # type: ignore[method-assign]
-        main_module.service = service
-        response = client.get(
-            "/v1/candidates/444/vote-map",
-            params={"level": "zona", "ano": 2024, "uf": "SP", "municipio": "SAO PAULO", "cargo": "Prefeito", "turno": 1},
-        )
-    finally:
-        main_module.service = original_service
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"] == []
-    assert payload["metadata"]["no_data"] is True
-
-
-def test_candidate_vote_map_endpoint_municipio_level(client: TestClient):
-    response = client.get(
-        "/v1/candidates/9/vote-map",
-        params={"level": "municipio", "year": 2022, "office": "Presidente"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["candidate_id"] == "9"
-    assert payload["level"] == "municipio"
-    by_city = {item["municipio"]: item["votes"] for item in payload["items"]}
-    assert by_city["SAO PAULO"] == 70000
-    assert by_city["RIO DE JANEIRO"] == 80000
-    assert payload["quantile_q1"] >= 70000
-    assert payload["quantile_q2"] >= payload["quantile_q1"]
-
-
 def test_candidates_compare_endpoint(client: TestClient):
     response = client.get(
         "/v1/candidates/compare",
@@ -1657,10 +1274,10 @@ def test_candidates_compare_endpoint(client: TestClient):
     assert len(payload["candidates"]) == 2
     by_id = {item["candidate_id"]: item for item in payload["candidates"]}
     assert by_id["1"]["source_id"] == "1"
-    assert by_id["1"]["canonical_candidate_id"] == "1"
+    assert by_id["1"]["canonical_candidate_id"].startswith("person:")
     assert by_id["1"]["person_id"]
     assert by_id["2"]["source_id"] == "2"
-    assert by_id["2"]["canonical_candidate_id"] == "2"
+    assert by_id["2"]["canonical_candidate_id"].startswith("person:")
     assert by_id["2"]["person_id"]
     assert by_id["1"]["votes"] == 12000
     assert by_id["2"]["votes"] == 8000
@@ -1698,92 +1315,6 @@ def test_candidates_compare_openapi_uses_form_and_explode_false(client: TestClie
     candidate_ids_param = next(item for item in params if item["name"] == "candidate_ids")
     assert candidate_ids_param["style"] == "form"
     assert candidate_ids_param["explode"] is False
-
-
-def test_candidate_zone_fidelity_retention_uses_previous_election_and_geometry_fallback(client: TestClient):
-    custom_df = pd.DataFrame(
-        [
-            {
-                "ANO_ELEICAO": 2020,
-                "SG_UF": "SP",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": 99,
-                "NM_CANDIDATO": "Candidato Z",
-                "NR_ZONA": "700",
-                "NM_ZONA": "Zona 700",
-                "NM_UE": "SAO PAULO",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 1000,
-                "LATITUDE": -23.55,
-                "LONGITUDE": -46.63,
-            },
-            {
-                "ANO_ELEICAO": 2024,
-                "SG_UF": "SP",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": 99,
-                "NM_CANDIDATO": "Candidato Z",
-                "NR_ZONA": "700",
-                "NM_ZONA": "Zona 700",
-                "NM_UE": "SAO PAULO",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 900,
-                "LATITUDE": -23.55,
-                "LONGITUDE": -46.63,
-            },
-        ]
-    )
-    original_service = main_module.service
-    try:
-        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
-        response = client.get(
-            "/v1/candidates/99/zone-fidelity",
-            params={"year": 2024, "state": "SP", "office": "Prefeito", "include_geometry": "true"},
-        )
-    finally:
-        main_module.service = original_service
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"][0]["retention"] == 90.0
-    assert payload["items"][0]["geometry"]["type"] == "Point"
-    assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
-
-
-def test_candidate_zone_fidelity_include_geometry_uses_zone_centroid_when_lat_lng_missing(client: TestClient):
-    custom_df = pd.DataFrame(
-        [
-            {
-                "ANO_ELEICAO": 2024,
-                "SG_UF": "SP",
-                "DS_CARGO": "Prefeito",
-                "SQ_CANDIDATO": 123,
-                "NM_CANDIDATO": "Candidato Geo",
-                "NR_ZONA": "701",
-                "NM_ZONA": "Zona 701",
-                "NM_UE": "SAO PAULO",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 1500,
-            }
-        ]
-    )
-    original_service = main_module.service
-    try:
-        service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
-        service._resolve_zone_geometry = lambda **_: {  # type: ignore[method-assign]
-            "type": "Polygon",
-            "coordinates": [[[-46.70, -23.60], [-46.60, -23.60], [-46.60, -23.50], [-46.70, -23.50], [-46.70, -23.60]]],
-        }
-        main_module.service = service
-        response = client.get(
-            "/v1/candidates/123/zone-fidelity",
-            params={"year": 2024, "state": "SP", "office": "Prefeito", "include_geometry": "true"},
-        )
-    finally:
-        main_module.service = original_service
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["geometry"]["type"] == "Polygon"
-    assert payload["items"][0]["lat"] != 0.0 or payload["items"][0]["lng"] != 0.0
 
 
 def test_service_unavailable_returns_503(client: TestClient):

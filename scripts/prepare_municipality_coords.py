@@ -205,7 +205,7 @@ def _apply_geocode(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepara arquivo de coordenadas de municipios para o vote-map."
+        description="Prepara arquivo de coordenadas de municipios."
     )
     parser.add_argument(
         "--analytics",

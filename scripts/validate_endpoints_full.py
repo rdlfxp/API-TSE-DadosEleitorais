@@ -104,8 +104,6 @@ def main() -> None:
     run(f"/v1/candidates/{cid1}/vote-history", {"state": state, "office": office})
     run(f"/v1/candidates/{cid1}/electorate-profile", {"year": year, "state": state, "office": office})
     run(f"/v1/candidates/{cid1}/vote-distribution", {"level": "municipio", "year": year, "state": state, "office": office})
-    run(f"/v1/candidates/{cid1}/vote-map", {"level": "municipio", "year": year, "state": state, "office": office})
-    run(f"/v1/candidates/{cid1}/zone-fidelity", {"year": year, "state": state, "office": office})
     run("/v1/candidates/compare", {"candidate_ids": f"{cid1},{cid2}", "year": year, "state": state, "office": office})
 
     print(f"[validate-endpoints] TOTAL {len(checks)}")

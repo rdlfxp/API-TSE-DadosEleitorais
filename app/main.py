@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.config import settings
 from app.schemas import (
     AgeStatsResponse,
-    CandidateVoteMapResponse,
     CandidateSummaryResponse,
     CompareResponse,
     CandidateSearchResponse,
@@ -39,7 +38,6 @@ from app.schemas import (
     UFMapResponse,
     VoteDistributionResponse,
     VoteHistoryResponse,
-    ZoneFidelityResponse,
 )
 from app.services.analytics_service import AnalyticsService
 from app.services.duckdb_analytics_service import DuckDBAnalyticsService
@@ -557,10 +555,6 @@ def _edge_cache_ttl_for_path(path: str) -> int | None:
         return 1800
     if path.startswith("/v1/candidates/") and path.endswith("/vote-distribution"):
         return 1200
-    if path.startswith("/v1/candidates/") and path.endswith("/vote-map"):
-        return 1800
-    if path.startswith("/v1/candidates/") and path.endswith("/zone-fidelity"):
-        return 1800
     return None
 
 
@@ -1104,6 +1098,7 @@ def candidate_summary(
 
 @app.get("/v1/candidates/{candidate_id}/vote-history", response_model=VoteHistoryResponse, responses=ERROR_RESPONSES)
 def candidate_vote_history(
+    request: Request,
     candidate_id: str,
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
@@ -1112,10 +1107,17 @@ def candidate_vote_history(
 ) -> VoteHistoryResponse:
     resolved_state = _resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
-    data = get_service().candidate_vote_history(
-        candidate_id=candidate_id,
-        state=resolved_state,
-        office=resolved_office,
+    filters = {"candidate_id": candidate_id, "state": resolved_state, "office": resolved_office}
+    data = _run_analytics_query(
+        request=request,
+        endpoint=f"/v1/candidates/{candidate_id}/vote-history",
+        filters=filters,
+        operation=lambda: get_service().candidate_vote_history(
+            candidate_id=candidate_id,
+            state=resolved_state,
+            office=resolved_office,
+        ),
+        cache_ttl_seconds=1800,
     )
     return VoteHistoryResponse(**data)
 
@@ -1226,98 +1228,6 @@ def candidate_vote_distribution(
             "traceId": trace_id,
         }
     return VoteDistributionResponse(**data)
-
-
-@app.get("/v1/candidates/{candidate_id}/vote-map", response_model=CandidateVoteMapResponse, responses=ERROR_RESPONSES)
-def candidate_vote_map(
-    request: Request,
-    candidate_id: str,
-    level: Literal["auto", "municipio", "zona"] = "auto",
-    year: int | None = None,
-    ano: int | None = None,
-    state: str | None = Query(default=None, min_length=2, max_length=2),
-    uf: str | None = Query(default=None, min_length=2, max_length=2),
-    office: str | None = None,
-    cargo: str | None = None,
-    round_: int | None = Query(default=None, ge=1, le=2, alias="round"),
-    turno: int | None = Query(default=None, ge=1, le=2),
-    municipality: str | None = None,
-    municipio: str | None = None,
-) -> CandidateVoteMapResponse:
-    resolved_year = year if year is not None else ano
-    resolved_state = _resolve_state_param(state=state, uf=uf)
-    resolved_office = office or cargo
-    resolved_round = round_ if round_ is not None else turno
-    resolved_municipality = _resolve_municipality_param(municipality=municipality, municipio=municipio)
-    trace_id = _trace_id_from_request(request)
-    is_municipal_request = _is_municipal_office(resolved_office)
-    if is_municipal_request:
-        if resolved_year is None:
-            raise HTTPException(status_code=400, detail="Parametro obrigatorio ausente para recorte municipal: ano.")
-
-    service = get_service()
-    data, scope_info, used_state, used_municipality, fallback_applied, used_round, infer_scope = _run_municipal_vote_flow(
-        request=request,
-        service_instance=service,
-        candidate_id=candidate_id,
-        level=level,
-        year=resolved_year,
-        office=resolved_office,
-        round_filter=resolved_round,
-        state=resolved_state,
-        municipality=resolved_municipality,
-        is_municipal_request=is_municipal_request,
-        operation=lambda used_state_arg, used_municipality_arg, used_round_arg: service.candidate_vote_map(
-            candidate_id=candidate_id,
-            level=level,
-            year=resolved_year,
-            state=used_state_arg,
-            office=resolved_office,
-            round_filter=used_round_arg,
-            municipality=used_municipality_arg,
-            trace_id=trace_id,
-        ),
-    )
-    if is_municipal_request:
-        data["metadata"] = {
-            "scope": "municipal",
-            "inferred_geo": bool(scope_info and scope_info.get("inferred_geo")) if infer_scope else False,
-            "inferred_uf": (scope_info.get("inferred_uf") if scope_info else None),
-            "inferred_municipio": (scope_info.get("inferred_municipio") if scope_info else None),
-            "requested_uf": resolved_state,
-            "requested_municipio": resolved_municipality,
-            "used_uf": used_state,
-            "used_municipio": used_municipality,
-            "requested_turno": resolved_round,
-            "used_turno": used_round,
-            "fallback_applied": fallback_applied,
-            "no_data": len(data.get("items", [])) == 0,
-            "disambiguation_applied": bool(scope_info and scope_info.get("disambiguation_applied")) if infer_scope else False,
-            "uf": used_state,
-            "municipio": used_municipality,
-            "cargo": resolved_office,
-            "ano": resolved_year,
-            "traceId": trace_id,
-        }
-    return CandidateVoteMapResponse(**data)
-
-
-@app.get("/v1/candidates/{candidate_id}/zone-fidelity", response_model=ZoneFidelityResponse, responses=ERROR_RESPONSES)
-def candidate_zone_fidelity(
-    candidate_id: str,
-    year: int | None = None,
-    state: str | None = Query(default=None, min_length=2, max_length=2),
-    office: str | None = None,
-    include_geometry: bool = False,
-) -> ZoneFidelityResponse:
-    data = get_service().candidate_zone_fidelity(
-        candidate_id=candidate_id,
-        year=year,
-        state=state,
-        office=office,
-        include_geometry=include_geometry,
-    )
-    return ZoneFidelityResponse(**data)
 
 
 @app.get("/v1/candidates/compare", response_model=CompareResponse, responses=ERROR_RESPONSES)
