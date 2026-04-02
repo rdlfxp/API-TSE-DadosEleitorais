@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Any
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 
 
 @dataclass(frozen=True)

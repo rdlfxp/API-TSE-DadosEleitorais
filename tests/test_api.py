@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.services.analytics_service import AnalyticsService
-from app.services.duckdb_analytics_service import DuckDBAnalyticsService
 
 
 @pytest.fixture
