@@ -22,10 +22,10 @@ class OverviewResponse(BaseModel):
 
 
 class TopCandidateItem(BaseModel):
-    candidate_id: str
+    candidate_id: str = Field(description="Identificador do registro retornado pela consulta, não a identidade histórica da pessoa.")
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -44,10 +44,10 @@ class TopCandidatesResponse(BaseModel):
 
 
 class CandidateSearchItem(BaseModel):
-    candidate_id: str
+    candidate_id: str = Field(description="Identificador do registro retornado pela busca.")
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -202,8 +202,8 @@ class CandidateLatestElection(BaseModel):
 class CandidateSummaryResponse(BaseModel):
     candidate_id: str = Field(description="Identificador de consulta usado na rota.")
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral usado para montar a resposta.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     name: str
     number: str | None = None
     party: str | None = None
@@ -227,15 +227,15 @@ class VoteHistoryItem(BaseModel):
     candidate_number: str | None = None
     party: str | None = None
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral daquele item do histórico.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     is_projection: bool = False
 
 
 class VoteHistoryResponse(BaseModel):
     candidate_id: str = Field(description="Identificador de consulta usado na rota.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     items: list[VoteHistoryItem] = Field(default_factory=list)
 
 
@@ -253,8 +253,8 @@ class AgeBandsProfile(BaseModel):
 class ElectorateProfileResponse(BaseModel):
     candidate_id: str = Field(description="Identificador de consulta usado na rota.")
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral usado para montar a resposta.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     gender: GenderProfile
     age_bands: AgeBandsProfile
     dominant_education: str
@@ -282,7 +282,7 @@ class VoteDistributionItem(BaseModel):
 
 
 class VoteDistributionResponse(BaseModel):
-    candidate_id: str
+    candidate_id: str = Field(description="Identificador de consulta usado na rota.")
     level: str
     total_candidate_votes: int | None = None
     page: int | None = None
@@ -316,10 +316,10 @@ class CompareContext(BaseModel):
 
 
 class CompareCandidateItem(BaseModel):
-    candidate_id: str
+    candidate_id: str = Field(description="Identificador do registro retornado pela comparação.")
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
-    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id.")
-    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO.")
+    canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
+    person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     name: str
     party: str | None = None
     votes: int

@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
 from threading import Lock
 import unicodedata
@@ -869,14 +870,6 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
         query_params = where_params + candidate_params
         grouped = self._df(sql, query_params)
 
-        candidate_where = f"{where} {'AND' if where else 'WHERE'} ({' OR '.join(candidate_clauses)})"
-        resolved_candidate_id = self._resolve_candidate_output_id_sql(
-            candidate_id=candidate_id,
-            where_clause=candidate_where,
-            query_params=query_params,
-            trace_id=trace_id,
-        )
-
         self._log_municipal_zone_debug(
             event=source_event,
             trace_id=trace_id,
@@ -896,64 +889,29 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                 "total_candidate_votes": int(float(grouped["votes"].sum())) if not grouped.empty else 0,
             },
         )
-        return grouped, resolved_candidate_id
-
-    def _resolve_candidate_output_id_sql(
-        self,
-        *,
-        candidate_id: str,
-        where_clause: str,
-        query_params: list[object],
-        trace_id: str | None = None,
-    ) -> str:
-        candidate_id_exprs = []
-        if self._has("SQ_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(SQ_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NR_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NR_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NM_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_CANDIDATO AS VARCHAR)), '')")
-        if self._has("NM_URNA_CANDIDATO"):
-            candidate_id_exprs.append("NULLIF(TRIM(CAST(NM_URNA_CANDIDATO AS VARCHAR)), '')")
-        candidate_select_expr = "COALESCE(" + ", ".join(candidate_id_exprs + ["CAST(? AS VARCHAR)"]) + ")"
-        try:
-            candidate_id_row = self._rows(
-                f"SELECT {candidate_select_expr} AS candidate_id FROM analytics {where_clause} LIMIT 1",
-                [str(candidate_id)] + list(query_params),
-            )
-            if candidate_id_row and candidate_id_row[0] and candidate_id_row[0][0] is not None:
-                return str(candidate_id_row[0][0])
-        except Exception as exc:
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "candidate_vote_map_candidate_id_resolution_error",
-                        "trace_id": trace_id or "n/a",
-                        "candidate_id": str(candidate_id),
-                        "error_type": exc.__class__.__name__,
-                        "error_message": str(exc),
-                    },
-                    ensure_ascii=False,
-                )
-            )
-        return str(candidate_id)
+        return grouped, str(candidate_id)
 
     def _candidate_mask(self, df: pd.DataFrame, candidate_id: str) -> pd.Series:
-        candidate_norm = str(candidate_id or "").strip()
-        candidate_ascii = self._normalize_value(candidate_norm, uppercase=True)
+        candidate_norm = self._normalize_value(candidate_id or "", uppercase=True)
         if not candidate_norm:
             return pd.Series([False] * len(df), index=df.index)
 
         masks: list[pd.Series] = []
-        if "SQ_CANDIDATO" in df.columns:
-            masks.append(df["SQ_CANDIDATO"].fillna("").astype(str).str.strip() == candidate_norm)
-        if "NR_CANDIDATO" in df.columns:
-            masks.append(df["NR_CANDIDATO"].fillna("").astype(str).str.strip() == candidate_norm)
+        for col in ["SQ_CANDIDATO", "NR_CANDIDATO"]:
+            if col in df.columns:
+                masks.append(df[col].fillna("").astype(str).str.strip() == str(candidate_id).strip())
+        if "NR_CPF_CANDIDATO" in df.columns:
+            cpf_candidate = re.sub(r"\D", "", str(candidate_id or "")).strip()
+            if cpf_candidate:
+                masks.append(
+                    df["NR_CPF_CANDIDATO"].fillna("").astype(str).str.replace(r"\D", "", regex=True).str.strip()
+                    == cpf_candidate
+                )
         col_nome = "NM_CANDIDATO" if "NM_CANDIDATO" in df.columns else ("NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in df.columns else None)
         if col_nome:
             masks.append(
                 df[col_nome].fillna("").astype(str).str.strip().apply(lambda value: self._normalize_value(value, uppercase=True))
-                == candidate_ascii
+                == candidate_norm
             )
         if not masks:
             return pd.Series([False] * len(df), index=df.index)
@@ -961,42 +919,6 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
         for mask in masks[1:]:
             out = out | mask
         return out.fillna(False)
-
-    def _candidate_output_id(self, df: pd.DataFrame, fallback: str) -> str:
-        for col in ["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO", "NM_URNA_CANDIDATO"]:
-            if col in df.columns:
-                values = df[col].fillna("").astype(str).str.strip()
-                values = values[values != ""]
-                if not values.empty:
-                    return str(values.iloc[0])
-        return str(fallback)
-
-    def _candidate_person_identity(self, df: pd.DataFrame, fallback: str) -> dict[str, object]:
-        person_id = self._stable_person_id(df)
-        return {
-            "canonical_candidate_id": person_id,
-            "person_id": person_id,
-            "name_tokens": set(),
-            "birth_tokens": set(),
-        }
-
-    def _candidate_source_id(self, df: pd.DataFrame, fallback: str) -> str:
-        col_source_id = "SQ_CANDIDATO" if "SQ_CANDIDATO" in df.columns else ("NR_CANDIDATO" if "NR_CANDIDATO" in df.columns else None)
-        if col_source_id:
-            values = df[col_source_id].fillna("").astype(str).str.strip()
-            values = values[values != ""]
-            if not values.empty:
-                return str(values.iloc[0])
-        return str(fallback)
-
-    def _candidate_identity_payload(self, df: pd.DataFrame, fallback: str) -> dict[str, str]:
-        identity = self._candidate_person_identity(df, fallback)
-        source_id = self._candidate_source_id(df, str(fallback))
-        return {
-            "source_id": str(source_id),
-            "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-            "person_id": str(identity["person_id"]),
-        }
 
     def _vote_history_projection_columns(self) -> list[str]:
         preferred = [
@@ -1015,6 +937,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             "NM_MUNICIPIO",
             "SG_PARTIDO",
             "NR_CANDIDATO",
+            "NR_CPF_CANDIDATO",
             "SQ_CANDIDATO",
             "NM_CANDIDATO",
             "NM_URNA_CANDIDATO",
@@ -1081,37 +1004,6 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             return 100.0
         current_votes = float(current["votes"])
         return round((current_votes / prev_votes) * 100, 4)
-
-    def _historical_candidate_rows(
-        self,
-        candidate_id: str,
-        state: str | None = None,
-        office: str | None = None,
-        all_rows: pd.DataFrame | None = None,
-    ) -> tuple[pd.DataFrame, dict[str, object]]:
-        projection_cols = self._vote_history_projection_columns()
-        scoped_source = all_rows if all_rows is not None else self._filtered_df(uf=state, cargo=office, columns=projection_cols)
-        scoped = self._scope_history_rows(scoped_source, state=state, office=office) if all_rows is not None else scoped_source
-        seed_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
-        if seed_rows.empty and (state or office):
-            history_rows = all_rows if all_rows is not None else self._filtered_df(columns=projection_cols)
-            seed_rows = history_rows[self._candidate_mask(history_rows, candidate_id)].copy()
-        if seed_rows.empty:
-            empty_base = all_rows if all_rows is not None else self._filtered_df(columns=projection_cols)
-            return empty_base.iloc[0:0].copy(), {
-                "canonical_candidate_id": str(candidate_id),
-                "person_id": str(candidate_id),
-                "name_tokens": set(),
-                "birth_tokens": set(),
-            }
-
-        identity = self._candidate_person_identity(seed_rows, candidate_id)
-        all_rows = all_rows if all_rows is not None else self._filtered_df(columns=projection_cols)
-        candidate_rows = all_rows[self._person_id_series(all_rows) == str(identity["person_id"])].copy()
-        if candidate_rows.empty:
-            candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
-
-        return candidate_rows, identity
 
     def _project_root(self) -> Path:
         if self._source_path is None:
@@ -1693,7 +1585,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             if candidate_positions is None:
                 continue
             candidate_rows = scoped_df.iloc[candidate_positions].copy()
-            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+            identity_payload = self._candidate_identity_payload(candidate_rows)
             items.append(
                 {
                     "candidate_id": candidate_id,
@@ -2550,10 +2442,10 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             if not statuses.empty:
                 latest_status = str(statuses.iloc[0])
 
-        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+        identity_payload = self._candidate_identity_payload(candidate_rows)
 
         return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "candidate_id": str(candidate_id),
             "source_id": identity_payload["source_id"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
@@ -2676,10 +2568,10 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             ).str.contains("URBAN", na=False)
             urban_concentration = round((weights[urban_mask].sum() / total_weight) * 100, 4)
 
-        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+        identity_payload = self._candidate_identity_payload(candidate_rows)
 
         return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "candidate_id": str(candidate_id),
             "source_id": identity_payload["source_id"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
@@ -2750,7 +2642,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
         if level_key == "municipio":
             if not col_municipio:
                 return {
-                    "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                    "candidate_id": str(candidate_id),
                     "level": level_key,
                     "page": page,
                     "page_size": page_size,
@@ -2825,7 +2717,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             total_items = int(self._scalar(count_sql, count_params) or 0)
             if total_items == 0:
                 return {
-                    "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                    "candidate_id": str(candidate_id),
                     "level": level_key,
                     "page": page,
                     "page_size": page_size,
@@ -2914,7 +2806,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                     }
                 )
             return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "candidate_id": str(candidate_id),
                 "level": level_key,
                 "page": page,
                 "page_size": page_size,
@@ -2978,7 +2870,6 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                     .agg(votes=("_votes", "sum"))
                     .sort_values("votes", ascending=False)
                 )
-                resolved_candidate_id = self._candidate_output_id(candidate_rows, candidate_id)
 
             total_candidate_votes = float(agg["votes"].sum()) if not agg.empty else 0.0
             total_votes_safe = total_candidate_votes if total_candidate_votes > 0 else 1.0
@@ -3041,7 +2932,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                 offset = (int(page) - 1) * int(page_size)
                 items = items[offset : offset + int(page_size)]
             return {
-                "candidate_id": resolved_candidate_id,
+                "candidate_id": str(candidate_id),
                 "level": level_key,
                 "page": page,
                 "page_size": page_size,
@@ -3078,7 +2969,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             offset = (int(page) - 1) * int(page_size)
             items = items[offset : offset + int(page_size)]
         return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "candidate_id": str(candidate_id),
             "level": level_key,
             "page": page,
             "page_size": page_size,
@@ -3216,7 +3107,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             if candidate_positions is None:
                 continue
             candidate_rows = scoped_df.iloc[candidate_positions].copy()
-            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+            identity_payload = self._candidate_identity_payload(candidate_rows)
             items.append(
                 {
                     "candidate_id": candidate_id,

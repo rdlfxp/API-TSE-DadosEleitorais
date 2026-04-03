@@ -3776,7 +3776,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador do registro retornado pela busca."
           },
           "source_id": {
             "anyOf": [
@@ -3800,7 +3801,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -3812,7 +3813,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "candidato": {
             "type": "string",
@@ -3957,7 +3958,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -3969,7 +3970,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "name": {
             "type": "string",
@@ -4062,7 +4063,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador do registro retornado pela comparação."
           },
           "source_id": {
             "anyOf": [
@@ -4086,7 +4088,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -4098,7 +4100,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "name": {
             "type": "string",
@@ -4312,7 +4314,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -4324,7 +4326,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "gender": {
             "$ref": "#/components/schemas/GenderProfile"
@@ -4947,7 +4949,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador do registro retornado pela consulta, não a identidade histórica da pessoa."
           },
           "source_id": {
             "anyOf": [
@@ -4971,7 +4974,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -4983,7 +4986,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "candidato": {
             "type": "string",
@@ -5294,7 +5297,8 @@
         "properties": {
           "candidate_id": {
             "type": "string",
-            "title": "Candidate Id"
+            "title": "Candidate Id",
+            "description": "Identificador de consulta usado na rota."
           },
           "level": {
             "type": "string",
@@ -5484,7 +5488,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -5496,7 +5500,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "is_projection": {
             "type": "boolean",
@@ -5529,7 +5533,7 @@
               }
             ],
             "title": "Canonical Candidate Id",
-            "description": "Identidade canônica da pessoa dentro da API. Atualmente espelha o person_id."
+            "description": "Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id."
           },
           "person_id": {
             "anyOf": [
@@ -5541,7 +5545,7 @@
               }
             ],
             "title": "Person Id",
-            "description": "Identidade estável da pessoa, independente de SQ_CANDIDATO ou NR_CANDIDATO."
+            "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
           },
           "items": {
             "items": {

@@ -24,6 +24,7 @@ CANONICAL_COLUMNS = [
     "DS_CARGO",
     "SQ_CANDIDATO",
     "NR_CANDIDATO",
+    "NR_CPF_CANDIDATO",
     "NM_CANDIDATO",
     "NM_URNA_CANDIDATO",
     "SG_PARTIDO",
@@ -312,6 +313,7 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
                 "ANO_ELEICAO",
                 "SQ_CANDIDATO",
                 "NR_CANDIDATO",
+                "NR_CPF_CANDIDATO",
                 "SG_UF",
                 "DS_CARGO",
                 "DS_GENERO",
@@ -334,7 +336,7 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
         return pd.DataFrame()
 
     consulta = pd.concat(frames, ignore_index=True)
-    key_cols = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO", "NR_CANDIDATO", "SG_UF", "DS_CARGO"] if c in consulta.columns]
+    key_cols = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO", "NR_CANDIDATO", "NR_CPF_CANDIDATO", "SG_UF", "DS_CARGO"] if c in consulta.columns]
     if key_cols:
         consulta = consulta.drop_duplicates(subset=key_cols, keep="last")
     return consulta
@@ -383,6 +385,7 @@ def _normalize_votacao_file(
                         "DS_COR_RACA",
                         "DS_OCUPACAO",
                         "DT_NASCIMENTO",
+                        "NR_CPF_CANDIDATO",
                         "NM_CANDIDATO",
                         "NM_URNA_CANDIDATO",
                     ]
@@ -431,6 +434,7 @@ def _normalize_votacao_file(
             "DS_CARGO",
             "SQ_CANDIDATO",
             "NR_CANDIDATO",
+            "NR_CPF_CANDIDATO",
             "NM_CANDIDATO",
             "NM_URNA_CANDIDATO",
             "SG_PARTIDO",
