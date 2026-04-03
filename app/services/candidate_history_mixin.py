@@ -56,16 +56,39 @@ class CandidateHistoryMixin:
 
     def _person_identity_signature_series(self, df: pd.DataFrame) -> pd.Series:
         col_cpf = self._select_history_col(df, ["NR_CPF_CANDIDATO"])
+        name_series = self._person_identity_name_series(df)
+        birth_series = self._person_identity_birth_series(df)
+        signature = name_series.where(name_series != "", birth_series)
+        both_mask = (name_series != "") & (birth_series != "")
+        signature = signature.where(~both_mask, name_series + "|" + birth_series)
+        if col_cpf:
+            cpf_series = self._cpf_series(df[col_cpf])
+            signature = cpf_series.where(cpf_series != "", signature)
+        return signature.fillna("")
+
+    def _cpf_person_identity_signature_series(self, df: pd.DataFrame) -> pd.Series:
+        col_cpf = self._select_history_col(df, ["NR_CPF_CANDIDATO"])
         if not col_cpf:
             return pd.Series([""] * len(df), index=df.index)
         return self._cpf_series(df[col_cpf]).fillna("")
 
     def _person_id_series(self, df: pd.DataFrame) -> pd.Series:
         signatures = self._person_identity_signature_series(df)
-        return signatures.map(lambda value: f"person:{hashlib.sha1(value.encode('utf-8')).hexdigest()}" if value else "")
+        return signatures.map(lambda value: f"person:{hashlib.sha1(value.encode('utf-8')).hexdigest()}")
 
     def _stable_person_id(self, df: pd.DataFrame) -> str:
         signatures = self._person_identity_signature_series(df)
+        values = signatures.replace("", pd.NA).dropna()
+        if values.empty:
+            signature = ""
+        else:
+            counts = values.value_counts()
+            top_signatures = sorted(counts[counts == counts.max()].index.tolist())
+            signature = str(top_signatures[0])
+        return f"person:{hashlib.sha1(signature.encode('utf-8')).hexdigest()}"
+
+    def _cpf_stable_person_id(self, df: pd.DataFrame) -> str:
+        signatures = self._cpf_person_identity_signature_series(df)
         values = signatures.replace("", pd.NA).dropna()
         if values.empty:
             return ""
@@ -133,6 +156,29 @@ class CandidateHistoryMixin:
             "person_id": person_id or None,
         }
 
+    def _candidate_cpf_identity(self, df: pd.DataFrame, candidate_cpf: str | None = None) -> dict[str, str | None]:
+        if df.empty:
+            return {
+                "nr_cpf_candidato": self._cpf_text(candidate_cpf) or None,
+                "canonical_candidate_id": None,
+                "person_id": None,
+            }
+
+        cpf_value = self._candidate_cpf(df) or self._cpf_text(candidate_cpf)
+        if not cpf_value:
+            return {
+                "nr_cpf_candidato": None,
+                "canonical_candidate_id": None,
+                "person_id": None,
+            }
+
+        person_id = f"person:{hashlib.sha1(cpf_value.encode('utf-8')).hexdigest()}"
+        return {
+            "nr_cpf_candidato": cpf_value,
+            "canonical_candidate_id": person_id or None,
+            "person_id": person_id or None,
+        }
+
     def _candidate_identity_payload(self, df: pd.DataFrame) -> dict[str, str | None]:
         identity = self._candidate_person_identity(df)
         source_id = self._candidate_source_id(df)
@@ -151,6 +197,7 @@ class CandidateHistoryMixin:
         state: str | None = None,
         office: str | None = None,
         all_rows: pd.DataFrame | None = None,
+        use_cpf_identity: bool = False,
     ) -> tuple[pd.DataFrame, dict[str, str | None]]:
         projection_cols = self._candidate_history_projection_columns()
         scoped_source = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
@@ -168,16 +215,27 @@ class CandidateHistoryMixin:
                 "person_id": None,
             }
 
-        identity = self._candidate_identity_payload(seed_rows)
         all_rows = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
-        candidate_rows = all_rows.iloc[0:0].copy()
-        candidate_cpf_value = identity["nr_cpf_candidato"]
-        if candidate_cpf_value and "NR_CPF_CANDIDATO" in all_rows.columns:
-            candidate_rows = all_rows[
-                self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == self._cpf_text(candidate_cpf_value)
-            ].copy()
-        if candidate_rows.empty:
-            candidate_rows = seed_rows.copy()
+        if use_cpf_identity:
+            identity = self._candidate_cpf_identity(seed_rows, candidate_cpf=candidate_cpf)
+            candidate_rows = all_rows.iloc[0:0].copy()
+            candidate_cpf_value = identity["nr_cpf_candidato"]
+            if candidate_cpf_value and "NR_CPF_CANDIDATO" in all_rows.columns:
+                candidate_rows = all_rows[
+                    self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == self._cpf_text(candidate_cpf_value)
+                ].copy()
+            if candidate_rows.empty:
+                candidate_rows = seed_rows.copy()
+        else:
+            identity = self._candidate_identity_payload(seed_rows)
+            person_id = identity["person_id"]
+            candidate_rows = (
+                all_rows[self._person_id_series(all_rows) == str(person_id)].copy()
+                if person_id
+                else all_rows.iloc[0:0].copy()
+            )
+            if candidate_rows.empty:
+                candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
 
         return candidate_rows, identity
 
@@ -392,7 +450,7 @@ class CandidateHistoryMixin:
     ) -> dict[str, Any]:
         projection_cols = self._candidate_history_projection_columns()
         base_df = self._load_history_rows(columns=projection_cols)
-        candidate_rows, identity = self._historical_candidate_rows(candidate_id=candidate_id, candidate_cpf=candidate_cpf, state=state, office=office, all_rows=base_df)  # type: ignore[attr-defined]
+        candidate_rows, identity = self._historical_candidate_rows(candidate_id=candidate_id, candidate_cpf=candidate_cpf, state=state, office=office, all_rows=base_df, use_cpf_identity=True)  # type: ignore[attr-defined]
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
