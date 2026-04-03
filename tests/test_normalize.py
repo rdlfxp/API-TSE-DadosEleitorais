@@ -101,3 +101,60 @@ def test_normalize_votacao_accepts_legacy_qt_votos_nominais_column(tmp_path):
 
     assert len(normalized) == 1
     assert int(normalized["QT_VOTOS_NOMINAIS_VALIDOS"].iloc[0]) == 123
+
+
+def test_normalize_votacao_merges_consulta_cpf_into_output(tmp_path):
+    votacao = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "BRASIL",
+                "CD_MUNICIPIO": "3550308",
+                "NR_ZONA": "1",
+                "NR_SECAO": "1",
+                "CD_CARGO": 1,
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 10,
+                "NR_CANDIDATO": 45,
+                "NM_CANDIDATO": "Candidato X",
+                "NM_URNA_CANDIDATO": "Candidato X",
+                "SG_PARTIDO": "PXX",
+                "NM_PARTIDO": "Partido X",
+                "TP_AGREMIACAO": "PARTIDO ISOLADO",
+                "DT_ELEICAO": "06/10/2024",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 123,
+            }
+        ]
+    )
+    consulta = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "SQ_CANDIDATO": 10,
+                "NR_CANDIDATO": 45,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "Candidato X",
+                "NM_URNA_CANDIDATO": "Candidato X",
+            }
+        ]
+    )
+    path = tmp_path / "votacao_consulta.csv"
+    votacao.to_csv(path, sep=";", index=False, encoding="latin1")
+
+    normalized = _normalize_votacao_file(
+        file_path=str(path),
+        consulta_df=consulta,
+        sep=";",
+        encoding="latin1",
+        chunk_size=0,
+        merge_consulta=True,
+    )
+
+    assert len(normalized) == 1
+    assert "NR_CPF_CANDIDATO" in normalized.columns
+    assert str(normalized["NR_CPF_CANDIDATO"].iloc[0]) == "12345678901"

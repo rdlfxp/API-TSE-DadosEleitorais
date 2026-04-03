@@ -912,6 +912,16 @@ def test_candidate_summary_endpoint_accepts_official_param_aliases(client: TestC
     assert payload["latest_election"]["votes"] == 12000
 
 
+def test_candidate_summary_missing_candidate_returns_null_identity(client: TestClient):
+    response = client.get("/v1/candidates/999/summary", params={"ano": 2022, "uf": "SP", "cargo": "Deputado Estadual"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "999"
+    assert payload["source_id"] is None
+    assert payload["canonical_candidate_id"] is None
+    assert payload["person_id"] is None
+
+
 def test_candidate_search_includes_stable_identity_fields(client: TestClient):
     response = client.get(
         "/v1/analytics/candidatos/search",
@@ -963,6 +973,16 @@ def test_candidate_vote_history_endpoint_accepts_official_param_aliases(client: 
     payload = response.json()
     assert payload["candidate_id"] == "4"
     assert len(payload["items"]) == 1
+
+
+def test_candidate_vote_history_missing_candidate_returns_null_identity(client: TestClient):
+    response = client.get("/v1/candidates/999/vote-history", params={"state": "SP", "office": "Prefeito"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "999"
+    assert payload["canonical_candidate_id"] is None
+    assert payload["person_id"] is None
+    assert payload["items"] == []
 
 
 def test_candidate_vote_history_returns_multicargo_multiyear_series(client: TestClient):

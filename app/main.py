@@ -107,30 +107,23 @@ async def lifespan(_: FastAPI):
     file_path = Path(settings.analytics_data_path)
     selected_path = file_path
     if settings.prefer_parquet_if_available and file_path.suffix.lower() == ".csv":
-        parquet_candidate = file_path.with_suffix(".parquet")
-        if parquet_candidate.exists():
-            selected_path = parquet_candidate
-    elif settings.prefer_parquet_if_available and file_path.suffix.lower() == ".parquet":
-        csv_candidate = file_path.with_suffix(".csv")
-        if not selected_path.exists() and csv_candidate.exists():
-            selected_path = csv_candidate
+        selected_path = file_path.with_suffix(".parquet")
 
-    if not selected_path.exists():
-        downloaded_path = ensure_local_analytics_from_r2(
-            file_path,
-            settings.prefer_parquet_if_available,
-        )
-        if downloaded_path is not None:
-            selected_path = downloaded_path
-            logger.info(
-                json.dumps(
-                    {
-                        "event": "startup_data_downloaded_from_r2",
-                        "path": str(selected_path),
-                    },
-                    ensure_ascii=False,
-                )
+    downloaded_path = ensure_local_analytics_from_r2(
+        file_path,
+        settings.prefer_parquet_if_available,
+    )
+    if downloaded_path is not None:
+        selected_path = downloaded_path
+        logger.info(
+            json.dumps(
+                {
+                    "event": "startup_data_downloaded_from_r2",
+                    "path": str(selected_path),
+                },
+                ensure_ascii=False,
             )
+        )
 
     if selected_path.exists():
         try:

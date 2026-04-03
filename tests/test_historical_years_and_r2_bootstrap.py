@@ -106,6 +106,53 @@ def test_distribution_accepts_year_alias(historical_client: TestClient):
     assert any(item["label"] == "Presidente" for item in payload["items"])
 
 
+def test_candidate_vote_history_prefers_cpf_as_person_identity():
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "BRASIL",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "NÃO ELEITO",
+                "SQ_CANDIDATO": 10,
+                "NR_CANDIDATO": 45,
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "Candidato Antigo",
+                "NM_URNA_CANDIDATO": "Candidato Antigo",
+                "DT_NASCIMENTO": "01/01/1980",
+                "SG_PARTIDO": "AAA",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 100,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "BRASIL",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 20,
+                "NR_CANDIDATO": 99,
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "Candidato Novo",
+                "NM_URNA_CANDIDATO": "Candidato Novo",
+                "DT_NASCIMENTO": "02/02/1990",
+                "SG_PARTIDO": "BBB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 200,
+            },
+        ]
+    )
+
+    service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    result = service.candidate_vote_history(candidate_id="10", state="SP", office="Prefeito")
+
+    assert result["person_id"] is not None
+    assert result["canonical_candidate_id"] == result["person_id"]
+    assert len(result["items"]) == 2
+    assert [item["year"] for item in result["items"]] == [2022, 2018]
+
+
 class _FakeR2Client:
     def __init__(self, available_keys: set[str]):
         self.available_keys = available_keys
@@ -122,13 +169,12 @@ class _FakeR2Client:
         path.write_bytes(b"dummy")
 
 
-def test_r2_bootstrap_prefers_parquet_then_fallback_csv(tmp_path, monkeypatch):
+def test_r2_bootstrap_downloads_parquet_only(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap.settings, "r2_account_id", "acc", raising=False)
     monkeypatch.setattr(bootstrap.settings, "r2_access_key_id", "key", raising=False)
     monkeypatch.setattr(bootstrap.settings, "r2_secret_access_key", "secret", raising=False)
     monkeypatch.setattr(bootstrap.settings, "r2_bucket", "bucket", raising=False)
     monkeypatch.setattr(bootstrap.settings, "r2_object_key_parquet", "latest/analytics.parquet", raising=False)
-    monkeypatch.setattr(bootstrap.settings, "r2_object_key_csv", "latest/analytics.csv", raising=False)
 
     client = _FakeR2Client(available_keys={"latest/analytics.parquet"})
     monkeypatch.setattr(bootstrap, "_build_client", lambda: client)
@@ -140,56 +186,19 @@ def test_r2_bootstrap_prefers_parquet_then_fallback_csv(tmp_path, monkeypatch):
     assert chosen.exists()
     assert client.downloaded == ["latest/analytics.parquet"]
 
-    client_csv_only = _FakeR2Client(available_keys={"latest/analytics.csv"})
-    monkeypatch.setattr(bootstrap, "_build_client", lambda: client_csv_only)
-
-    chosen_csv = bootstrap.ensure_local_analytics_from_r2(preferred, prefer_parquet=True)
-    assert chosen_csv == preferred.with_suffix(".csv")
-    assert chosen_csv.exists()
-    assert client_csv_only.downloaded == ["latest/analytics.parquet", "latest/analytics.csv"]
-
-
-def test_r2_bootstrap_prefers_csv_when_configured(tmp_path, monkeypatch):
-    monkeypatch.setattr(bootstrap.settings, "r2_account_id", "acc", raising=False)
-    monkeypatch.setattr(bootstrap.settings, "r2_access_key_id", "key", raising=False)
-    monkeypatch.setattr(bootstrap.settings, "r2_secret_access_key", "secret", raising=False)
-    monkeypatch.setattr(bootstrap.settings, "r2_bucket", "bucket", raising=False)
-    monkeypatch.setattr(bootstrap.settings, "r2_object_key_parquet", "latest/analytics.parquet", raising=False)
-    monkeypatch.setattr(bootstrap.settings, "r2_object_key_csv", "latest/analytics.csv", raising=False)
-
-    client = _FakeR2Client(available_keys={"latest/analytics.csv"})
-    monkeypatch.setattr(bootstrap, "_build_client", lambda: client)
-
-    preferred = tmp_path / "data" / "analytics.parquet"
-    chosen = bootstrap.ensure_local_analytics_from_r2(preferred, prefer_parquet=False)
-    assert chosen == preferred.with_suffix(".csv")
-    assert chosen.exists()
-    assert client.downloaded == ["latest/analytics.csv"]
-
-
 def test_lifespan_loads_from_r2_bootstrap_when_local_missing(tmp_path, monkeypatch):
-    downloaded_csv = tmp_path / "downloaded" / "analytics.csv"
-    downloaded_csv.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        [
-            {
-                "ANO_ELEICAO": 2024,
-                "NR_TURNO": 1,
-                "SG_UF": "SP",
-                "NM_UE": "SAO PAULO",
-                "DS_CARGO": "Prefeito",
-                "DS_SIT_TOT_TURNO": "ELEITO",
-                "SQ_CANDIDATO": 1,
-                "NM_CANDIDATO": "A",
-                "SG_PARTIDO": "AAA",
-                "QT_VOTOS_NOMINAIS_VALIDOS": 10,
-            }
-        ]
-    ).to_csv(downloaded_csv, index=False)
+    downloaded_parquet = tmp_path / "downloaded" / "analytics.parquet"
+    downloaded_parquet.parent.mkdir(parents=True, exist_ok=True)
+    downloaded_parquet.write_bytes(b"dummy-parquet")
 
     monkeypatch.setattr(main_module.settings, "analytics_data_path", str(tmp_path / "missing" / "analytics.parquet"), raising=False)
     monkeypatch.setattr(main_module.settings, "analytics_engine", "duckdb", raising=False)
-    monkeypatch.setattr(main_module, "ensure_local_analytics_from_r2", lambda *_args, **_kwargs: downloaded_csv)
+    monkeypatch.setattr(main_module, "ensure_local_analytics_from_r2", lambda *_args, **_kwargs: downloaded_parquet)
+    monkeypatch.setattr(
+        main_module.DuckDBAnalyticsService,
+        "from_file",
+        classmethod(lambda cls, file_path, **_kwargs: type("FakeDuckDBService", (), {"close": lambda self: None})()),
+    )
 
     with main_module.ANALYTICS_CACHE_LOCK:
         main_module.ANALYTICS_CACHE.clear()
@@ -203,7 +212,46 @@ def test_lifespan_loads_from_r2_bootstrap_when_local_missing(tmp_path, monkeypat
     main_module.service = None
 
 
-def test_lifespan_falls_back_to_local_csv_if_parquet_missing(tmp_path, monkeypatch):
+def test_lifespan_prefers_r2_even_when_local_csv_exists(tmp_path, monkeypatch):
+    local_csv = tmp_path / "data" / "analytics.csv"
+    local_csv.parent.mkdir(parents=True, exist_ok=True)
+    local_csv.write_text("ANO_ELEICAO,SG_UF,DS_CARGO\n2000,SP,Prefeito\n", encoding="utf-8")
+
+    downloaded_parquet = tmp_path / "downloaded" / "analytics.parquet"
+    downloaded_parquet.parent.mkdir(parents=True, exist_ok=True)
+    downloaded_parquet.write_bytes(b"dummy-parquet")
+
+    monkeypatch.setattr(main_module.settings, "analytics_data_path", str(local_csv), raising=False)
+    monkeypatch.setattr(main_module.settings, "analytics_engine", "duckdb", raising=False)
+    monkeypatch.setattr(main_module, "ensure_local_analytics_from_r2", lambda *_args, **_kwargs: downloaded_parquet)
+    loaded_paths: list[str] = []
+    monkeypatch.setattr(
+        main_module.DuckDBAnalyticsService,
+        "from_file",
+        classmethod(
+            lambda cls, file_path, **_kwargs: loaded_paths.append(file_path) or type(
+                "FakeDuckDBService",
+                (),
+                {"close": lambda self: None},
+            )(),
+        ),
+    )
+
+    with main_module.ANALYTICS_CACHE_LOCK:
+        main_module.ANALYTICS_CACHE.clear()
+    main_module.service = None
+
+    with TestClient(main_module.app) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["data_loaded"] is True
+
+    assert loaded_paths == [str(downloaded_parquet)]
+
+    main_module.service = None
+
+
+def test_lifespan_ignores_local_csv_when_parquet_is_missing(tmp_path, monkeypatch):
     local_csv = tmp_path / "data" / "analytics.csv"
     local_csv.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -234,6 +282,6 @@ def test_lifespan_falls_back_to_local_csv_if_parquet_missing(tmp_path, monkeypat
     with TestClient(main_module.app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["data_loaded"] is True
+        assert health.json()["data_loaded"] is False
 
     main_module.service = None

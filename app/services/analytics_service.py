@@ -524,97 +524,6 @@ class AnalyticsService(CandidateHistoryMixin):
         turno_text_num = pd.to_numeric(turno_text, errors="coerce")
         return turno_num.fillna(turno_text_num).fillna(0).astype(int)
 
-    def _candidate_mask(self, df: pd.DataFrame, candidate_id: str) -> pd.Series:
-        candidate_norm = str(candidate_id or "").strip()
-        candidate_ascii = self._normalize_ascii_upper(candidate_norm)
-        if not candidate_norm:
-            return pd.Series([False] * len(df), index=df.index)
-
-        masks: list[pd.Series] = []
-        col_sq = self._pick_col(["SQ_CANDIDATO"])
-        col_nr = self._pick_col(["NR_CANDIDATO"])
-        col_nome = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
-
-        if col_sq:
-            masks.append(self._normalize_text(df[col_sq]) == candidate_norm)
-        if col_nr:
-            masks.append(self._normalize_text(df[col_nr]) == candidate_norm)
-        if col_nome:
-            masks.append(
-                self._normalize_text(df[col_nome]).apply(self._normalize_ascii_upper) == candidate_ascii
-            )
-
-        if not masks:
-            return pd.Series([False] * len(df), index=df.index)
-        out = masks[0]
-        for mask in masks[1:]:
-            out = out | mask
-        return out.fillna(False)
-
-    def _candidate_output_id(self, df: pd.DataFrame, fallback: str) -> str:
-        for col in ["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO", "NM_URNA_CANDIDATO"]:
-            if col in df.columns:
-                values = self._normalize_text(df[col]).replace("", pd.NA).dropna()
-                if not values.empty:
-                    return str(values.iloc[0])
-        return str(fallback)
-
-    def _candidate_person_identity(self, df: pd.DataFrame, fallback: str) -> dict[str, object]:
-        person_id = self._stable_person_id(df)
-        return {
-            "canonical_candidate_id": person_id,
-            "person_id": person_id,
-            "name_tokens": set(),
-            "birth_tokens": set(),
-        }
-
-    def _candidate_source_id(self, df: pd.DataFrame, fallback: str) -> str:
-        col_source_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
-        if col_source_id and col_source_id in df.columns:
-            values = self._normalize_text(df[col_source_id]).replace("", pd.NA).dropna()
-            if not values.empty:
-                return str(values.iloc[0])
-        return str(fallback)
-
-    def _candidate_identity_payload(self, df: pd.DataFrame, fallback: str) -> dict[str, str]:
-        identity = self._candidate_person_identity(df, fallback)
-        source_id = self._candidate_source_id(df, str(fallback))
-        return {
-            "source_id": str(source_id),
-            "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-            "person_id": str(identity["person_id"]),
-        }
-
-    def _historical_candidate_rows(
-        self,
-        candidate_id: str,
-        state: str | None = None,
-        office: str | None = None,
-        all_rows: pd.DataFrame | None = None,
-    ) -> tuple[pd.DataFrame, dict[str, object]]:
-        scoped_source = all_rows if all_rows is not None else self._apply_filters(uf=state, cargo=office)
-        scoped = self._scope_history_rows(scoped_source, state=state, office=office) if all_rows is not None else scoped_source
-        seed_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
-        if seed_rows.empty and (state or office):
-            fallback_source = all_rows if all_rows is not None else self.dataframe
-            seed_rows = fallback_source[self._candidate_mask(fallback_source, candidate_id)].copy()
-        if seed_rows.empty:
-            empty_base = all_rows if all_rows is not None else self.dataframe
-            return empty_base.iloc[0:0].copy(), {
-                "canonical_candidate_id": str(candidate_id),
-                "person_id": str(candidate_id),
-                "name_tokens": set(),
-                "birth_tokens": set(),
-            }
-
-        identity = self._candidate_person_identity(seed_rows, candidate_id)
-        all_rows = all_rows if all_rows is not None else self.dataframe
-        candidate_rows = all_rows[self._person_id_series(all_rows) == str(identity["person_id"])].copy()
-        if candidate_rows.empty:
-            candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
-
-        return candidate_rows, identity
-
     def _candidate_retention_from_history(self, candidate_rows: pd.DataFrame, resolved_year: int | None) -> float:
         if candidate_rows.empty:
             return 100.0
@@ -1322,7 +1231,7 @@ class AnalyticsService(CandidateHistoryMixin):
             if candidate_positions is None:
                 continue
             candidate_rows = df.iloc[candidate_positions].copy()
-            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+            identity_payload = self._candidate_identity_payload(candidate_rows)
             out.append(
                 {
                     "candidate_id": candidate_id,
@@ -2063,10 +1972,10 @@ class AnalyticsService(CandidateHistoryMixin):
             status_vals = self._normalize_text(latest_rows[col_status]).replace("", pd.NA).dropna()
             latest_status = str(status_vals.iloc[0]) if not status_vals.empty else None
 
-        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+        identity_payload = self._candidate_identity_payload(candidate_rows)
 
         return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "candidate_id": str(candidate_id),
             "source_id": identity_payload["source_id"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
@@ -2184,10 +2093,10 @@ class AnalyticsService(CandidateHistoryMixin):
             )
             urban_concentration = round((weights[urban_mask].sum() / total_weight) * 100, 4)
 
-        identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+        identity_payload = self._candidate_identity_payload(candidate_rows)
 
         return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "candidate_id": str(candidate_id),
             "source_id": identity_payload["source_id"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
@@ -2343,7 +2252,7 @@ class AnalyticsService(CandidateHistoryMixin):
                 offset = (int(page) - 1) * int(page_size)
                 items = items[offset : offset + int(page_size)]
             return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "candidate_id": str(candidate_id),
                 "level": level_key,
                 "page": page,
                 "page_size": page_size,
@@ -2456,7 +2365,7 @@ class AnalyticsService(CandidateHistoryMixin):
                 offset = (int(page) - 1) * int(page_size)
                 items = items[offset : offset + int(page_size)]
             return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "candidate_id": str(candidate_id),
                 "level": level_key,
                 "page": page,
                 "page_size": page_size,
@@ -2493,7 +2402,7 @@ class AnalyticsService(CandidateHistoryMixin):
             offset = (int(page) - 1) * int(page_size)
             items = items[offset : offset + int(page_size)]
             return {
-                "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+                "candidate_id": str(candidate_id),
                 "level": level_key,
                 "page": page,
                 "page_size": page_size,
@@ -2501,7 +2410,7 @@ class AnalyticsService(CandidateHistoryMixin):
                 "items": items,
             }
         return {
-            "candidate_id": self._candidate_output_id(candidate_rows, candidate_id),
+            "candidate_id": str(candidate_id),
             "level": level_key,
             "total_items": len(items),
             "items": items,
@@ -2613,7 +2522,7 @@ class AnalyticsService(CandidateHistoryMixin):
             if not candidate_id:
                 continue
             candidate_rows = ranked[ranked["_candidate_id"] == row["_candidate_id"]].copy()
-            identity_payload = self._candidate_identity_payload(candidate_rows, candidate_id)
+            identity_payload = self._candidate_identity_payload(candidate_rows)
             numero_raw = row["_numero"] if pd.notna(row["_numero"]) and str(row["_numero"]).strip() else candidate_id
             items.append(
                 {

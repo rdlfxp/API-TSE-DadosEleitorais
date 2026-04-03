@@ -16,10 +16,10 @@ pip install -r requirements.txt
 Organizacao recomendada:
 
 - `data/raw/<ano>/...csv`: arquivos brutos do TSE (entrada)
-- `data/curated/analytics.csv`: base consolidada consumida pela API (saida padrao)
+- `data/curated/analytics.csv`: artefato legado/publicado junto do snapshot
 - `data/curated/quality_report.json`: relatorio de qualidade da consolidacao
 
-Por padrao, a API tenta carregar `data/curated/analytics.parquet`.
+Por padrao, a API carrega apenas `data/curated/analytics.parquet`.
 
 Você pode configurar via `.env`:
 
@@ -48,13 +48,12 @@ R2_ACCOUNT_ID=seu_account_id
 R2_ACCESS_KEY_ID=seu_access_key
 R2_SECRET_ACCESS_KEY=sua_secret_key
 R2_BUCKET=tse-curated
-R2_OBJECT_KEY_CSV=latest/analytics.csv
 R2_OBJECT_KEY_PARQUET=latest/analytics.parquet
 R2_CONNECT_TIMEOUT_SECONDS=5
 R2_READ_TIMEOUT_SECONDS=30
 ```
 
-Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap tenta primeiro `latest/analytics.parquet` e faz fallback para `latest/analytics.csv`.
+Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap usa apenas `latest/analytics.parquet` para a API.
 
 ## Compatibilidade de parâmetros de ano
 
@@ -67,14 +66,14 @@ Nos endpoints que retornam dados de candidato, os campos de identidade seguem es
 
 - `candidate_id`: identificador de consulta da rota.
 - `source_id`: origem do registro eleitoral retornado.
-- `person_id`: identidade estavel da pessoa, independente de `SQ_CANDIDATO` e `NR_CANDIDATO`.
-- `canonical_candidate_id`: identidade canonica interna da API. Atualmente espelha `person_id`.
+- `person_id`: identidade estavel da pessoa, derivada de nome normalizado e data de nascimento quando disponivel.
+- `canonical_candidate_id`: identidade canonica interna da API. Hoje espelha `person_id` e nunca volta a ser `candidate_id`.
 
 Observacoes:
 
 - `SQ_CANDIDATO` e `NR_CANDIDATO` nao sao usados como identidade historica da pessoa.
-- `person_id` e derivado de nome normalizado + data de nascimento, quando disponivel.
-- Quando o candidato nao e encontrado no recorte consultado, `source_id`, `canonical_candidate_id` e `person_id` podem vir como `null`.
+- `person_id` e gerado de forma deterministica a partir de uma assinatura com nome normalizado em ASCII uppercase e data de nascimento, quando existir.
+- Quando o candidato nao e encontrado no recorte consultado, `source_id`, `canonical_candidate_id` e `person_id` ficam como `null`.
 
 ## 3) Run
 
