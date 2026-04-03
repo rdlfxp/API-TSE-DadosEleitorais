@@ -151,6 +151,52 @@ def test_candidate_vote_history_prefers_cpf_as_person_identity():
     assert result["canonical_candidate_id"] == result["person_id"]
     assert len(result["items"]) == 2
     assert [item["year"] for item in result["items"]] == [2022, 2018]
+    assert result["nr_cpf_candidato"] == "12345678901"
+
+
+def test_candidate_vote_history_does_not_expand_identity_without_cpf():
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 900,
+                "NR_CANDIDATO": 45,
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "DT_NASCIMENTO": "01/02/1980",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 510000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 800,
+                "NR_CANDIDATO": 13123,
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "DT_NASCIMENTO": "01/02/1980",
+                "SG_PARTIDO": "PSB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 220000,
+            },
+        ]
+    )
+
+    service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    result = service.candidate_vote_history(candidate_id="900", state="SP", office="Prefeito")
+
+    assert result["nr_cpf_candidato"] is None
+    assert result["canonical_candidate_id"] is None
+    assert result["person_id"] is None
+    assert [item["year"] for item in result["items"]] == [2024]
 
 
 class _FakeR2Client:

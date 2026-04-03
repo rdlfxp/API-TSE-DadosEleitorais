@@ -1119,6 +1119,24 @@
             }
           },
           {
+            "name": "nr_cpf_candidato",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CPF do candidato. Quando informado, e a chave preferencial para montar o historico eleitoral.",
+              "title": "Nr Cpf Candidato"
+            },
+            "description": "CPF do candidato. Quando informado, e a chave preferencial para montar o historico eleitoral."
+          },
+          {
             "name": "uf",
             "in": "query",
             "required": false,
@@ -5478,6 +5496,18 @@
             "title": "Source Id",
             "description": "Origem do registro eleitoral daquele item do histórico."
           },
+          "nr_cpf_candidato": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nr Cpf Candidato",
+            "description": "CPF do candidato usado como identidade preferencial do historico quando disponivel."
+          },
           "canonical_candidate_id": {
             "anyOf": [
               {
@@ -5522,6 +5552,18 @@
             "type": "string",
             "title": "Candidate Id",
             "description": "Identificador de consulta usado na rota."
+          },
+          "nr_cpf_candidato": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nr Cpf Candidato",
+            "description": "CPF do candidato usado como chave preferencial da consulta de historico."
           },
           "canonical_candidate_id": {
             "anyOf": [

@@ -66,13 +66,15 @@ Nos endpoints que retornam dados de candidato, os campos de identidade seguem es
 
 - `candidate_id`: identificador de consulta da rota.
 - `source_id`: origem do registro eleitoral retornado.
-- `person_id`: identidade estavel da pessoa, derivada de nome normalizado e data de nascimento quando disponivel.
+- `nr_cpf_candidato`: CPF do candidato quando disponivel. No endpoint de historico, ele e a chave preferencial de consulta e expansao do historico.
+- `person_id`: identidade estavel da pessoa, derivada do CPF do candidato quando disponivel.
 - `canonical_candidate_id`: identidade canonica interna da API. Hoje espelha `person_id` e nunca volta a ser `candidate_id`.
 
 Observacoes:
 
 - `SQ_CANDIDATO` e `NR_CANDIDATO` nao sao usados como identidade historica da pessoa.
-- `person_id` e gerado de forma deterministica a partir de uma assinatura com nome normalizado em ASCII uppercase e data de nascimento, quando existir.
+- No `vote-history`, a API nao expande mais historico por nome completo, nome de urna ou data de nascimento.
+- O historico multi-ano/multicargo so e expandido quando existe `NR_CPF_CANDIDATO`.
 - Quando o candidato nao e encontrado no recorte consultado, `source_id`, `canonical_candidate_id` e `person_id` ficam como `null`.
 
 ## 3) Run

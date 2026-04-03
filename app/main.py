@@ -1093,6 +1093,7 @@ def candidate_summary(
 def candidate_vote_history(
     request: Request,
     candidate_id: str,
+    nr_cpf_candidato: str | None = Query(default=None, description="CPF do candidato. Quando informado, e a chave preferencial para montar o historico eleitoral."),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
@@ -1100,13 +1101,14 @@ def candidate_vote_history(
 ) -> VoteHistoryResponse:
     resolved_state = _resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
-    filters = {"candidate_id": candidate_id, "state": resolved_state, "office": resolved_office}
+    filters = {"candidate_id": candidate_id, "nr_cpf_candidato": nr_cpf_candidato, "state": resolved_state, "office": resolved_office}
     data = _run_analytics_query(
         request=request,
         endpoint=f"/v1/candidates/{candidate_id}/vote-history",
         filters=filters,
         operation=lambda: get_service().candidate_vote_history(
             candidate_id=candidate_id,
+            candidate_cpf=nr_cpf_candidato,
             state=resolved_state,
             office=resolved_office,
         ),
