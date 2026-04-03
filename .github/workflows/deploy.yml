@@ -28,21 +28,59 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Wait for EasyPanel auto deploy
-        if: github.event_name == 'push'
-        run: sleep 40
-
-      - name: Run production smoke test
+      - name: Resolve production base URL
+        id: prod_url
+        env:
+          PROD_BASE_URL: ${{ secrets.PROD_BASE_URL }}
         run: |
-          PROD_BASE_URL="${{ secrets.PROD_BASE_URL }}"
           if [ -n "${{ github.event.inputs.base_url }}" ]; then
             PROD_BASE_URL="${{ github.event.inputs.base_url }}"
           fi
           if [ -z "${PROD_BASE_URL}" ]; then
             PROD_BASE_URL="https://apitse.safeartlabs.com"
           fi
+          echo "base_url=${PROD_BASE_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for production health
+        timeout-minutes: 10
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          import time
+          import urllib.request
+          from urllib.error import HTTPError, URLError
+
+          base_url = "${{ steps.prod_url.outputs.base_url }}".rstrip("/")
+          deadline = time.time() + 600
+          delay = 5
+          attempt = 0
+
+          while time.time() < deadline:
+              attempt += 1
+              try:
+                  with urllib.request.urlopen(f"{base_url}/health", timeout=12) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+                  if payload.get("status") == "ok" and payload.get("data_loaded"):
+                      print(f"[wait] production health is ready after {attempt} attempt(s)")
+                      sys.exit(0)
+                  print(
+                      f"[wait] health responded but is not ready yet "
+                      f"(attempt {attempt}, payload={payload})"
+                  )
+              except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+                  print(f"[wait] not ready yet (attempt {attempt}): {exc}")
+
+              time.sleep(delay)
+              delay = min(delay + 5, 30)
+
+          raise SystemExit("[wait] timed out waiting for production health")
+          PY
+
+      - name: Run production smoke test
+        run: |
           python scripts/smoke_test_api.py \
-            --base-url "${PROD_BASE_URL}" \
+            --base-url "${{ steps.prod_url.outputs.base_url }}" \
             --timeout 12 \
             --retries 6 \
             --retry-delay 5
