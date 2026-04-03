@@ -2483,10 +2483,11 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
     def candidate_vote_history(
         self,
         candidate_id: str,
+        candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
-        return CandidateHistoryMixin.candidate_vote_history(self, candidate_id, state=state, office=office)
+        return CandidateHistoryMixin.candidate_vote_history(self, candidate_id, candidate_cpf=candidate_cpf, state=state, office=office)
 
     def candidate_electorate_profile(
         self,

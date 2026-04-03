@@ -227,6 +227,7 @@ class VoteHistoryItem(BaseModel):
     candidate_number: str | None = None
     party: str | None = None
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral daquele item do histórico.")
+    nr_cpf_candidato: str | None = Field(default=None, description="CPF do candidato usado como identidade preferencial do historico quando disponivel.")
     canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
     person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     is_projection: bool = False
@@ -234,6 +235,7 @@ class VoteHistoryItem(BaseModel):
 
 class VoteHistoryResponse(BaseModel):
     candidate_id: str = Field(description="Identificador de consulta usado na rota.")
+    nr_cpf_candidato: str | None = Field(default=None, description="CPF do candidato usado como chave preferencial da consulta de historico.")
     canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
     person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     items: list[VoteHistoryItem] = Field(default_factory=list)

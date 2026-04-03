@@ -56,38 +56,35 @@ class CandidateHistoryMixin:
 
     def _person_identity_signature_series(self, df: pd.DataFrame) -> pd.Series:
         col_cpf = self._select_history_col(df, ["NR_CPF_CANDIDATO"])
-        name_series = self._person_identity_name_series(df)
-        birth_series = self._person_identity_birth_series(df)
-        signature = name_series.where(name_series != "", birth_series)
-        both_mask = (name_series != "") & (birth_series != "")
-        signature = signature.where(~both_mask, name_series + "|" + birth_series)
-        if col_cpf:
-            cpf_series = self._cpf_series(df[col_cpf])
-            signature = cpf_series.where(cpf_series != "", signature)
-        return signature.fillna("")
+        if not col_cpf:
+            return pd.Series([""] * len(df), index=df.index)
+        return self._cpf_series(df[col_cpf]).fillna("")
 
     def _person_id_series(self, df: pd.DataFrame) -> pd.Series:
         signatures = self._person_identity_signature_series(df)
-        return signatures.map(lambda value: f"person:{hashlib.sha1(value.encode('utf-8')).hexdigest()}")
+        return signatures.map(lambda value: f"person:{hashlib.sha1(value.encode('utf-8')).hexdigest()}" if value else "")
 
     def _stable_person_id(self, df: pd.DataFrame) -> str:
         signatures = self._person_identity_signature_series(df)
         values = signatures.replace("", pd.NA).dropna()
         if values.empty:
-            signature = ""
-        else:
-            counts = values.value_counts()
-            top_signatures = sorted(counts[counts == counts.max()].index.tolist())
-            signature = str(top_signatures[0])
+            return ""
+        counts = values.value_counts()
+        top_signatures = sorted(counts[counts == counts.max()].index.tolist())
+        signature = str(top_signatures[0])
         return f"person:{hashlib.sha1(signature.encode('utf-8')).hexdigest()}"
 
-    def _candidate_mask(self, df: pd.DataFrame, candidate_id: str) -> pd.Series:
+    def _candidate_mask(self, df: pd.DataFrame, candidate_id: str, candidate_cpf: str | None = None) -> pd.Series:
+        candidate_cpf_norm = self._cpf_text(candidate_cpf)
+        if candidate_cpf_norm and "NR_CPF_CANDIDATO" in df.columns:
+            return (self._cpf_series(df["NR_CPF_CANDIDATO"]) == candidate_cpf_norm).fillna(False)
+
         candidate_norm = self._identity_text(candidate_id)
         if not candidate_norm:
             return pd.Series([False] * len(df), index=df.index)
 
         masks: list[pd.Series] = []
-        for col in ["SQ_CANDIDATO", "NR_CANDIDATO", "NR_CPF_CANDIDATO", "NM_CANDIDATO", "NM_URNA_CANDIDATO"]:
+        for col in ["SQ_CANDIDATO", "NR_CANDIDATO", "NR_CPF_CANDIDATO"]:
             if col in df.columns:
                 if col == "NR_CPF_CANDIDATO":
                     masks.append(self._cpf_series(df[col]) == self._cpf_text(candidate_id))
@@ -112,6 +109,17 @@ class CandidateHistoryMixin:
                 return str(values.iloc[0])
         return None
 
+    def _candidate_cpf(self, df: pd.DataFrame) -> str | None:
+        col_cpf = self._select_history_col(df, ["NR_CPF_CANDIDATO"])
+        if not col_cpf:
+            return None
+        values = self._cpf_series(df[col_cpf]).replace("", pd.NA).dropna()
+        if values.empty:
+            return None
+        counts = values.value_counts()
+        top_cpfs = sorted(counts[counts == counts.max()].index.tolist())
+        return str(top_cpfs[0])
+
     def _candidate_person_identity(self, df: pd.DataFrame) -> dict[str, str | None]:
         if df.empty:
             return {
@@ -121,15 +129,17 @@ class CandidateHistoryMixin:
 
         person_id = self._stable_person_id(df)
         return {
-            "canonical_candidate_id": person_id,
-            "person_id": person_id,
+            "canonical_candidate_id": person_id or None,
+            "person_id": person_id or None,
         }
 
     def _candidate_identity_payload(self, df: pd.DataFrame) -> dict[str, str | None]:
         identity = self._candidate_person_identity(df)
         source_id = self._candidate_source_id(df)
+        candidate_cpf = self._candidate_cpf(df)
         return {
             "source_id": source_id,
+            "nr_cpf_candidato": candidate_cpf,
             "canonical_candidate_id": identity["canonical_candidate_id"],
             "person_id": identity["person_id"],
         }
@@ -137,6 +147,7 @@ class CandidateHistoryMixin:
     def _historical_candidate_rows(
         self,
         candidate_id: str,
+        candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
         all_rows: pd.DataFrame | None = None,
@@ -144,28 +155,29 @@ class CandidateHistoryMixin:
         projection_cols = self._candidate_history_projection_columns()
         scoped_source = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
         scoped = self._scope_history_rows(scoped_source, state=state, office=office) if all_rows is not None else scoped_source
-        seed_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
+        seed_rows = scoped[self._candidate_mask(scoped, candidate_id, candidate_cpf=candidate_cpf)].copy()
         if seed_rows.empty and (state or office):
             history_rows = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
-            seed_rows = history_rows[self._candidate_mask(history_rows, candidate_id)].copy()
+            seed_rows = history_rows[self._candidate_mask(history_rows, candidate_id, candidate_cpf=candidate_cpf)].copy()
         if seed_rows.empty:
             empty_base = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
             return empty_base.iloc[0:0].copy(), {
                 "source_id": None,
+                "nr_cpf_candidato": None,
                 "canonical_candidate_id": None,
                 "person_id": None,
             }
 
         identity = self._candidate_identity_payload(seed_rows)
         all_rows = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
-        person_id = identity["person_id"]
-        candidate_rows = (
-            all_rows[self._person_id_series(all_rows) == str(person_id)].copy()
-            if person_id
-            else all_rows.iloc[0:0].copy()
-        )
+        candidate_rows = all_rows.iloc[0:0].copy()
+        candidate_cpf_value = identity["nr_cpf_candidato"]
+        if candidate_cpf_value and "NR_CPF_CANDIDATO" in all_rows.columns:
+            candidate_rows = all_rows[
+                self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == self._cpf_text(candidate_cpf_value)
+            ].copy()
         if candidate_rows.empty:
-            candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
+            candidate_rows = seed_rows.copy()
 
         return candidate_rows, identity
 
@@ -374,15 +386,17 @@ class CandidateHistoryMixin:
     def candidate_vote_history(
         self,
         candidate_id: str,
+        candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
     ) -> dict[str, Any]:
         projection_cols = self._candidate_history_projection_columns()
         base_df = self._load_history_rows(columns=projection_cols)
-        candidate_rows, identity = self._historical_candidate_rows(candidate_id=candidate_id, state=state, office=office, all_rows=base_df)  # type: ignore[attr-defined]
+        candidate_rows, identity = self._historical_candidate_rows(candidate_id=candidate_id, candidate_cpf=candidate_cpf, state=state, office=office, all_rows=base_df)  # type: ignore[attr-defined]
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
+                "nr_cpf_candidato": self._cpf_text(candidate_cpf) or None,
                 "canonical_candidate_id": None,
                 "person_id": None,
                 "items": [],
@@ -400,6 +414,7 @@ class CandidateHistoryMixin:
         if not col_year or not col_votes:
             return {
                 "candidate_id": str(candidate_id),
+                "nr_cpf_candidato": self._cpf_text(candidate_cpf) or None,
                 "canonical_candidate_id": None,
                 "person_id": None,
                 "items": [],
@@ -419,6 +434,7 @@ class CandidateHistoryMixin:
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
+                "nr_cpf_candidato": self._cpf_text(candidate_cpf) or None,
                 "canonical_candidate_id": None,
                 "person_id": None,
                 "items": [],
@@ -505,13 +521,15 @@ class CandidateHistoryMixin:
                     "candidate_number": (str(row["candidate_number"]).strip() or None) if pd.notna(row["candidate_number"]) else None,
                     "party": (str(row["party"]).strip() or None) if pd.notna(row["party"]) else None,
                     "source_id": (str(row["source_id"]).strip() or None) if pd.notna(row["source_id"]) else None,
-                    "canonical_candidate_id": str(identity["canonical_candidate_id"]),
-                    "person_id": str(identity["person_id"]),
+                    "nr_cpf_candidato": identity["nr_cpf_candidato"],
+                    "canonical_candidate_id": str(identity["canonical_candidate_id"]) if identity.get("canonical_candidate_id") else None,
+                    "person_id": str(identity["person_id"]) if identity.get("person_id") else None,
                     "is_projection": False,
                 }
             )
         return {
             "candidate_id": str(candidate_id),
+            "nr_cpf_candidato": identity["nr_cpf_candidato"],
             "canonical_candidate_id": str(identity["canonical_candidate_id"]) if identity.get("canonical_candidate_id") else None,
             "person_id": str(identity["person_id"]) if identity.get("person_id") else None,
             "items": items,

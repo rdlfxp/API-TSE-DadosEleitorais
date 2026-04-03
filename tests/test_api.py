@@ -955,7 +955,7 @@ def test_candidate_vote_history_endpoint(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "4"
-    assert payload["canonical_candidate_id"].startswith("person:")
+    assert "nr_cpf_candidato" in payload
     assert len(payload["items"]) == 1
     assert [item["round"] for item in payload["items"]] == [2]
     assert [item["year"] for item in payload["items"]] == [2024]
@@ -963,7 +963,13 @@ def test_candidate_vote_history_endpoint(client: TestClient):
     assert all(item["status"] == "ELEITO" for item in payload["items"])
     assert all(item["office"] == "Prefeito" for item in payload["items"])
     assert all(item["state"] == "SP" for item in payload["items"])
-    assert all(item["canonical_candidate_id"].startswith("person:") for item in payload["items"])
+    assert all("nr_cpf_candidato" in item for item in payload["items"])
+    if payload["nr_cpf_candidato"]:
+        assert payload["canonical_candidate_id"].startswith("person:")
+        assert all(item["canonical_candidate_id"].startswith("person:") for item in payload["items"])
+    else:
+        assert payload["canonical_candidate_id"] is None
+        assert all(item["canonical_candidate_id"] is None for item in payload["items"])
     assert all(item["is_projection"] is False for item in payload["items"])
 
 
@@ -975,11 +981,66 @@ def test_candidate_vote_history_endpoint_accepts_official_param_aliases(client: 
     assert len(payload["items"]) == 1
 
 
+def test_candidate_vote_history_endpoint_prefers_query_cpf(client: TestClient):
+    custom_df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2018,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 10,
+                "NR_CANDIDATO": 45,
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "CANDIDATO ANTIGO",
+                "NM_URNA_CANDIDATO": "CANDIDATO ANTIGO",
+                "DT_NASCIMENTO": "01/01/1980",
+                "SG_PARTIDO": "AAA",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 100,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 20,
+                "NR_CANDIDATO": 99,
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "CANDIDATO NOVO",
+                "NM_URNA_CANDIDATO": "CANDIDATO NOVO",
+                "DT_NASCIMENTO": "02/02/1990",
+                "SG_PARTIDO": "BBB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 200,
+            },
+        ]
+    )
+    original_service = main_module.service
+    try:
+        main_module.service = AnalyticsService(dataframe=custom_df, default_top_n=20, max_top_n=100)
+        response = client.get(
+            "/v1/candidates/999/vote-history",
+            params={"state": "SP", "office": "Prefeito", "nr_cpf_candidato": "12345678901"},
+        )
+    finally:
+        main_module.service = original_service
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "999"
+    assert payload["nr_cpf_candidato"] == "12345678901"
+    assert [item["year"] for item in payload["items"]] == [2022, 2018]
+
+
 def test_candidate_vote_history_missing_candidate_returns_null_identity(client: TestClient):
     response = client.get("/v1/candidates/999/vote-history", params={"state": "SP", "office": "Prefeito"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "999"
+    assert payload["nr_cpf_candidato"] is None
     assert payload["canonical_candidate_id"] is None
     assert payload["person_id"] is None
     assert payload["items"] == []
@@ -997,6 +1058,7 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
                 "DS_SIT_TOT_TURNO": "ELEITO",
                 "SQ_CANDIDATO": 700,
                 "NR_CANDIDATO": 10123,
+                "NR_CPF_CANDIDATO": "12345678901",
                 "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
                 "NM_URNA_CANDIDATO": "FABIO CANDIDO",
                 "SG_PARTIDO": "PT",
@@ -1012,6 +1074,7 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
                 "DS_SIT_TOT_TURNO": "NAO ELEITO",
                 "SQ_CANDIDATO": 800,
                 "NR_CANDIDATO": 13123,
+                "NR_CPF_CANDIDATO": "12345678901",
                 "NM_CANDIDATO": "FABIO ROGERIO CANDIDO",
                 "NM_URNA_CANDIDATO": "FABIO CANDIDO",
                 "SG_PARTIDO": "PSB",
@@ -1027,6 +1090,7 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
                 "DS_SIT_TOT_TURNO": "ELEITO",
                 "SQ_CANDIDATO": 900,
                 "NR_CANDIDATO": 45,
+                "NR_CPF_CANDIDATO": "12345678901",
                 "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
                 "NM_URNA_CANDIDATO": "FABIO CANDIDO",
                 "SG_PARTIDO": "PL",
@@ -1060,6 +1124,7 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
     assert response.status_code == 200
     payload = response.json()
     assert payload["candidate_id"] == "900"
+    assert payload["nr_cpf_candidato"] == "12345678901"
     assert payload["canonical_candidate_id"].startswith("person:")
     assert payload["person_id"].startswith("person:")
     assert [item["year"] for item in payload["items"]] == [2024, 2022, 2020]
