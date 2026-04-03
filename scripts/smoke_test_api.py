@@ -44,7 +44,7 @@ def fetch_json(base_url: str, path: str, timeout: float, params: dict | None = N
             if exc.code not in {502, 503, 504} or attempt >= attempts:
                 raise
             last_error = exc
-        except URLError as exc:
+        except (URLError, TimeoutError, socket.timeout) as exc:
             if attempt >= attempts:
                 raise
             last_error = exc
