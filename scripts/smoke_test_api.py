@@ -174,6 +174,9 @@ def main() -> None:
     print("[smoke] ok: /v1/candidates/{id}/summary")
 
     vote_history_params = {}
+    candidate_cpf = summary.get("nr_cpf_candidato")
+    if candidate_cpf:
+        vote_history_params["nr_cpf_candidato"] = candidate_cpf
     if first_item.get("uf"):
         vote_history_params["state"] = first_item["uf"]
     if first_item.get("cargo"):
