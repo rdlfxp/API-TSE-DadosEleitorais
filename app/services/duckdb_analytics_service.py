@@ -891,7 +891,19 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
         )
         return grouped, str(candidate_id)
 
-    def _candidate_mask(self, df: pd.DataFrame, candidate_id: str) -> pd.Series:
+    def _candidate_mask(
+        self,
+        df: pd.DataFrame,
+        candidate_id: str,
+        candidate_cpf: str | None = None,
+    ) -> pd.Series:
+        cpf_candidate = re.sub(r"\D", "", str(candidate_cpf or "")).strip()
+        if cpf_candidate and "NR_CPF_CANDIDATO" in df.columns:
+            return (
+                df["NR_CPF_CANDIDATO"].fillna("").astype(str).str.replace(r"\D", "", regex=True).str.strip()
+                == cpf_candidate
+            ).fillna(False)
+
         candidate_norm = self._normalize_value(candidate_id or "", uppercase=True)
         if not candidate_norm:
             return pd.Series([False] * len(df), index=df.index)
