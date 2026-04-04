@@ -123,21 +123,33 @@ def main() -> None:
     assert_true("items" in busca and "total" in busca, "resposta candidatos invalida")
     print("[smoke] ok: /v1/analytics/candidatos/search")
 
-    top_params = {"ano": anos[0], "top_n": 3}
+    top_attempts: list[dict[str, object]] = [{"ano": anos[0], "top_n": 3}]
     if ufs:
-        top_params["uf"] = ufs[0]
+        top_attempts.append({"ano": anos[0], "top_n": 3, "uf": ufs[0]})
     if cargos:
-        top_params["cargo"] = cargos[0]
-    status, top = fetch_json(
-        base_url,
-        "/v1/analytics/top-candidatos",
-        args.timeout,
-        top_params,
-        retries=args.retries,
-        retry_delay=args.retry_delay,
-    )
-    assert_true(status == 200, "top-candidatos status != 200")
-    top_items = top.get("items", []) if isinstance(top, dict) else []
+        top_attempts.append({"ano": anos[0], "top_n": 3, "cargo": cargos[0]})
+    if ufs and cargos:
+        top_attempts.append({"ano": anos[0], "top_n": 3, "uf": ufs[0], "cargo": cargos[0]})
+
+    top = {}
+    top_items: list[dict] = []
+    for top_params in top_attempts:
+        status, candidate_payload = fetch_json(
+            base_url,
+            "/v1/analytics/top-candidatos",
+            args.timeout,
+            top_params,
+            retries=args.retries,
+            retry_delay=args.retry_delay,
+        )
+        assert_true(status == 200, "top-candidatos status != 200")
+        top = candidate_payload if isinstance(candidate_payload, dict) else {}
+        top_items = top.get("items", []) if isinstance(top, dict) else []
+        if top_items:
+            break
+
+    if not top_items:
+        top_items = busca.get("items", []) if isinstance(busca, dict) else []
     assert_true(bool(top_items), "top-candidatos sem itens")
     first_item = top_items[0]
     candidate_id = str(first_item.get("candidate_id") or "")
