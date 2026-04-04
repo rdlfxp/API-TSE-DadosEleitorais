@@ -287,6 +287,8 @@ Resposta `200`:
       "cargo": "Deputado Estadual",
       "uf": "SP",
       "turno_referencia": 1,
+      "latest_vote_round": 1,
+      "latest_vote_value": 123456,
       "votos": 123456,
       "situacao": "ELEITO"
     }
@@ -295,7 +297,8 @@ Resposta `200`:
 ```
 
 Quando a disputa tem mais de um turno, o campo `turno_referencia` indica qual turno foi usado para o total exibido em `votos`.
-Se o recorte vier sem `turno`, a API continua retornando a referência mais apropriada, mas agora isso fica explícito no payload.
+Se o recorte vier sem `turno`, a API usa a ultima votação valida do pleito e nao soma 1º + 2º turno.
+O payload também expõe `latest_vote_round` e `latest_vote_value` como referencia explicita do valor retornado.
 
 ### `GET /candidates/{id}/summary?year=2024&state=SP&office=Prefeito`
 
@@ -304,6 +307,8 @@ O resumo do candidato agora diferencia voto oficial do turno de referência e to
 Campos novos:
 
 - `turno_referencia`: turno usado como base do `latest_election.votes`
+- `latest_vote_round`: alias explicito do turno efetivamente usado
+- `latest_vote_value`: valor de votos efetivamente usado como referencia
 - `votos_primeiro_turno`: votos do 1º turno, quando existirem
 - `votos_segundo_turno`: votos do 2º turno, quando existirem
 - `votos_consolidados`: soma de todos os votos no ano/recorte
@@ -331,6 +336,7 @@ Exemplo:
 
 O histórico eleitoral passa a seguir a pessoa de forma consistente, sem ficar preso apenas ao cargo atual.
 Quando o CPF é informado, ele é a chave preferencial da consulta.
+Cada ano aparece apenas uma vez no retorno; quando ha duplicidade de origem para o mesmo pleito, a API consolida o snapshot mais relevante daquele ano.
 
 Exemplo de item:
 
@@ -347,6 +353,12 @@ Exemplo de item:
   "canonical_candidate_id": "person:..."
 }
 ```
+
+## Notas de Migração
+
+- `turno=None` agora significa "ultima votação valida do pleito" e o backend nao soma 1º + 2º turno por padrão.
+- Os módulos legados `app/services/analytics_service.py` e `app/services/duckdb_analytics_service.py` continuam ativos como wrappers de compatibilidade.
+- Os campos `latest_vote_round` e `latest_vote_value` documentam explicitamente o valor retornado quando o turno nao é informado.
 
 ### `GET /polarizacao?uf=SP&ano_governador=2022&ano_municipal=2024`
 
