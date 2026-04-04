@@ -454,6 +454,46 @@ class CandidateHistoryMixin:
         )
         return collapsed
 
+    def _latest_vote_context_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df.copy()
+
+        col_year = self._select_history_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_votes = self._select_history_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        if not col_year or not col_votes:
+            return df.copy()
+
+        col_round = self._select_history_col(df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_candidate_key = self._select_history_col(df, ["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_name = self._select_history_col(df, ["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+
+        if col_candidate_key:
+            candidate_key = self._identity_series(df[col_candidate_key])
+        elif col_name:
+            candidate_key = self._person_identity_name_series(df)
+        else:
+            candidate_key = pd.Series([""] * len(df), index=df.index)
+
+        latest = df.assign(
+            _year_num=pd.to_numeric(df[col_year], errors="coerce"),
+            _round_num=(
+                self._extract_turno(df[col_round]) if col_round else pd.Series([0] * len(df), index=df.index)
+            ),
+            _votes_num=pd.to_numeric(df[col_votes], errors="coerce").fillna(0),
+            _candidate_key=candidate_key.fillna(""),
+        ).dropna(subset=["_year_num"])
+        latest = latest[latest["_candidate_key"] != ""].copy()
+        if latest.empty or not col_round:
+            return latest.drop(columns=["_year_num", "_round_num", "_votes_num", "_candidate_key"], errors="ignore")
+
+        latest_rounds = (
+            latest.groupby(["_candidate_key", "_year_num"], as_index=False)
+            .agg(_latest_round_num=("_round_num", "max"))
+        )
+        latest = latest.merge(latest_rounds, on=["_candidate_key", "_year_num"], how="inner")
+        latest = latest[latest["_round_num"] == latest["_latest_round_num"]].copy()
+        return latest.drop(columns=["_year_num", "_round_num", "_votes_num", "_candidate_key", "_latest_round_num"], errors="ignore")
+
     def _candidate_vote_turn_breakdown(self, candidate_rows: pd.DataFrame) -> dict[str, int | None]:
         if candidate_rows.empty:
             return {

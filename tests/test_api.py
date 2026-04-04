@@ -449,6 +449,16 @@ def test_overview_with_turno_filter(client: TestClient):
     assert payload["total_votos_nominais"] == 550000
 
 
+def test_overview_without_turno_uses_latest_valid_round(client: TestClient):
+    response = client.get(
+        "/v1/analytics/overview",
+        params={"ano": 2024, "uf": "SP", "cargo": "Prefeito"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_votos_nominais"] == 750000
+
+
 def test_presidente_nacional_overview_distribution_top_and_ranking_are_consistent():
     custom_df = _presidente_nacional_df()
     with main_module.ANALYTICS_CACHE_LOCK:
@@ -919,9 +929,21 @@ def test_candidate_summary_exposes_turn_breakdown_for_two_round_race(client: Tes
     payload = response.json()
     assert payload["candidate_id"] == "4"
     assert payload["turno_referencia"] == 2
+    assert payload["latest_vote_round"] == 2
+    assert payload["latest_vote_value"] == 550000
     assert payload["votos_primeiro_turno"] == 500000
     assert payload["votos_segundo_turno"] == 550000
     assert payload["votos_consolidados"] == 1050000
+    assert payload["latest_election"]["turno_referencia"] == 2
+    assert payload["latest_election"]["votes"] == 550000
+
+
+def test_candidate_summary_without_turno_uses_latest_valid_round(client: TestClient):
+    response = client.get("/v1/candidates/4/summary", params={"year": 2024, "state": "SP", "office": "Prefeito"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["latest_vote_round"] == 2
+    assert payload["latest_vote_value"] == 550000
     assert payload["latest_election"]["turno_referencia"] == 2
     assert payload["latest_election"]["votes"] == 550000
 
@@ -1902,7 +1924,25 @@ def test_top_candidates_exposes_turn_reference_for_two_round_race(client: TestCl
     first = payload["items"][0]
     assert first["candidate_id"] == "4"
     assert first["turno_referencia"] == 2
-    assert first["votos"] == 1050000
+    assert first["latest_vote_round"] == 2
+    assert first["latest_vote_value"] == 550000
+    assert first["votos"] == 550000
+
+
+def test_candidates_search_without_turno_uses_latest_valid_round(client: TestClient):
+    response = client.get(
+        "/v1/analytics/candidatos/search",
+        params={"q": "prefeito", "year": 2024, "uf": "SP", "cargo": "Prefeito"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    first = payload["items"][0]
+    assert first["candidate_id"] == "4"
+    assert first["turno_referencia"] == 2
+    assert first["latest_vote_round"] == 2
+    assert first["latest_vote_value"] == 550000
+    assert first["votos"] == 550000
 
 
 def test_turno_validation_returns_422(client: TestClient):

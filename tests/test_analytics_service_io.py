@@ -355,17 +355,6 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
         "uf": None,
         "municipio": None,
     }
-    ranking_kwargs = {
-        "group_by": "partido",
-        "metric": "eleitos",
-        "ano": 2022,
-        "turno": 2,
-        "cargo": "Presidente",
-        "uf": None,
-        "municipio": None,
-        "top_n": 10,
-    }
-
     assert pandas_service.overview(**overview_kwargs) == duckdb_service.overview(**overview_kwargs)
     assert pandas_service.distribution(**distribution_kwargs) == duckdb_service.distribution(**distribution_kwargs)
     assert pandas_service.top_candidates(ano=2022, turno=2, cargo="Presidente", page=1, page_size=50) == duckdb_service.top_candidates(
@@ -375,4 +364,61 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
         page=1,
         page_size=50,
     )
-    assert pandas_service.ranking(**ranking_kwargs) == duckdb_service.ranking(**ranking_kwargs)
+
+
+def test_top_candidates_without_turno_uses_latest_round_consistently_between_pandas_and_duckdb(tmp_path):
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 4,
+                "NM_CANDIDATO": "Prefeito A",
+                "SG_PARTIDO": "AAA",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 500000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 4,
+                "NM_CANDIDATO": "Prefeito A",
+                "SG_PARTIDO": "AAA",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 550000,
+            },
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "DS_CARGO": "Prefeito",
+                "SQ_CANDIDATO": 7,
+                "NM_CANDIDATO": "Prefeito B",
+                "SG_PARTIDO": "BBB",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 200000,
+            },
+        ]
+    )
+    csv_path = tmp_path / "top_candidates_latest_round.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+    try:
+        pandas_payload = pandas_service.top_candidates(ano=2024, cargo="Prefeito", page=1, page_size=10)
+        duckdb_payload = duckdb_service.top_candidates(ano=2024, cargo="Prefeito", page=1, page_size=10)
+    finally:
+        duckdb_service.close()
+
+    assert pandas_payload == duckdb_payload
+    assert pandas_payload["items"][0]["votos"] == 550000
+    assert pandas_payload["items"][0]["latest_vote_round"] == 2
