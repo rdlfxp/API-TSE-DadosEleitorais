@@ -205,6 +205,7 @@ class CandidateLatestElection(BaseModel):
 class CandidateSummaryResponse(BaseModel):
     candidate_id: str = Field(description="Identificador de consulta usado na rota.")
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral usado para montar a resposta.")
+    nr_cpf_candidato: str | None = Field(default=None, description="CPF do candidato quando disponivel; pode ser usado como chave preferencial para o historico.")
     canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
     person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
     name: str

@@ -4007,6 +4007,18 @@
             "title": "Source Id",
             "description": "Origem do registro eleitoral usado para montar a resposta."
           },
+          "nr_cpf_candidato": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nr Cpf Candidato",
+            "description": "CPF do candidato quando disponivel; pode ser usado como chave preferencial para o historico."
+          },
           "canonical_candidate_id": {
             "anyOf": [
               {
