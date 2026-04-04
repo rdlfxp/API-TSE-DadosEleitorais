@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.services.analytics_service import AnalyticsService
+from app.services.duckdb_analytics_service import DuckDBAnalyticsService
 from app.services import r2_bootstrap as bootstrap
 
 
@@ -196,6 +197,67 @@ def test_candidate_vote_history_does_not_expand_identity_without_cpf():
     assert result["nr_cpf_candidato"] is None
     assert result["canonical_candidate_id"].startswith("person:")
     assert result["person_id"].startswith("person:")
+    assert [item["year"] for item in result["items"]] == [2024, 2022]
+
+
+def test_duckdb_candidate_vote_history_accepts_candidate_cpf(tmp_path):
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2024,
+                "NR_TURNO": 2,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Prefeito",
+                "DS_SIT_TOT_TURNO": "ELEITO",
+                "SQ_CANDIDATO": 900,
+                "NR_CANDIDATO": 45,
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "DT_NASCIMENTO": "01/02/1980",
+                "SG_PARTIDO": "PL",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 510000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Governador",
+                "DS_SIT_TOT_TURNO": "NAO ELEITO",
+                "SQ_CANDIDATO": 800,
+                "NR_CANDIDATO": 13123,
+                "NR_CPF_CANDIDATO": "12345678901",
+                "NM_CANDIDATO": "FÁBIO ROGÉRIO CANDIDO",
+                "NM_URNA_CANDIDATO": "FABIO CANDIDO",
+                "DT_NASCIMENTO": "01/02/1980",
+                "SG_PARTIDO": "PSB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 220000,
+            },
+        ]
+    )
+    csv_path = tmp_path / "duckdb_vote_history.csv"
+    df.to_csv(csv_path, index=False)
+
+    service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+        materialize_table=True,
+        database_path=str(tmp_path / "test.duckdb"),
+    )
+    try:
+        result = service.candidate_vote_history(
+            candidate_id="900",
+            candidate_cpf="12345678901",
+            state="SP",
+            office="Prefeito",
+        )
+    finally:
+        service.close()
+
+    assert result["nr_cpf_candidato"] == "12345678901"
     assert [item["year"] for item in result["items"]] == [2024, 2022]
 
 
