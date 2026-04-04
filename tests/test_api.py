@@ -896,6 +896,7 @@ def test_candidate_summary_endpoint(client: TestClient):
     payload = response.json()
     assert payload["candidate_id"] == "1"
     assert payload["source_id"] == "1"
+    assert "nr_cpf_candidato" in payload
     assert payload["canonical_candidate_id"].startswith("person:")
     assert payload["person_id"]
     assert payload["name"] == "Candidato A"
@@ -931,6 +932,7 @@ def test_candidate_summary_missing_candidate_returns_null_identity(client: TestC
     payload = response.json()
     assert payload["candidate_id"] == "999"
     assert payload["source_id"] is None
+    assert payload["nr_cpf_candidato"] is None
     assert payload["canonical_candidate_id"] is None
     assert payload["person_id"] is None
 

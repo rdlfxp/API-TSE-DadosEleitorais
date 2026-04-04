@@ -1875,6 +1875,7 @@ class AnalyticsService(CandidateHistoryMixin):
             return {
                 "candidate_id": str(candidate_id),
                 "source_id": None,
+                "nr_cpf_candidato": None,
                 "canonical_candidate_id": None,
                 "person_id": None,
                 "name": "",
@@ -2001,6 +2002,7 @@ class AnalyticsService(CandidateHistoryMixin):
         return {
             "candidate_id": str(candidate_id),
             "source_id": identity_payload["source_id"],
+            "nr_cpf_candidato": identity_payload["nr_cpf_candidato"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
             "name": str(self._normalize_text(candidate_rows[col_name]).replace("", pd.NA).dropna().iloc[0]) if col_name else "",

@@ -164,6 +164,7 @@ def main() -> None:
     validated_summary = False
     validated_vote_history = False
     last_candidate_error: Exception | None = None
+    candidate_errors: list[str] = []
     seen_candidate_ids: set[str] = set()
     for candidate_item in candidate_pool:
         candidate_id = str(candidate_item.get("candidate_id") or "").strip()
@@ -215,10 +216,17 @@ def main() -> None:
             break
         except Exception as exc:  # noqa: BLE001
             last_candidate_error = exc
+            candidate_errors.append(
+                f"candidate_id={candidate_id} state={summary_params.get('state')} office={summary_params.get('office')}: {exc}"
+            )
             continue
 
     assert_true(validated_summary, "nenhum candidato valido para summary")
     if not validated_vote_history:
+        if candidate_errors:
+            print("[smoke] warn: candidatos testados em /v1/candidates/*", file=sys.stderr)
+            for error in candidate_errors[:5]:
+                print(f"[smoke] warn: {error}", file=sys.stderr)
         if last_candidate_error is not None:
             raise last_candidate_error
         assert_true(False, "nenhum candidato valido para vote-history")
