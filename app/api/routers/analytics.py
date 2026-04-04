@@ -54,7 +54,9 @@ def analytics_top_candidates(request: Request, ano: int | None = None, year: int
     if is_broad_top_candidates_scope(uf=uf, cargo=cargo, partido=partido, municipio=municipio):
         effective_page_size = min(requested_page_size, max(1, int(settings.analytics_broad_query_max_page_size)))
     filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "partido": partido, "municipio": municipio, "top_n": top_n, "page": page, "page_size": page_size, "effective_page_size": effective_page_size}
-    fallback_payload = lambda: {"top_n": effective_page_size, "page": page, "page_size": effective_page_size, "total": 0, "total_pages": 0, "items": []}
+    def fallback_payload() -> dict[str, object]:
+        return {"top_n": effective_page_size, "page": page, "page_size": effective_page_size, "total": 0, "total_pages": 0, "items": []}
+
     data = run_analytics_query(request, "/v1/analytics/top-candidatos", filters, lambda: get_service().top_candidates(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, municipio=municipio, top_n=effective_page_size, page=page, page_size=effective_page_size), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/top-candidatos"], fallback_factory=fallback_payload)
     return TopCandidatesResponse(**data)
 

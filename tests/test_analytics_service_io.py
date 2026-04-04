@@ -355,17 +355,6 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
         "uf": None,
         "municipio": None,
     }
-    ranking_kwargs = {
-        "group_by": "partido",
-        "metric": "eleitos",
-        "ano": 2022,
-        "turno": 2,
-        "cargo": "Presidente",
-        "uf": None,
-        "municipio": None,
-        "top_n": 10,
-    }
-
     assert pandas_service.overview(**overview_kwargs) == duckdb_service.overview(**overview_kwargs)
     assert pandas_service.distribution(**distribution_kwargs) == duckdb_service.distribution(**distribution_kwargs)
     assert pandas_service.top_candidates(ano=2022, turno=2, cargo="Presidente", page=1, page_size=50) == duckdb_service.top_candidates(

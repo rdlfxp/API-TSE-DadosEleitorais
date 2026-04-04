@@ -13,7 +13,6 @@ from app.services.analytics.common import (
     COR_RACA_CATEGORY_LABELS,
     COR_RACA_CATEGORY_ORDER,
     MUNICIPAL_CARGOS,
-    SUPPORTED_ANALYTICS_YEARS,
     UF_TO_MACROREGIAO,
     VALID_UF_CODES,
     _impact_category,

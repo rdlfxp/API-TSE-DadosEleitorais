@@ -11,29 +11,36 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.openapi import attach_openapi
 from app.core.redis import close_redis, initialize_redis
-from app.infra.cache import (
-    ANALYTICS_CACHE,
-    ANALYTICS_CACHE_LOCK,
-    DATA_LAST_MODIFIED_TS,
-    EDGE_CACHE_TTL_BY_PATH,
-    MEMORY_CACHE_TTL_BY_ENDPOINT,
-    cache_get as _cache_get,
-    cache_set as _cache_set,
-)
 import app.infra.cache as cache_state
-from app.infra.metrics import METRICS, METRICS_LOCK
-from app.infra.rate_limit import RATE_LIMIT_COUNTERS, RATE_LIMIT_LAST_CLEANUP_BUCKET, RATE_LIMIT_LOCK
+import app.infra.metrics as metrics_state
+import app.infra.rate_limit as rate_limit_state
 from app.services.analytics import AnalyticsService, DuckDBAnalyticsService
 from app.services.storage import ensure_local_analytics_from_r2
+
+ANALYTICS_CACHE = cache_state.ANALYTICS_CACHE
+ANALYTICS_CACHE_LOCK = cache_state.ANALYTICS_CACHE_LOCK
+DATA_LAST_MODIFIED_TS = cache_state.DATA_LAST_MODIFIED_TS
+EDGE_CACHE_TTL_BY_PATH = cache_state.EDGE_CACHE_TTL_BY_PATH
+MEMORY_CACHE_TTL_BY_ENDPOINT = cache_state.MEMORY_CACHE_TTL_BY_ENDPOINT
+_cache_get = cache_state.cache_get
+_cache_set = cache_state.cache_set
+
+METRICS = metrics_state.METRICS
+METRICS_LOCK = metrics_state.METRICS_LOCK
+
+RATE_LIMIT_COUNTERS = rate_limit_state.RATE_LIMIT_COUNTERS
+RATE_LIMIT_LAST_CLEANUP_BUCKET = rate_limit_state.RATE_LIMIT_LAST_CLEANUP_BUCKET
+RATE_LIMIT_LOCK = rate_limit_state.RATE_LIMIT_LOCK
 
 service: AnalyticsService | DuckDBAnalyticsService | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global service
+    global service, DATA_LAST_MODIFIED_TS
     service = None
     cache_state.DATA_LAST_MODIFIED_TS = None
+    DATA_LAST_MODIFIED_TS = None
     initialize_redis()
 
     file_path = Path(settings.analytics_data_path)
@@ -51,6 +58,7 @@ async def lifespan(_: FastAPI):
             cache_state.DATA_LAST_MODIFIED_TS = selected_path.stat().st_mtime
         except OSError:
             cache_state.DATA_LAST_MODIFIED_TS = None
+        DATA_LAST_MODIFIED_TS = cache_state.DATA_LAST_MODIFIED_TS
         if settings.analytics_engine.lower() == "duckdb":
             service = DuckDBAnalyticsService.from_file(
                 file_path=str(selected_path),
@@ -104,6 +112,7 @@ async def lifespan(_: FastAPI):
         service.close()
     service = None
     cache_state.DATA_LAST_MODIFIED_TS = None
+    DATA_LAST_MODIFIED_TS = None
     close_redis()
 
 

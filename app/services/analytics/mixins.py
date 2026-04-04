@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import re
 from pathlib import Path
 
 import pandas as pd
@@ -18,14 +16,14 @@ from app.services.analytics.common import (
     logger,
 )
 
+import unicodedata
+
 
 class AnalyticsSupportMixin:
     def _normalize_value(self, value: object, uppercase: bool = False) -> str:
         text = str(value or "").strip()
         if not text:
             return ""
-        import unicodedata
-
         normalized = unicodedata.normalize("NFKD", text)
         ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
         return ascii_text.upper().strip() if uppercase else ascii_text

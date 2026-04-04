@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from app.core.redis import get_redis_client
 
 
