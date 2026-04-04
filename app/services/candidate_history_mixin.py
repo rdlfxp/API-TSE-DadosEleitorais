@@ -347,6 +347,19 @@ class CandidateHistoryMixin:
             return self._normalize_text(series)  # type: ignore[attr-defined]
         return series.fillna("").astype(str).str.strip()
 
+    def _history_turn_series(self, series: pd.Series) -> pd.Series:
+        if hasattr(self, "_extract_turno"):
+            return self._extract_turno(series)  # type: ignore[attr-defined]
+        turno_num = pd.to_numeric(series, errors="coerce")
+        turno_text = (
+            series.astype(str)
+            .str.extract(r"(\d+)", expand=False)
+            .fillna("")
+            .str.strip()
+        )
+        turno_text_num = pd.to_numeric(turno_text, errors="coerce")
+        return turno_num.fillna(turno_text_num).fillna(0).astype(int)
+
     def _is_elected_like(self, series: pd.Series) -> pd.Series:
         if hasattr(self, "_is_elected"):
             return self._is_elected(series)  # type: ignore[attr-defined]
@@ -441,6 +454,45 @@ class CandidateHistoryMixin:
         )
         return collapsed
 
+    def _candidate_vote_turn_breakdown(self, candidate_rows: pd.DataFrame) -> dict[str, int | None]:
+        if candidate_rows.empty:
+            return {
+                "turno_referencia": None,
+                "votos_primeiro_turno": None,
+                "votos_segundo_turno": None,
+                "votos_consolidados": None,
+            }
+
+        col_round = self._select_history_col(candidate_rows, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_votes = self._select_history_col(candidate_rows, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        if not col_votes:
+            return {
+                "turno_referencia": None,
+                "votos_primeiro_turno": None,
+                "votos_segundo_turno": None,
+                "votos_consolidados": None,
+            }
+
+        votes = pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0)
+        consolidated = int(votes.sum())
+        if col_round:
+            rounds = self._history_turn_series(candidate_rows[col_round])
+            valid_rounds = rounds[rounds > 0]
+        else:
+            rounds = pd.Series([0] * len(candidate_rows), index=candidate_rows.index)
+            valid_rounds = pd.Series(dtype=int)
+
+        turno_referencia = int(valid_rounds.max()) if not valid_rounds.empty else None
+        votos_primeiro_turno = int(votes[rounds == 1].sum()) if (rounds == 1).any() else None
+        votos_segundo_turno = int(votes[rounds == 2].sum()) if (rounds == 2).any() else None
+
+        return {
+            "turno_referencia": turno_referencia,
+            "votos_primeiro_turno": votos_primeiro_turno,
+            "votos_segundo_turno": votos_segundo_turno,
+            "votos_consolidados": consolidated,
+        }
+
     def candidate_vote_history(
         self,
         candidate_id: str,
@@ -450,7 +502,14 @@ class CandidateHistoryMixin:
     ) -> dict[str, Any]:
         projection_cols = self._candidate_history_projection_columns()
         base_df = self._load_history_rows(columns=projection_cols)
-        candidate_rows, identity = self._historical_candidate_rows(candidate_id=candidate_id, candidate_cpf=candidate_cpf, state=state, office=office, all_rows=base_df, use_cpf_identity=True)  # type: ignore[attr-defined]
+        candidate_rows, identity = self._historical_candidate_rows(
+            candidate_id=candidate_id,
+            candidate_cpf=candidate_cpf,
+            state=state,
+            office=office,
+            all_rows=base_df,
+            use_cpf_identity=bool(candidate_cpf),
+        )  # type: ignore[attr-defined]
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),

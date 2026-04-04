@@ -1586,12 +1586,14 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                 continue
             candidate_rows = scoped_df.iloc[candidate_positions].copy()
             identity_payload = self._candidate_identity_payload(candidate_rows)
+            turn_breakdown = self._candidate_vote_turn_breakdown(candidate_rows)
             items.append(
                 {
                     "candidate_id": candidate_id,
                     "source_id": identity_payload["source_id"],
                     "canonical_candidate_id": identity_payload["canonical_candidate_id"],
                     "person_id": identity_payload["person_id"],
+                    "turno_referencia": turn_breakdown["turno_referencia"],
                     "candidato": r[1] or "",
                     "partido": r[2],
                     "cargo": r[3],
@@ -2333,6 +2335,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
         self,
         candidate_id: str,
         year: int | None = None,
+        turno: int | None = None,
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
@@ -2352,7 +2355,17 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                 "state": state.upper() if state else None,
                 "mandates": 0,
                 "status": None,
-                "latest_election": {"year": year or 0, "votes": 0, "vote_share": 0.0, "state_rank": None},
+                "turno_referencia": None,
+                "votos_primeiro_turno": None,
+                "votos_segundo_turno": None,
+                "votos_consolidados": None,
+                "latest_election": {
+                    "year": year or 0,
+                    "turno_referencia": None,
+                    "votes": 0,
+                    "vote_share": 0.0,
+                    "state_rank": None,
+                },
             }
 
         col_name = "NM_CANDIDATO" if "NM_CANDIDATO" in candidate_rows.columns else ("NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in candidate_rows.columns else None)
@@ -2362,6 +2375,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             if "QT_VOTOS_NOMINAIS_VALIDOS" in candidate_rows.columns
             else ("NR_VOTACAO_NOMINAL" if "NR_VOTACAO_NOMINAL" in candidate_rows.columns else ("QT_VOTOS_NOMINAIS" if "QT_VOTOS_NOMINAIS" in candidate_rows.columns else None))
         )
+        col_round = "NR_TURNO" if "NR_TURNO" in candidate_rows.columns else ("CD_TURNO" if "CD_TURNO" in candidate_rows.columns else ("DS_TURNO" if "DS_TURNO" in candidate_rows.columns else None))
         candidate_rows = candidate_rows.assign(
             _year=(pd.to_numeric(candidate_rows[col_year], errors="coerce") if col_year else pd.Series(dtype=float)),
             _votes=(pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0) if col_votes else 0),
@@ -2373,18 +2387,28 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             latest_year = int(year or 0)
             latest_rows = candidate_rows.copy()
 
-        latest_votes = int(pd.to_numeric(latest_rows["_votes"], errors="coerce").fillna(0).sum())
+        turn_breakdown = self._candidate_vote_turn_breakdown(latest_rows)
+        requested_turno = int(turno) if turno is not None and int(turno) > 0 else None
+        turno_referencia = requested_turno if requested_turno in {1, 2} else turn_breakdown["turno_referencia"]
+        official_rows = latest_rows.copy()
+        if turno_referencia is not None and col_round:
+            official_rows = latest_rows[self._extract_turno(latest_rows[col_round]) == int(turno_referencia)].copy()
+            if official_rows.empty:
+                official_rows = latest_rows.copy()
+
+        latest_votes = int(pd.to_numeric(official_rows["_votes"], errors="coerce").fillna(0).sum())
+        consolidated_votes = int(pd.to_numeric(latest_rows["_votes"], errors="coerce").fillna(0).sum())
         latest_state = (
-            latest_rows["SG_UF"].fillna("").astype(str).str.strip().str.upper().replace("", pd.NA).dropna().iloc[0]
-            if "SG_UF" in latest_rows.columns and latest_rows["SG_UF"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
+            official_rows["SG_UF"].fillna("").astype(str).str.strip().str.upper().replace("", pd.NA).dropna().iloc[0]
+            if "SG_UF" in official_rows.columns and official_rows["SG_UF"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
             else (state.upper() if state else None)
         )
         latest_office = (
-            latest_rows["DS_CARGO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]
-            if "DS_CARGO" in latest_rows.columns and latest_rows["DS_CARGO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
+            official_rows["DS_CARGO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]
+            if "DS_CARGO" in official_rows.columns and official_rows["DS_CARGO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
             else (
-                latest_rows["DS_CARGO_D"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]
-                if "DS_CARGO_D" in latest_rows.columns and latest_rows["DS_CARGO_D"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
+                official_rows["DS_CARGO_D"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]
+                if "DS_CARGO_D" in official_rows.columns and official_rows["DS_CARGO_D"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any()
                 else office
             )
         )
@@ -2392,7 +2416,7 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
         vote_share = 0.0
         rank = None
         if col_votes and col_year and latest_year:
-            context_df = self._filtered_df(ano=latest_year, uf=latest_state, cargo=latest_office)
+            context_df = self._filtered_df(ano=latest_year, turno=turno_referencia, uf=latest_state, cargo=latest_office)
             if not context_df.empty:
                 context_df = context_df.assign(_votes=pd.to_numeric(context_df[col_votes], errors="coerce").fillna(0))
                 total_votes = float(context_df["_votes"].sum())
@@ -2436,8 +2460,8 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             mandates = int(elected_by_year["elected"].sum())
 
         latest_status = None
-        if "DS_SIT_TOT_TURNO" in latest_rows.columns:
-            statuses = latest_rows["DS_SIT_TOT_TURNO"].fillna("").astype(str).str.strip()
+        if "DS_SIT_TOT_TURNO" in official_rows.columns:
+            statuses = official_rows["DS_SIT_TOT_TURNO"].fillna("").astype(str).str.strip()
             statuses = statuses[statuses != ""]
             if not statuses.empty:
                 latest_status = str(statuses.iloc[0])
@@ -2477,7 +2501,17 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
             "state": latest_state,
             "mandates": mandates,
             "status": latest_status,
-            "latest_election": {"year": latest_year, "votes": latest_votes, "vote_share": vote_share, "state_rank": rank},
+            "turno_referencia": turno_referencia,
+            "votos_primeiro_turno": turn_breakdown["votos_primeiro_turno"],
+            "votos_segundo_turno": turn_breakdown["votos_segundo_turno"],
+            "votos_consolidados": consolidated_votes,
+            "latest_election": {
+                "year": latest_year,
+                "turno_referencia": turno_referencia,
+                "votes": latest_votes,
+                "vote_share": vote_share,
+                "state_rank": rank,
+            },
         }
 
     def candidate_vote_history(
@@ -3109,12 +3143,14 @@ class DuckDBAnalyticsService(CandidateHistoryMixin):
                 continue
             candidate_rows = scoped_df.iloc[candidate_positions].copy()
             identity_payload = self._candidate_identity_payload(candidate_rows)
+            turn_breakdown = self._candidate_vote_turn_breakdown(candidate_rows)
             items.append(
                 {
                     "candidate_id": candidate_id,
                     "source_id": identity_payload["source_id"],
                     "canonical_candidate_id": identity_payload["canonical_candidate_id"],
                     "person_id": identity_payload["person_id"],
+                    "turno_referencia": turn_breakdown["turno_referencia"],
                     "candidato": r[1] or "",
                     "partido": r[2],
                     "cargo": r[3],

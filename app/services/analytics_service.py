@@ -1232,12 +1232,14 @@ class AnalyticsService(CandidateHistoryMixin):
                 continue
             candidate_rows = df.iloc[candidate_positions].copy()
             identity_payload = self._candidate_identity_payload(candidate_rows)
+            turn_breakdown = self._candidate_vote_turn_breakdown(candidate_rows)
             out.append(
                 {
                     "candidate_id": candidate_id,
                     "source_id": identity_payload["source_id"],
                     "canonical_candidate_id": identity_payload["canonical_candidate_id"],
                     "person_id": identity_payload["person_id"],
+                    "turno_referencia": turn_breakdown["turno_referencia"],
                     "candidato": str(row[col_candidato]),
                     "partido": str(row[col_partido]) if col_partido else None,
                     "cargo": str(row[col_cargo]) if col_cargo else None,
@@ -1863,6 +1865,7 @@ class AnalyticsService(CandidateHistoryMixin):
         self,
         candidate_id: str,
         year: int | None = None,
+        turno: int | None = None,
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
@@ -1882,7 +1885,17 @@ class AnalyticsService(CandidateHistoryMixin):
                 "state": state.upper() if state else None,
                 "mandates": 0,
                 "status": None,
-                "latest_election": {"year": year or 0, "votes": 0, "vote_share": 0.0, "state_rank": None},
+                "turno_referencia": None,
+                "votos_primeiro_turno": None,
+                "votos_segundo_turno": None,
+                "votos_consolidados": None,
+                "latest_election": {
+                    "year": year or 0,
+                    "turno_referencia": None,
+                    "votes": 0,
+                    "vote_share": 0.0,
+                    "state_rank": None,
+                },
             }
 
         col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
@@ -1893,6 +1906,7 @@ class AnalyticsService(CandidateHistoryMixin):
         col_state = self._pick_col(["SG_UF"])
         col_status = self._pick_col(["DS_SIT_TOT_TURNO"])
         col_year = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_round = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
 
         candidate_rows = candidate_rows.assign(
@@ -1906,22 +1920,32 @@ class AnalyticsService(CandidateHistoryMixin):
             latest_year = int(year or 0)
             latest_rows = candidate_rows.copy()
 
-        latest_votes = int(pd.to_numeric(latest_rows["_votes"], errors="coerce").fillna(0).sum())
+        turn_breakdown = self._candidate_vote_turn_breakdown(latest_rows)
+        requested_turno = int(turno) if turno is not None and int(turno) > 0 else None
+        turno_referencia = requested_turno if requested_turno in {1, 2} else turn_breakdown["turno_referencia"]
+        official_rows = latest_rows.copy()
+        if turno_referencia is not None and col_round:
+            official_rows = latest_rows[self._extract_turno(latest_rows[col_round]) == int(turno_referencia)].copy()
+            if official_rows.empty:
+                official_rows = latest_rows.copy()
+
+        latest_votes = int(pd.to_numeric(official_rows["_votes"], errors="coerce").fillna(0).sum())
+        consolidated_votes = int(pd.to_numeric(latest_rows["_votes"], errors="coerce").fillna(0).sum())
         latest_state = (
-            str(self._normalize_text(latest_rows[col_state]).replace("", pd.NA).dropna().iloc[0]).upper()
-            if col_state and self._normalize_text(latest_rows[col_state]).replace("", pd.NA).dropna().any()
+            str(self._normalize_text(official_rows[col_state]).replace("", pd.NA).dropna().iloc[0]).upper()
+            if col_state and self._normalize_text(official_rows[col_state]).replace("", pd.NA).dropna().any()
             else (state.upper() if state else None)
         )
         latest_office = (
-            str(self._normalize_text(latest_rows[col_office]).replace("", pd.NA).dropna().iloc[0])
-            if col_office and self._normalize_text(latest_rows[col_office]).replace("", pd.NA).dropna().any()
+            str(self._normalize_text(official_rows[col_office]).replace("", pd.NA).dropna().iloc[0])
+            if col_office and self._normalize_text(official_rows[col_office]).replace("", pd.NA).dropna().any()
             else office
         )
 
         rank = None
         vote_share = 0.0
         if col_votes and col_year and latest_year:
-            context = self._apply_filters(ano=latest_year, uf=latest_state, cargo=latest_office)
+            context = self._apply_filters(ano=latest_year, turno=turno_referencia, uf=latest_state, cargo=latest_office)
             total_votes = float(pd.to_numeric(context[col_votes], errors="coerce").fillna(0).sum()) if not context.empty else 0.0
             vote_share = round((latest_votes / total_votes) * 100, 4) if total_votes > 0 else 0.0
             if not context.empty:
@@ -1968,8 +1992,8 @@ class AnalyticsService(CandidateHistoryMixin):
             mandates = int(elected_per_year["elected"].sum())
 
         latest_status = None
-        if col_status and not latest_rows.empty:
-            status_vals = self._normalize_text(latest_rows[col_status]).replace("", pd.NA).dropna()
+        if col_status and not official_rows.empty:
+            status_vals = self._normalize_text(official_rows[col_status]).replace("", pd.NA).dropna()
             latest_status = str(status_vals.iloc[0]) if not status_vals.empty else None
 
         identity_payload = self._candidate_identity_payload(candidate_rows)
@@ -1999,8 +2023,13 @@ class AnalyticsService(CandidateHistoryMixin):
             "state": latest_state,
             "mandates": mandates,
             "status": latest_status,
+            "turno_referencia": turno_referencia,
+            "votos_primeiro_turno": turn_breakdown["votos_primeiro_turno"],
+            "votos_segundo_turno": turn_breakdown["votos_segundo_turno"],
+            "votos_consolidados": consolidated_votes,
             "latest_election": {
                 "year": latest_year,
+                "turno_referencia": turno_referencia,
                 "votes": latest_votes,
                 "vote_share": vote_share,
                 "state_rank": rank,
@@ -2524,6 +2553,7 @@ class AnalyticsService(CandidateHistoryMixin):
                 continue
             candidate_rows = ranked[ranked["_candidate_id"] == row["_candidate_id"]].copy()
             identity_payload = self._candidate_identity_payload(candidate_rows)
+            turn_breakdown = self._candidate_vote_turn_breakdown(candidate_rows)
             numero_raw = row["_numero"] if pd.notna(row["_numero"]) and str(row["_numero"]).strip() else candidate_id
             items.append(
                 {
@@ -2531,6 +2561,7 @@ class AnalyticsService(CandidateHistoryMixin):
                     "source_id": identity_payload["source_id"],
                     "canonical_candidate_id": identity_payload["canonical_candidate_id"],
                     "person_id": identity_payload["person_id"],
+                    "turno_referencia": turn_breakdown["turno_referencia"],
                     "candidato": (str(row["_candidato"]) if pd.notna(row["_candidato"]) else ""),
                     "partido": (str(row["_partido"]) if pd.notna(row["_partido"]) else None),
                     "cargo": (str(row["_cargo"]) if pd.notna(row["_cargo"]) else None),

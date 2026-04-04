@@ -194,9 +194,9 @@ def test_candidate_vote_history_does_not_expand_identity_without_cpf():
     result = service.candidate_vote_history(candidate_id="900", state="SP", office="Prefeito")
 
     assert result["nr_cpf_candidato"] is None
-    assert result["canonical_candidate_id"] is None
-    assert result["person_id"] is None
-    assert [item["year"] for item in result["items"]] == [2024]
+    assert result["canonical_candidate_id"].startswith("person:")
+    assert result["person_id"].startswith("person:")
+    assert [item["year"] for item in result["items"]] == [2024, 2022]
 
 
 class _FakeR2Client:

@@ -972,6 +972,24 @@
             }
           },
           {
+            "name": "turno",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Turno"
+            }
+          },
+          {
             "name": "uf",
             "in": "query",
             "required": false,
@@ -3762,6 +3780,17 @@
             "type": "integer",
             "title": "Year"
           },
+          "turno_referencia": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno Referencia"
+          },
           "votes": {
             "type": "integer",
             "title": "Votes"
@@ -3832,6 +3861,18 @@
             ],
             "title": "Person Id",
             "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
+          },
+          "turno_referencia": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno Referencia",
+            "description": "Turno usado como referencia para o total de votos retornado."
           },
           "candidato": {
             "type": "string",
@@ -4063,6 +4104,50 @@
               }
             ],
             "title": "Status"
+          },
+          "turno_referencia": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno Referencia"
+          },
+          "votos_primeiro_turno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Votos Primeiro Turno"
+          },
+          "votos_segundo_turno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Votos Segundo Turno"
+          },
+          "votos_consolidados": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Votos Consolidados"
           },
           "latest_election": {
             "$ref": "#/components/schemas/CandidateLatestElection"
@@ -5005,6 +5090,18 @@
             ],
             "title": "Person Id",
             "description": "Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível."
+          },
+          "turno_referencia": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno Referencia",
+            "description": "Turno usado como referencia para o total de votos retornado."
           },
           "candidato": {
             "type": "string",
