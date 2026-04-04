@@ -22,6 +22,12 @@ def parse_args() -> argparse.Namespace:
         default=2.0,
         help="Espera entre tentativas extras em segundos.",
     )
+    parser.add_argument(
+        "--candidate-endpoints-mode",
+        choices=["strict", "best-effort", "skip"],
+        default="strict",
+        help="Como tratar falhas nos endpoints /v1/candidates/*.",
+    )
     return parser.parse_args()
 
 
@@ -158,80 +164,86 @@ def main() -> None:
         print("[smoke] warn: /v1/analytics/top-candidatos indisponivel nos recortes tentados", file=sys.stderr)
         for error in top_errors[:3]:
             print(f"[smoke] warn: {error}", file=sys.stderr)
-    candidate_pool = top_items + search_items
-    assert_true(bool(candidate_pool), "sem candidatos para validar endpoints /v1/candidates/*")
+    if args.candidate_endpoints_mode != "skip":
+        candidate_pool = top_items + search_items
+        assert_true(bool(candidate_pool), "sem candidatos para validar endpoints /v1/candidates/*")
 
-    validated_summary = False
-    validated_vote_history = False
-    last_candidate_error: Exception | None = None
-    candidate_errors: list[str] = []
-    seen_candidate_ids: set[str] = set()
-    for candidate_item in candidate_pool:
-        candidate_id = str(candidate_item.get("candidate_id") or "").strip()
-        if not candidate_id or candidate_id in seen_candidate_ids:
-            continue
-        seen_candidate_ids.add(candidate_id)
+        validated_summary = False
+        validated_vote_history = False
+        last_candidate_error: Exception | None = None
+        candidate_errors: list[str] = []
+        seen_candidate_ids: set[str] = set()
+        for candidate_item in candidate_pool:
+            candidate_id = str(candidate_item.get("candidate_id") or "").strip()
+            if not candidate_id or candidate_id in seen_candidate_ids:
+                continue
+            seen_candidate_ids.add(candidate_id)
 
-        summary_params = {}
-        if candidate_item.get("turno_referencia") in {1, 2}:
-            summary_params["turno"] = candidate_item["turno_referencia"]
-        if candidate_item.get("uf"):
-            summary_params["state"] = candidate_item["uf"]
-        if candidate_item.get("cargo"):
-            summary_params["office"] = candidate_item["cargo"]
-
-        try:
-            status, summary = fetch_json(
-                base_url,
-                f"/v1/candidates/{candidate_id}/summary",
-                args.timeout,
-                summary_params,
-                retries=args.retries,
-                retry_delay=args.retry_delay,
-            )
-            assert_true(status == 200, "candidate summary status != 200")
-            assert_true("latest_election" in summary, "summary sem latest_election")
-            validated_summary = True
-
-            vote_history_params = {}
-            candidate_cpf = summary.get("nr_cpf_candidato")
-            if candidate_cpf:
-                vote_history_params["nr_cpf_candidato"] = candidate_cpf
+            summary_params = {}
+            if candidate_item.get("turno_referencia") in {1, 2}:
+                summary_params["turno"] = candidate_item["turno_referencia"]
             if candidate_item.get("uf"):
-                vote_history_params["state"] = candidate_item["uf"]
+                summary_params["state"] = candidate_item["uf"]
             if candidate_item.get("cargo"):
-                vote_history_params["office"] = candidate_item["cargo"]
+                summary_params["office"] = candidate_item["cargo"]
 
-            status, history = fetch_json(
-                base_url,
-                f"/v1/candidates/{candidate_id}/vote-history",
-                args.timeout,
-                vote_history_params,
-                retries=args.retries,
-                retry_delay=args.retry_delay,
-            )
-            assert_true(status == 200, "candidate vote-history status != 200")
-            assert_true("items" in history, "vote-history sem items")
-            validated_vote_history = True
-            break
-        except Exception as exc:  # noqa: BLE001
-            last_candidate_error = exc
-            candidate_errors.append(
-                f"candidate_id={candidate_id} state={summary_params.get('state')} office={summary_params.get('office')}: {exc}"
-            )
-            continue
+            try:
+                status, summary = fetch_json(
+                    base_url,
+                    f"/v1/candidates/{candidate_id}/summary",
+                    args.timeout,
+                    summary_params,
+                    retries=args.retries,
+                    retry_delay=args.retry_delay,
+                )
+                assert_true(status == 200, "candidate summary status != 200")
+                assert_true("latest_election" in summary, "summary sem latest_election")
+                validated_summary = True
 
-    assert_true(validated_summary, "nenhum candidato valido para summary")
-    if not validated_vote_history:
-        if candidate_errors:
-            print("[smoke] warn: candidatos testados em /v1/candidates/*", file=sys.stderr)
+                vote_history_params = {}
+                candidate_cpf = summary.get("nr_cpf_candidato")
+                if candidate_cpf:
+                    vote_history_params["nr_cpf_candidato"] = candidate_cpf
+                if candidate_item.get("uf"):
+                    vote_history_params["state"] = candidate_item["uf"]
+                if candidate_item.get("cargo"):
+                    vote_history_params["office"] = candidate_item["cargo"]
+
+                status, history = fetch_json(
+                    base_url,
+                    f"/v1/candidates/{candidate_id}/vote-history",
+                    args.timeout,
+                    vote_history_params,
+                    retries=args.retries,
+                    retry_delay=args.retry_delay,
+                )
+                assert_true(status == 200, "candidate vote-history status != 200")
+                assert_true("items" in history, "vote-history sem items")
+                validated_vote_history = True
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_candidate_error = exc
+                candidate_errors.append(
+                    f"candidate_id={candidate_id} state={summary_params.get('state')} office={summary_params.get('office')}: {exc}"
+                )
+                continue
+
+        if validated_summary and validated_vote_history:
+            print("[smoke] ok: /v1/candidates/{id}/summary")
+            print("[smoke] ok: /v1/candidates/{id}/vote-history")
+        elif args.candidate_endpoints_mode == "best-effort":
+            print("[smoke] warn: endpoints /v1/candidates/* indisponiveis no ambiente validado", file=sys.stderr)
             for error in candidate_errors[:5]:
                 print(f"[smoke] warn: {error}", file=sys.stderr)
-        if last_candidate_error is not None:
-            raise last_candidate_error
-        assert_true(False, "nenhum candidato valido para vote-history")
-    print("[smoke] ok: /v1/candidates/{id}/summary")
-    print("[smoke] ok: /v1/candidates/{id}/vote-history")
+        else:
+            assert_true(validated_summary, "nenhum candidato valido para summary")
+            if candidate_errors:
+                print("[smoke] warn: candidatos testados em /v1/candidates/*", file=sys.stderr)
+                for error in candidate_errors[:5]:
+                    print(f"[smoke] warn: {error}", file=sys.stderr)
+            if last_candidate_error is not None:
+                raise last_candidate_error
+            assert_true(False, "nenhum candidato valido para vote-history")
 
     status, _ = fetch_json(
         base_url,

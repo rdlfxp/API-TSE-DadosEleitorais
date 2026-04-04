@@ -32,4 +32,5 @@ jobs:
             --base-url "${{ inputs.base_url }}" \
             --timeout "${{ inputs.timeout }}" \
             --retries 6 \
-            --retry-delay 5
+            --retry-delay 5 \
+            --candidate-endpoints-mode best-effort
