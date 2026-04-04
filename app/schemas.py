@@ -26,6 +26,7 @@ class TopCandidateItem(BaseModel):
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
     canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
     person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
+    turno_referencia: int | None = Field(default=None, description="Turno usado como referencia para o total de votos retornado.")
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -48,6 +49,7 @@ class CandidateSearchItem(BaseModel):
     source_id: str | None = Field(default=None, description="Origem do registro eleitoral retornado.")
     canonical_candidate_id: str | None = Field(default=None, description="Identidade canônica interna da API. Hoje espelha person_id e nunca candidate_id.")
     person_id: str | None = Field(default=None, description="Identidade estável da pessoa, derivada de nome normalizado e data de nascimento quando disponível.")
+    turno_referencia: int | None = Field(default=None, description="Turno usado como referencia para o total de votos retornado.")
     candidato: str
     partido: str | None = None
     cargo: str | None = None
@@ -194,6 +196,7 @@ class PolarizacaoResponse(BaseModel):
 
 class CandidateLatestElection(BaseModel):
     year: int
+    turno_referencia: int | None = None
     votes: int
     vote_share: float
     state_rank: int | None = None
@@ -212,6 +215,10 @@ class CandidateSummaryResponse(BaseModel):
     state: str | None = None
     mandates: int
     status: str | None = None
+    turno_referencia: int | None = None
+    votos_primeiro_turno: int | None = None
+    votos_segundo_turno: int | None = None
+    votos_consolidados: int | None = None
     latest_election: CandidateLatestElection
 
 

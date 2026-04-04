@@ -912,6 +912,19 @@ def test_candidate_summary_endpoint_accepts_official_param_aliases(client: TestC
     assert payload["latest_election"]["votes"] == 12000
 
 
+def test_candidate_summary_exposes_turn_breakdown_for_two_round_race(client: TestClient):
+    response = client.get("/v1/candidates/4/summary", params={"year": 2024, "state": "SP", "office": "Prefeito"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == "4"
+    assert payload["turno_referencia"] == 2
+    assert payload["votos_primeiro_turno"] == 500000
+    assert payload["votos_segundo_turno"] == 550000
+    assert payload["votos_consolidados"] == 1050000
+    assert payload["latest_election"]["turno_referencia"] == 2
+    assert payload["latest_election"]["votes"] == 550000
+
+
 def test_candidate_summary_missing_candidate_returns_null_identity(client: TestClient):
     response = client.get("/v1/candidates/999/summary", params={"ano": 2022, "uf": "SP", "cargo": "Deputado Estadual"})
     assert response.status_code == 200
@@ -964,12 +977,8 @@ def test_candidate_vote_history_endpoint(client: TestClient):
     assert all(item["office"] == "Prefeito" for item in payload["items"])
     assert all(item["state"] == "SP" for item in payload["items"])
     assert all("nr_cpf_candidato" in item for item in payload["items"])
-    if payload["nr_cpf_candidato"]:
-        assert payload["canonical_candidate_id"].startswith("person:")
-        assert all(item["canonical_candidate_id"].startswith("person:") for item in payload["items"])
-    else:
-        assert payload["canonical_candidate_id"] is None
-        assert all(item["canonical_candidate_id"] is None for item in payload["items"])
+    assert payload["canonical_candidate_id"].startswith("person:")
+    assert all(item["canonical_candidate_id"].startswith("person:") for item in payload["items"])
     assert all(item["is_projection"] is False for item in payload["items"])
 
 
@@ -1877,6 +1886,21 @@ def test_top_candidates_broad_scope_caps_extreme_page_size(client: TestClient):
     payload = response.json()
     assert payload["page_size"] == 50
     assert payload["top_n"] == 50
+
+
+def test_top_candidates_exposes_turn_reference_for_two_round_race(client: TestClient):
+    response = client.get(
+        "/v1/analytics/top-candidatos",
+        params={"year": 2024, "uf": "SP", "cargo": "Prefeito", "page": 1, "page_size": 5},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    first = payload["items"][0]
+    assert first["candidate_id"] == "4"
+    assert first["turno_referencia"] == 2
+    assert first["votos"] == 1050000
 
 
 def test_turno_validation_returns_422(client: TestClient):

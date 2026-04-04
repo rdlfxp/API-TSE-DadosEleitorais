@@ -73,9 +73,9 @@ def main() -> None:
     cargo = "Vereador" if "Vereador" in cargos else (cargos[0] if cargos else None)
 
     run("/v1/analytics/overview", {"ano": year, "uf": uf, "cargo": cargo})
-    run("/v1/analytics/top-candidatos", {"ano": year, "uf": uf, "cargo": cargo, "top_n": 5})
-    run("/v1/analytics/candidatos/search", {"q": "ca", "ano": year, "uf": uf, "cargo": cargo, "page": 1, "page_size": 5})
-    run("/v1/analytics/candidatos", {"query": "ca", "ano": year, "uf": uf, "cargo": cargo, "page": 1, "page_size": 5})
+    run("/v1/analytics/top-candidatos", {"ano": year, "turno": 1, "uf": uf, "cargo": cargo, "top_n": 5})
+    run("/v1/analytics/candidatos/search", {"q": "ca", "ano": year, "turno": 1, "uf": uf, "cargo": cargo, "page": 1, "page_size": 5})
+    run("/v1/analytics/candidatos", {"query": "ca", "ano": year, "turno": 1, "uf": uf, "cargo": cargo, "page": 1, "page_size": 5})
     run("/v1/analytics/distribuicao", {"group_by": "genero", "ano": year, "uf": uf, "cargo": cargo})
     run("/v1/analytics/cor-raca-comparativo", {"ano": year, "uf": uf, "cargo": cargo})
     run("/v1/analytics/ocupacao-genero", {"ano": year, "uf": uf, "cargo": cargo, "somente_eleitos": "false"})
@@ -86,10 +86,10 @@ def main() -> None:
     run("/v1/analytics/vagas-oficiais", {"ano": year, "uf": uf, "group_by": "cargo"})
     run("/v1/analytics/polarizacao", {"uf": uf, "ano_governador": 2014, "ano_municipal": 2016})
 
-    _, top_obj = run("/v1/analytics/top-candidatos", {"ano": year, "uf": uf, "cargo": cargo, "top_n": 10})
+    _, top_obj = run("/v1/analytics/top-candidatos", {"ano": year, "turno": 1, "uf": uf, "cargo": cargo, "top_n": 10})
     items = top_obj.get("items", []) if isinstance(top_obj, dict) else []
     if len(items) < 2:
-        _, top_obj = run("/v1/analytics/top-candidatos", {"ano": year, "uf": uf, "top_n": 10})
+        _, top_obj = run("/v1/analytics/top-candidatos", {"ano": year, "turno": 1, "uf": uf, "top_n": 10})
         items = top_obj.get("items", []) if isinstance(top_obj, dict) else []
 
     if not items:
@@ -99,8 +99,12 @@ def main() -> None:
     cid2 = str(items[1].get("candidate_id") or items[1].get("sq_candidato") or items[1].get("id")) if len(items) > 1 else cid1
     office = items[0].get("cargo") or cargo
     state = items[0].get("uf") or uf
+    turno_ref = items[0].get("turno_referencia")
 
-    run(f"/v1/candidates/{cid1}/summary", {"year": year, "state": state, "office": office})
+    summary_params = {"year": year, "state": state, "office": office}
+    if turno_ref in {1, 2}:
+        summary_params["turno"] = turno_ref
+    run(f"/v1/candidates/{cid1}/summary", summary_params)
     run(f"/v1/candidates/{cid1}/vote-history", {"state": state, "office": office})
     run(f"/v1/candidates/{cid1}/electorate-profile", {"year": year, "state": state, "office": office})
     run(f"/v1/candidates/{cid1}/vote-distribution", {"level": "municipio", "year": year, "state": state, "office": office})

@@ -59,6 +59,7 @@ Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap usa apenas `latest/analytics
 
 Os endpoints de analytics aceitam tanto `ano` quanto `year`.
 Se ambos forem enviados com valores diferentes, a API retorna `400`.
+Para recortes com disputa em 2 turnos, envie `turno` explicitamente para evitar ambiguidade entre voto oficial do turno e total consolidado.
 
 ## Contrato de identidade
 
@@ -194,8 +195,8 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /metrics` (observabilidade)
 - `GET /v1/analytics/filtros` (`200`, `503`)
 - `GET /v1/analytics/overview?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
-- `GET /v1/analytics/top-candidatos?ano=2022&uf=SP&cargo=Deputado%20Estadual&top_n=20` (`200`, `422`, `503`)
-- `GET /v1/analytics/candidatos/search?q=candidato&ano=2022&uf=SP&cargo=Deputado%20Estadual&page=1&page_size=20` (`200`, `422`, `503`)
+- `GET /v1/analytics/top-candidatos?ano=2022&turno=2&uf=SP&cargo=Deputado%20Estadual&top_n=20` (`200`, `422`, `503`)
+- `GET /v1/analytics/candidatos/search?q=candidato&ano=2022&turno=2&uf=SP&cargo=Deputado%20Estadual&page=1&page_size=20` (`200`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=genero&ano=2022&uf=SP` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=status&ano=2022&uf=SP&cargo=Senador` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/cor-raca-comparativo?ano=2022&uf=SP` (`200`, `422`, `503`)
@@ -285,10 +286,65 @@ Resposta `200`:
       "partido": "ABC",
       "cargo": "Deputado Estadual",
       "uf": "SP",
+      "turno_referencia": 1,
       "votos": 123456,
       "situacao": "ELEITO"
     }
   ]
+}
+```
+
+Quando a disputa tem mais de um turno, o campo `turno_referencia` indica qual turno foi usado para o total exibido em `votos`.
+Se o recorte vier sem `turno`, a API continua retornando a referência mais apropriada, mas agora isso fica explícito no payload.
+
+### `GET /candidates/{id}/summary?year=2024&state=SP&office=Prefeito`
+
+O resumo do candidato agora diferencia voto oficial do turno de referência e total consolidado.
+
+Campos novos:
+
+- `turno_referencia`: turno usado como base do `latest_election.votes`
+- `votos_primeiro_turno`: votos do 1º turno, quando existirem
+- `votos_segundo_turno`: votos do 2º turno, quando existirem
+- `votos_consolidados`: soma de todos os votos no ano/recorte
+
+Exemplo:
+
+```json
+{
+  "candidate_id": "4",
+  "turno_referencia": 2,
+  "votos_primeiro_turno": 500000,
+  "votos_segundo_turno": 550000,
+  "votos_consolidados": 1050000,
+  "latest_election": {
+    "year": 2024,
+    "turno_referencia": 2,
+    "votes": 550000,
+    "vote_share": 55.12,
+    "state_rank": 1
+  }
+}
+```
+
+### `GET /candidates/{id}/vote-history?state=SP&office=Prefeito`
+
+O histórico eleitoral passa a seguir a pessoa de forma consistente, sem ficar preso apenas ao cargo atual.
+Quando o CPF é informado, ele é a chave preferencial da consulta.
+
+Exemplo de item:
+
+```json
+{
+  "year": 2024,
+  "votes": 550000,
+  "vote_share": 55.12,
+  "round": 2,
+  "turno_referencia": 2,
+  "office": "Prefeito",
+  "state": "SP",
+  "nr_cpf_candidato": "12345678901",
+  "canonical_candidate_id": "person:..."
 }
 ```
 

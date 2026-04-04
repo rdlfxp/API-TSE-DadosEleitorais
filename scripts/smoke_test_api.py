@@ -123,6 +123,61 @@ def main() -> None:
     assert_true("items" in busca and "total" in busca, "resposta candidatos invalida")
     print("[smoke] ok: /v1/analytics/candidatos/search")
 
+    top_params = {"ano": anos[0], "top_n": 3}
+    if ufs:
+        top_params["uf"] = ufs[0]
+    if cargos:
+        top_params["cargo"] = cargos[0]
+    status, top = fetch_json(
+        base_url,
+        "/v1/analytics/top-candidatos",
+        args.timeout,
+        top_params,
+        retries=args.retries,
+        retry_delay=args.retry_delay,
+    )
+    assert_true(status == 200, "top-candidatos status != 200")
+    top_items = top.get("items", []) if isinstance(top, dict) else []
+    assert_true(bool(top_items), "top-candidatos sem itens")
+    first_item = top_items[0]
+    candidate_id = str(first_item.get("candidate_id") or "")
+    assert_true(bool(candidate_id), "top-candidatos sem candidate_id")
+    summary_params = {}
+    if first_item.get("turno_referencia") in {1, 2}:
+        summary_params["turno"] = first_item["turno_referencia"]
+    if first_item.get("uf"):
+        summary_params["state"] = first_item["uf"]
+    if first_item.get("cargo"):
+        summary_params["office"] = first_item["cargo"]
+    status, summary = fetch_json(
+        base_url,
+        f"/v1/candidates/{candidate_id}/summary",
+        args.timeout,
+        summary_params,
+        retries=args.retries,
+        retry_delay=args.retry_delay,
+    )
+    assert_true(status == 200, "candidate summary status != 200")
+    assert_true("latest_election" in summary, "summary sem latest_election")
+    print("[smoke] ok: /v1/candidates/{id}/summary")
+
+    vote_history_params = {}
+    if first_item.get("uf"):
+        vote_history_params["state"] = first_item["uf"]
+    if first_item.get("cargo"):
+        vote_history_params["office"] = first_item["cargo"]
+    status, history = fetch_json(
+        base_url,
+        f"/v1/candidates/{candidate_id}/vote-history",
+        args.timeout,
+        vote_history_params,
+        retries=args.retries,
+        retry_delay=args.retry_delay,
+    )
+    assert_true(status == 200, "candidate vote-history status != 200")
+    assert_true("items" in history, "vote-history sem items")
+    print("[smoke] ok: /v1/candidates/{id}/vote-history")
+
     status, _ = fetch_json(
         base_url,
         "/v1/analytics/distribuicao",

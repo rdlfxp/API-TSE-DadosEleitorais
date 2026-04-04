@@ -1072,6 +1072,7 @@ def candidate_summary(
     candidate_id: str,
     ano: int | None = Query(default=None),
     year: int | None = None,
+    turno: int | None = Query(default=None, ge=1, le=2),
     uf: str | None = Query(default=None, min_length=2, max_length=2),
     state: str | None = Query(default=None, min_length=2, max_length=2),
     cargo: str | None = None,
@@ -1083,6 +1084,7 @@ def candidate_summary(
     data = get_service().candidate_summary(
         candidate_id=candidate_id,
         year=resolved_year,
+        turno=turno,
         state=resolved_state,
         office=resolved_office,
     )
