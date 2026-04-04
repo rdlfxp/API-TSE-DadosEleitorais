@@ -1151,7 +1151,6 @@ class AnalyticsService(CandidateHistoryMixin):
         col_partido = self._pick_col(["SG_PARTIDO"])
         col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
         col_uf = self._pick_col(["SG_UF"])
-        col_round = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
         )
