@@ -830,13 +830,6 @@ class CandidateHistoryMixin:
 
         col_year = self._select_history_col(base_df, ["_year", "ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_votes = self._select_history_col(base_df, ["_votes", "QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_round = self._select_history_col(base_df, ["_round", "NR_TURNO", "CD_TURNO", "DS_TURNO"])
-        col_cargo = self._select_history_col(base_df, ["_office", "DS_CARGO", "DS_CARGO_D"])
-        col_state = self._select_history_col(base_df, ["_state", "SG_UF"])
-        col_municipio = self._select_history_col(base_df, ["_municipality", "NM_UE", "NM_MUNICIPIO"])
-        col_party = self._select_history_col(base_df, ["_party", "SG_PARTIDO"])
-        col_number = self._select_history_col(base_df, ["NR_CANDIDATO"])
-        col_source_id = self._select_history_col(base_df, ["_candidate_id", "SQ_CANDIDATO", "NR_CANDIDATO"])
         if not col_year or not col_votes:
             return {
                 "candidate_id": str(candidate_id),
