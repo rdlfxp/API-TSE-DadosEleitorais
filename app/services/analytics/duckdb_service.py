@@ -2326,6 +2326,8 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
+        return CandidateHistoryMixin.search_candidates(self, q, ano, turno=turno, uf=uf, cargo=cargo, partido=partido, page=page, page_size=page_size)
+
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         if not col_candidato:
             return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}

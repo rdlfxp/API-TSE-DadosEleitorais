@@ -18,13 +18,14 @@ from app.infra.redis_cache import redis_delete, redis_get, redis_set
 ANALYTICS_CACHE_LOCK = Lock()
 ANALYTICS_CACHE: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
 DATA_LAST_MODIFIED_TS: float | None = None
+DATA_CACHE_VERSION: str | None = None
 
 MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
     "/v1/analytics/filtros": 3600,
     "/v1/analytics/overview": 600,
     "/v1/analytics/top-candidatos": 300,
-    "/v1/analytics/candidatos/search": 120,
-    "/v1/analytics/candidatos": 120,
+    "/v1/analytics/candidatos/search": 43200,
+    "/v1/analytics/candidatos": 43200,
     "/v1/analytics/distribuicao": 600,
     "/v1/analytics/polarizacao": 1200,
 }
@@ -67,6 +68,19 @@ def cache_get(cache_key: str, allow_stale: bool = False) -> Any | None:
             return json.loads(serialized_payload)
         ANALYTICS_CACHE.pop(cache_key, None)
         return None
+
+
+def dataset_cache_version() -> str:
+    if DATA_CACHE_VERSION:
+        return DATA_CACHE_VERSION
+    if DATA_LAST_MODIFIED_TS is None:
+        return "no-data-version"
+    return f"mtime:{int(DATA_LAST_MODIFIED_TS * 1000)}"
+
+
+def versioned_cache_key(namespace: str, payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return f"{dataset_cache_version()}:{namespace}:{encoded}"
 
 
 def cache_prune_locked(now: float) -> None:
@@ -188,7 +202,7 @@ def configure_cache_headers(request: Request, response: Any) -> tuple[str, int]:
         url_key = request.url.path
         if request.url.query:
             url_key = f"{url_key}?{request.url.query}"
-        data_version = str(int(DATA_LAST_MODIFIED_TS)) if DATA_LAST_MODIFIED_TS is not None else "no-data-mtime"
+        data_version = dataset_cache_version()
         etag_hash = hashlib.sha256(f"{url_key}|{data_version}".encode("utf-8")).hexdigest()[:16]
         response.headers["ETag"] = f'W/"{etag_hash}"'
     if DATA_LAST_MODIFIED_TS is not None:
