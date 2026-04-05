@@ -22,6 +22,7 @@ from app.infra.cache import (
     cache_set,
     estimate_payload_rows,
     process_memory_mb,
+    versioned_cache_key,
 )
 
 
@@ -162,7 +163,7 @@ def run_analytics_query(
     cache_key = ""
     setattr(request.state, "memory_cache_status", "BYPASS")
     if cache_ttl_seconds > 0:
-        cache_key = f"{endpoint}:{json.dumps(filters, sort_keys=True, ensure_ascii=False, default=str)}"
+        cache_key = versioned_cache_key(endpoint, filters)
         cached = cache_get(cache_key)
         if cached is not None:
             setattr(request.state, "memory_cache_status", "HIT")

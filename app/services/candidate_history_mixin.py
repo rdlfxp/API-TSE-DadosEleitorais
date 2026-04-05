@@ -9,6 +9,160 @@ import pandas as pd
 
 
 class CandidateHistoryMixin:
+    def _candidate_compact_projection_columns(self) -> list[str]:
+        return [
+            "ANO_ELEICAO",
+            "NR_ANO_ELEICAO",
+            "NR_TURNO",
+            "CD_TURNO",
+            "DS_TURNO",
+            "QT_VOTOS_NOMINAIS_VALIDOS",
+            "NR_VOTACAO_NOMINAL",
+            "QT_VOTOS_NOMINAIS",
+            "DS_CARGO",
+            "DS_CARGO_D",
+            "SG_UF",
+            "NM_UE",
+            "NM_MUNICIPIO",
+            "SG_PARTIDO",
+            "NR_CANDIDATO",
+            "NR_CPF_CANDIDATO",
+            "SQ_CANDIDATO",
+            "NM_CANDIDATO",
+            "NM_URNA_CANDIDATO",
+            "DS_SIT_TOT_TURNO",
+            "DT_NASCIMENTO",
+        ]
+
+    def _candidate_compact_frame(self) -> pd.DataFrame:
+        cache = getattr(self, "_candidate_compact_frame_cache", None)
+        if cache is not None:
+            return cache
+
+        base_df = self._load_history_rows(columns=self._candidate_compact_projection_columns())
+        prepared = self._prepare_candidate_compact_rows(base_df)
+        setattr(self, "_candidate_compact_frame_cache", prepared)
+        return prepared
+
+    def _candidate_history_context_totals_frame(self) -> pd.DataFrame:
+        cache = getattr(self, "_candidate_history_context_totals_cache", None)
+        if cache is not None:
+            return cache
+
+        base_df = self._candidate_compact_frame()
+        if base_df.empty:
+            empty = base_df.iloc[0:0].copy()
+            setattr(self, "_candidate_history_context_totals_cache", empty)
+            return empty
+
+        context_cols = ["_year", "_office", "_context_state", "_context_municipality", "_round"]
+        totals = (
+            base_df.groupby(context_cols, as_index=False)
+            .agg(total_votes=("_votes", "sum"))
+            .sort_values(context_cols, ascending=[False, True, True, True, False], kind="stable")
+            .reset_index(drop=True)
+        )
+        setattr(self, "_candidate_history_context_totals_cache", totals)
+        return totals
+
+    def _prepare_candidate_compact_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df.copy()
+
+        prepared_cols = {
+            "_year",
+            "_round",
+            "_votes",
+            "_office",
+            "_state",
+            "_municipality",
+            "_party",
+            "_number",
+            "_candidate_id",
+            "_candidate_key",
+            "_source_id",
+            "_name_display",
+            "_name_norm",
+            "_person_id",
+            "_scope",
+            "_context_state",
+            "_context_municipality",
+        }
+        if prepared_cols.issubset(df.columns):
+            return df
+
+        col_year = self._select_history_col(df, ["_year", "ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_round = self._select_history_col(df, ["_round", "NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_votes = self._select_history_col(df, ["_votes", "QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_cargo = self._select_history_col(df, ["_office", "DS_CARGO", "DS_CARGO_D"])
+        col_state = self._select_history_col(df, ["_state", "SG_UF"])
+        col_municipio = self._select_history_col(df, ["_municipality", "NM_UE", "NM_MUNICIPIO"])
+        col_party = self._select_history_col(df, ["_party", "SG_PARTIDO"])
+        col_number = self._select_history_col(df, ["_number", "NR_CANDIDATO"])
+        col_candidate_id = self._select_history_col(df, ["_candidate_id", "SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_source_id = self._select_history_col(df, ["_source_id", "SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_candidato = self._select_history_col(df, ["_name_display", "NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        col_cpf = self._select_history_col(df, ["NR_CPF_CANDIDATO"])
+
+        year_series = pd.to_numeric(df[col_year], errors="coerce") if col_year else pd.Series([pd.NA] * len(df), index=df.index)
+        round_series = (
+            pd.to_numeric(df[col_round], errors="coerce").fillna(0).astype(int)
+            if col_round == "_round"
+            else (self._extract_turno(df[col_round]) if col_round else pd.Series([0] * len(df), index=df.index))
+        )
+        votes_series = (
+            pd.to_numeric(df[col_votes], errors="coerce").fillna(0)
+            if col_votes == "_votes"
+            else (pd.to_numeric(df[col_votes], errors="coerce").fillna(0) if col_votes else pd.Series([0] * len(df), index=df.index))
+        )
+        office_series = self._text_series(df[col_cargo]) if col_cargo else pd.Series([""] * len(df), index=df.index)
+        state_series = self._text_series(df[col_state]).str.upper() if col_state else pd.Series([""] * len(df), index=df.index)
+        municipality_series = self._text_series(df[col_municipio]) if col_municipio else pd.Series([""] * len(df), index=df.index)
+        party_series = self._text_series(df[col_party]).str.upper().str.strip() if col_party else pd.Series([""] * len(df), index=df.index)
+        number_series = self._text_series(df[col_number]) if col_number else pd.Series([""] * len(df), index=df.index)
+        candidate_id_series = self._text_series(df[col_candidate_id]) if col_candidate_id else pd.Series([""] * len(df), index=df.index)
+        source_id_series = self._text_series(df[col_source_id]) if col_source_id else pd.Series([""] * len(df), index=df.index)
+        name_series = self._candidate_display_name_series(df) if col_candidato else pd.Series([""] * len(df), index=df.index)
+        if not col_candidato:
+            name_series = pd.Series([""] * len(df), index=df.index)
+        if col_cpf:
+            cpf_series = self._cpf_series(df[col_cpf])
+        else:
+            cpf_series = pd.Series([""] * len(df), index=df.index)
+
+        name_norm = name_series.map(lambda value: self._normalize_value(value, uppercase=True).lower())
+        candidate_key = candidate_id_series.replace("", pd.NA)
+        if col_candidate_id is None:
+            candidate_key = name_norm.replace("", pd.NA)
+        person_id_series = self._person_id_series(df).replace("", pd.NA)
+
+        prepared = df.assign(
+            _year=year_series,
+            _round=round_series,
+            _votes=votes_series,
+            _office=office_series,
+            _state=state_series,
+            _municipality=municipality_series,
+            _party=party_series,
+            _number=number_series.replace("", pd.NA),
+            _candidate_id=candidate_id_series.replace("", pd.NA),
+            _candidate_key=candidate_key,
+            _source_id=source_id_series.replace("", pd.NA),
+            _name_display=name_series.replace("", pd.NA),
+            _name_norm=name_norm.replace("", pd.NA),
+            _cpf=cpf_series.replace("", pd.NA),
+            _person_id=person_id_series,
+        )
+        prepared = prepared.dropna(subset=["_year"]).copy()
+        if prepared.empty:
+            return prepared
+        prepared = prepared.assign(
+            _scope=prepared["_office"].apply(self._cargo_scope),  # type: ignore[attr-defined]
+            _context_state=prepared["_state"].where(prepared["_office"].apply(self._cargo_scope) != "nacional", ""),  # type: ignore[attr-defined]
+            _context_municipality=prepared["_municipality"].where(prepared["_office"].apply(self._cargo_scope) == "municipio", ""),  # type: ignore[attr-defined]
+        )
+        return prepared
+
     def _identity_text(self, value: object) -> str:
         if value is None or pd.isna(value):
             return ""
@@ -43,6 +197,22 @@ class CandidateHistoryMixin:
             preferred = pd.Series([""] * len(df), index=df.index)
         if col_urna:
             urna = self._identity_series(df[col_urna])
+            preferred = preferred.where(preferred.str.len() >= urna.str.len(), urna)
+            preferred = preferred.where(preferred != "", urna)
+        return preferred.fillna("")
+
+    def _candidate_display_name_series(self, df: pd.DataFrame) -> pd.Series:
+        col_name = self._select_history_col(df, ["NM_CANDIDATO"])
+        col_urna = self._select_history_col(df, ["NM_URNA_CANDIDATO"])
+        if not col_name and not col_urna:
+            return pd.Series([""] * len(df), index=df.index)
+
+        if col_name:
+            preferred = self._text_series(df[col_name])
+        else:
+            preferred = pd.Series([""] * len(df), index=df.index)
+        if col_urna:
+            urna = self._text_series(df[col_urna])
             preferred = preferred.where(preferred.str.len() >= urna.str.len(), urna)
             preferred = preferred.where(preferred != "", urna)
         return preferred.fillna("")
@@ -220,20 +390,26 @@ class CandidateHistoryMixin:
             identity = self._candidate_cpf_identity(seed_rows, candidate_cpf=candidate_cpf)
             candidate_rows = all_rows.iloc[0:0].copy()
             candidate_cpf_value = identity["nr_cpf_candidato"]
-            if candidate_cpf_value and "NR_CPF_CANDIDATO" in all_rows.columns:
-                candidate_rows = all_rows[
-                    self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == self._cpf_text(candidate_cpf_value)
-                ].copy()
+            if candidate_cpf_value:
+                if "_cpf" in all_rows.columns:
+                    candidate_rows = all_rows[all_rows["_cpf"].fillna("").astype(str) == self._cpf_text(candidate_cpf_value)].copy()
+                elif "NR_CPF_CANDIDATO" in all_rows.columns:
+                    candidate_rows = all_rows[
+                        self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == self._cpf_text(candidate_cpf_value)
+                    ].copy()
             if candidate_rows.empty:
                 candidate_rows = seed_rows.copy()
         else:
             identity = self._candidate_identity_payload(seed_rows)
             person_id = identity["person_id"]
-            candidate_rows = (
-                all_rows[self._person_id_series(all_rows) == str(person_id)].copy()
-                if person_id
-                else all_rows.iloc[0:0].copy()
-            )
+            if person_id and "_person_id" in all_rows.columns:
+                candidate_rows = all_rows[all_rows["_person_id"].fillna("").astype(str) == str(person_id)].copy()
+            else:
+                candidate_rows = (
+                    all_rows[self._person_id_series(all_rows) == str(person_id)].copy()
+                    if person_id
+                    else all_rows.iloc[0:0].copy()
+                )
             if candidate_rows.empty:
                 candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
 
@@ -264,29 +440,7 @@ class CandidateHistoryMixin:
         return requested or None
 
     def _candidate_history_projection_columns(self) -> list[str]:
-        return [
-            "ANO_ELEICAO",
-            "NR_ANO_ELEICAO",
-            "QT_VOTOS_NOMINAIS_VALIDOS",
-            "NR_VOTACAO_NOMINAL",
-            "QT_VOTOS_NOMINAIS",
-            "NR_TURNO",
-            "CD_TURNO",
-            "DS_TURNO",
-            "DS_CARGO",
-            "DS_CARGO_D",
-            "SG_UF",
-            "NM_UE",
-            "NM_MUNICIPIO",
-            "SG_PARTIDO",
-            "NR_CANDIDATO",
-            "NR_CPF_CANDIDATO",
-            "SQ_CANDIDATO",
-            "NM_CANDIDATO",
-            "NM_URNA_CANDIDATO",
-            "DS_SIT_TOT_TURNO",
-            "DT_NASCIMENTO",
-        ]
+        return self._candidate_compact_projection_columns()
 
     def _load_history_rows(
         self,
@@ -458,28 +612,33 @@ class CandidateHistoryMixin:
         if df.empty:
             return df.copy()
 
-        col_year = self._select_history_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
-        col_votes = self._select_history_col(df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_year = self._select_history_col(df, ["_year", "ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_votes = self._select_history_col(df, ["_votes", "QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if not col_year or not col_votes:
             return df.copy()
 
-        col_round = self._select_history_col(df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
-        col_candidate_key = self._select_history_col(df, ["SQ_CANDIDATO", "NR_CANDIDATO"])
-        col_name = self._select_history_col(df, ["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        col_round = self._select_history_col(df, ["_round", "NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_candidate_key = self._select_history_col(df, ["_candidate_key", "SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_name = self._select_history_col(df, ["_name_display", "NM_CANDIDATO", "NM_URNA_CANDIDATO"])
 
         if col_candidate_key:
-            candidate_key = self._identity_series(df[col_candidate_key])
+            if col_candidate_key == "_candidate_key":
+                candidate_key = df[col_candidate_key].fillna("").astype(str)
+            else:
+                candidate_key = self._identity_series(df[col_candidate_key])
         elif col_name:
             candidate_key = self._person_identity_name_series(df)
         else:
             candidate_key = pd.Series([""] * len(df), index=df.index)
 
         latest = df.assign(
-            _year_num=pd.to_numeric(df[col_year], errors="coerce"),
+            _year_num=(pd.to_numeric(df[col_year], errors="coerce") if col_year != "_year" else pd.to_numeric(df[col_year], errors="coerce")),
             _round_num=(
-                self._extract_turno(df[col_round]) if col_round else pd.Series([0] * len(df), index=df.index)
+                pd.to_numeric(df[col_round], errors="coerce").fillna(0).astype(int)
+                if col_round == "_round"
+                else (self._extract_turno(df[col_round]) if col_round else pd.Series([0] * len(df), index=df.index))
             ),
-            _votes_num=pd.to_numeric(df[col_votes], errors="coerce").fillna(0),
+            _votes_num=(pd.to_numeric(df[col_votes], errors="coerce").fillna(0) if col_votes == "_votes" else pd.to_numeric(df[col_votes], errors="coerce").fillna(0)),
             _candidate_key=candidate_key.fillna(""),
         ).dropna(subset=["_year_num"])
         latest = latest[latest["_candidate_key"] != ""].copy()
@@ -493,6 +652,117 @@ class CandidateHistoryMixin:
         latest = latest.merge(latest_rounds, on=["_candidate_key", "_year_num"], how="inner")
         latest = latest[latest["_round_num"] == latest["_latest_round_num"]].copy()
         return latest.drop(columns=["_year_num", "_round_num", "_votes_num", "_candidate_key", "_latest_round_num"], errors="ignore")
+
+    def search_candidates(
+        self,
+        q: str,
+        ano: int,
+        turno: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        partido: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        frame = self._candidate_compact_frame()
+        if frame.empty:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        query = str(q or "").strip()
+        if not query:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+        q_norm = self._normalize_value(query, uppercase=True).lower()
+        if not q_norm:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        filtered = frame
+        if ano is not None and "_year" in filtered.columns:
+            filtered = filtered[pd.to_numeric(filtered["_year"], errors="coerce") == int(ano)]
+        if turno is not None and "_round" in filtered.columns:
+            filtered = filtered[pd.to_numeric(filtered["_round"], errors="coerce").fillna(0).astype(int) == int(turno)]
+        if uf and "_state" in filtered.columns:
+            normalized_uf = self._normalize_value(uf, uppercase=True)
+            filtered = filtered[filtered["_state"].fillna("").astype(str).str.upper() == normalized_uf]
+        if cargo and "_office" in filtered.columns:
+            filtered = filtered[filtered["_office"].fillna("").astype(str).str.lower() == cargo.lower()]
+        if partido and "_party" in filtered.columns:
+            filtered = filtered[filtered["_party"].fillna("").astype(str).str.upper().str.strip() == partido.upper().strip()]
+        if turno is None:
+            filtered = self._latest_vote_context_rows(filtered)
+
+        if filtered.empty or "_name_norm" not in filtered.columns:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        names_norm = filtered["_name_norm"].fillna("").astype(str)
+        matched = names_norm.str.contains(q_norm, regex=False)
+        if not matched.any():
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        ranked = filtered.loc[matched].copy()
+        name_match_norm = names_norm.loc[matched]
+        score = (
+            (name_match_norm == q_norm).astype(int) * 3
+            + (name_match_norm.str.startswith(q_norm)).astype(int) * 2
+            + (name_match_norm.str.contains(q_norm, regex=False)).astype(int)
+        )
+        votos = pd.to_numeric(ranked["_votes"], errors="coerce").fillna(0).astype("int64") if "_votes" in ranked.columns else pd.Series(0, index=ranked.index, dtype="int64")
+        ranked = ranked.assign(
+            _score=score,
+            _votos=votos,
+            _candidate_id=ranked["_candidate_id"].fillna("").astype(str) if "_candidate_id" in ranked.columns else ranked["_candidate_key"].fillna("").astype(str),
+            _candidato=ranked["_name_display"].fillna("").astype(str) if "_name_display" in ranked.columns else ranked["_candidate_key"].fillna("").astype(str),
+            _partido=ranked["_party"].fillna(pd.NA).astype("string") if "_party" in ranked.columns else pd.NA,
+            _cargo=ranked["_office"].fillna(pd.NA).astype("string") if "_office" in ranked.columns else pd.NA,
+            _uf=ranked["_state"].fillna(pd.NA).astype("string") if "_state" in ranked.columns else pd.NA,
+            _numero=ranked["NR_CANDIDATO"].fillna(pd.NA).astype("string") if "NR_CANDIDATO" in ranked.columns else pd.NA,
+            _situacao=ranked["DS_SIT_TOT_TURNO"].fillna(pd.NA).astype("string") if "DS_SIT_TOT_TURNO" in ranked.columns else pd.NA,
+        )
+
+        grouped = (
+            ranked.groupby(["_candidate_id", "_candidato", "_partido", "_cargo", "_uf", "_numero", "_situacao"], dropna=False, as_index=False)
+            .agg(votes=("_votos", "sum"), score=("_score", "max"))
+            .sort_values(["votes", "score", "_candidato"], ascending=[False, False, True])
+        )
+
+        total = int(len(grouped))
+        total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
+        start = (page - 1) * page_size
+        end = start + page_size
+        grouped = grouped.iloc[start:end]
+
+        items: list[dict[str, Any]] = []
+        for _, row in grouped.iterrows():
+            candidate_id = str(row["_candidate_id"]).strip() or str(row["_candidato"]).strip()
+            candidate_rows = ranked[ranked["_candidate_id"] == row["_candidate_id"]].copy()
+            identity_payload = self._candidate_identity_payload(candidate_rows)
+            turn_breakdown = self._candidate_vote_turn_breakdown(candidate_rows)
+            numero_raw = row["_numero"] if pd.notna(row["_numero"]) and str(row["_numero"]).strip() else candidate_id
+            items.append(
+                {
+                    "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
+                    "turno_referencia": turn_breakdown["turno_referencia"],
+                    "latest_vote_round": turn_breakdown["turno_referencia"],
+                    "latest_vote_value": int(row["votes"] or 0),
+                    "candidato": str(row["_candidato"]).strip() or "",
+                    "partido": str(row["_partido"]).strip() if pd.notna(row["_partido"]) else None,
+                    "cargo": str(row["_cargo"]).strip() if pd.notna(row["_cargo"]) else None,
+                    "uf": str(row["_uf"]).strip() if pd.notna(row["_uf"]) else None,
+                    "numero": str(numero_raw).strip() if pd.notna(numero_raw) else None,
+                    "votos": int(row["votes"] or 0),
+                    "situacao": str(row["_situacao"]).strip() if pd.notna(row["_situacao"]) else None,
+                }
+            )
+
+        return {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "items": items,
+        }
 
     def _candidate_vote_turn_breakdown(self, candidate_rows: pd.DataFrame) -> dict[str, int | None]:
         if candidate_rows.empty:
@@ -540,8 +810,7 @@ class CandidateHistoryMixin:
         state: str | None = None,
         office: str | None = None,
     ) -> dict[str, Any]:
-        projection_cols = self._candidate_history_projection_columns()
-        base_df = self._load_history_rows(columns=projection_cols)
+        base_df = self._prepare_candidate_compact_rows(self._candidate_compact_frame())
         candidate_rows, identity = self._historical_candidate_rows(
             candidate_id=candidate_id,
             candidate_cpf=candidate_cpf,
@@ -559,15 +828,8 @@ class CandidateHistoryMixin:
                 "items": [],
             }
 
-        col_year = self._select_history_col(base_df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
-        col_votes = self._select_history_col(base_df, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_round = self._select_history_col(base_df, ["NR_TURNO", "CD_TURNO", "DS_TURNO"])
-        col_cargo = self._select_history_col(base_df, ["DS_CARGO", "DS_CARGO_D"])
-        col_state = self._select_history_col(base_df, ["SG_UF"])
-        col_municipio = self._select_history_col(base_df, ["NM_UE", "NM_MUNICIPIO"])
-        col_party = self._select_history_col(base_df, ["SG_PARTIDO"])
-        col_number = self._select_history_col(base_df, ["NR_CANDIDATO"])
-        col_source_id = self._select_history_col(base_df, ["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_year = self._select_history_col(base_df, ["_year", "ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_votes = self._select_history_col(base_df, ["_votes", "QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
         if not col_year or not col_votes:
             return {
                 "candidate_id": str(candidate_id),
@@ -577,17 +839,7 @@ class CandidateHistoryMixin:
                 "items": [],
             }
 
-        candidate_rows = candidate_rows.assign(
-            _year=pd.to_numeric(candidate_rows[col_year], errors="coerce"),
-            _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
-            _round=(self._extract_turno(candidate_rows[col_round]) if col_round else 0),  # type: ignore[attr-defined]
-            _office=(self._text_series(candidate_rows[col_cargo]) if col_cargo else ""),
-            _state=(self._text_series(candidate_rows[col_state]).str.upper() if col_state else ""),
-            _municipality=(self._text_series(candidate_rows[col_municipio]) if col_municipio else ""),
-            _party=(self._text_series(candidate_rows[col_party]) if col_party else ""),
-            _number=(self._text_series(candidate_rows[col_number]) if col_number else ""),
-            _source_id=(self._text_series(candidate_rows[col_source_id]) if col_source_id else ""),
-        ).dropna(subset=["_year"])
+        candidate_rows = self._prepare_candidate_compact_rows(candidate_rows)
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
@@ -597,28 +849,8 @@ class CandidateHistoryMixin:
                 "items": [],
             }
 
-        candidate_rows = candidate_rows.assign(
-            _scope=candidate_rows["_office"].apply(self._cargo_scope),  # type: ignore[attr-defined]
-            _context_state=candidate_rows["_state"].where(candidate_rows["_office"].apply(self._cargo_scope) != "nacional", ""),  # type: ignore[attr-defined]
-            _context_municipality=candidate_rows["_municipality"].where(candidate_rows["_office"].apply(self._cargo_scope) == "municipio", ""),  # type: ignore[attr-defined]
-        )
-
-        all_rows = base_df.assign(
-            _year=pd.to_numeric(base_df[col_year], errors="coerce"),
-            _votes=pd.to_numeric(base_df[col_votes], errors="coerce").fillna(0),
-            _round=(self._extract_turno(base_df[col_round]) if col_round else 0),  # type: ignore[attr-defined]
-            _office=(self._text_series(base_df[col_cargo]) if col_cargo else ""),
-            _state=(self._text_series(base_df[col_state]).str.upper() if col_state else ""),
-            _municipality=(self._text_series(base_df[col_municipio]) if col_municipio else ""),
-        ).dropna(subset=["_year"])
-        all_rows = all_rows.assign(
-            _scope=all_rows["_office"].apply(self._cargo_scope),  # type: ignore[attr-defined]
-            _context_state=all_rows["_state"].where(all_rows["_office"].apply(self._cargo_scope) != "nacional", ""),  # type: ignore[attr-defined]
-            _context_municipality=all_rows["_municipality"].where(all_rows["_office"].apply(self._cargo_scope) == "municipio", ""),  # type: ignore[attr-defined]
-        )
-
         history_context_cols = ["_year", "_office", "_context_state", "_context_municipality", "_round"]
-        total_by_context = all_rows.groupby(history_context_cols, as_index=False).agg(total_votes=("_votes", "sum"))
+        total_by_context = self._candidate_history_context_totals_frame()
         grouped = (
             candidate_rows.groupby(history_context_cols, as_index=False)
             .agg(

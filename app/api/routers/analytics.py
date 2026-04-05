@@ -69,7 +69,7 @@ def analytics_candidates_text_search(request: Request, q: str = Query(..., min_l
     if is_unscoped_candidate_search(q, uf=uf, cargo=cargo, partido=partido):
         return CandidateSearchResponse(page=page, page_size=page_size, total=0, total_pages=0, items=[])
     filters = {"q": normalize_search_cache_key(q), "ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "partido": partido, "page": page, "page_size": page_size}
-    data = run_analytics_query(request, "/v1/analytics/candidatos/search", filters, lambda: get_service().search_candidates(q=q, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, page=page, page_size=page_size), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/candidatos/search"])
+    data = run_analytics_query(request, "/v1/analytics/candidatos/search", filters, lambda: get_service().search_candidates(q=q, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, page=page, page_size=page_size), cache_ttl_seconds=settings.analytics_search_cache_ttl_seconds)
     return CandidateSearchResponse(**data)
 
 
@@ -82,7 +82,7 @@ def analytics_candidates_search_legacy(request: Request, response: Response, que
     if is_unscoped_candidate_search(query, uf=uf, cargo=cargo, partido=partido):
         return CandidateSearchResponse(page=page, page_size=page_size, total=0, total_pages=0, items=[])
     filters = {"query": normalize_search_cache_key(query), "ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "partido": partido, "page": page, "page_size": page_size}
-    data = run_analytics_query(request, "/v1/analytics/candidatos", filters, lambda: get_service().search_candidates(q=query, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, page=page, page_size=page_size), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/candidatos"])
+    data = run_analytics_query(request, "/v1/analytics/candidatos", filters, lambda: get_service().search_candidates(q=query, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, page=page, page_size=page_size), cache_ttl_seconds=settings.analytics_search_cache_ttl_seconds)
     return CandidateSearchResponse(**data)
 
 

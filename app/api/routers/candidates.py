@@ -12,6 +12,7 @@ from app.api.dependencies import (
     trace_id_from_request,
 )
 from app.api.errors import ERROR_RESPONSES
+from app.core.config import settings
 from app.domain import is_municipal_office
 from app.schemas import CandidateSummaryResponse, CompareResponse, ElectorateProfileResponse, VoteDistributionResponse, VoteHistoryResponse
 
@@ -32,7 +33,7 @@ def candidate_vote_history(request: Request, candidate_id: str, nr_cpf_candidato
     resolved_state = resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
     filters = {"candidate_id": candidate_id, "nr_cpf_candidato": nr_cpf_candidato, "state": resolved_state, "office": resolved_office}
-    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/vote-history", filters, lambda: get_service().candidate_vote_history(candidate_id=candidate_id, candidate_cpf=nr_cpf_candidato, state=resolved_state, office=resolved_office), cache_ttl_seconds=1800)
+    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/vote-history", filters, lambda: get_service().candidate_vote_history(candidate_id=candidate_id, candidate_cpf=nr_cpf_candidato, state=resolved_state, office=resolved_office), cache_ttl_seconds=settings.analytics_vote_history_cache_ttl_seconds)
     return VoteHistoryResponse(**data)
 
 

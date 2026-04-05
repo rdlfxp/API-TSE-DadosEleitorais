@@ -40,6 +40,7 @@ async def lifespan(_: FastAPI):
     global service, DATA_LAST_MODIFIED_TS
     service = None
     cache_state.DATA_LAST_MODIFIED_TS = None
+    cache_state.DATA_CACHE_VERSION = None
     DATA_LAST_MODIFIED_TS = None
     initialize_redis()
 
@@ -56,8 +57,10 @@ async def lifespan(_: FastAPI):
     if selected_path.exists():
         try:
             cache_state.DATA_LAST_MODIFIED_TS = selected_path.stat().st_mtime
+            cache_state.DATA_CACHE_VERSION = f"{selected_path.stat().st_mtime_ns}:{selected_path.stat().st_size}"
         except OSError:
             cache_state.DATA_LAST_MODIFIED_TS = None
+            cache_state.DATA_CACHE_VERSION = None
         DATA_LAST_MODIFIED_TS = cache_state.DATA_LAST_MODIFIED_TS
         if settings.analytics_engine.lower() == "duckdb":
             service = DuckDBAnalyticsService.from_file(
@@ -112,6 +115,7 @@ async def lifespan(_: FastAPI):
         service.close()
     service = None
     cache_state.DATA_LAST_MODIFIED_TS = None
+    cache_state.DATA_CACHE_VERSION = None
     DATA_LAST_MODIFIED_TS = None
     close_redis()
 
