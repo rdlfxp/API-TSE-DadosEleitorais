@@ -144,7 +144,364 @@ def test_duckdb_cor_raca_comparativo_normaliza_nao_divulgavel(tmp_path):
     by_categoria = {item["categoria"]: item for item in payload["items"]}
     assert by_categoria["Branca"]["candidatos"] == 1
     assert by_categoria["Preta"]["candidatos"] == 1
-    assert by_categoria["Não informado"]["candidatos"] == 1
+    assert "Não informado" not in by_categoria
+
+
+def _distribution_regression_df() -> pd.DataFrame:
+    rows: list[dict] = []
+
+    def add_candidate(
+        *,
+        ano: int,
+        cargo: str,
+        candidato: int,
+        nome: str,
+        situacao: str,
+        genero_values: list[object],
+        instrucao_values: list[object],
+        cor_raca_values: list[object],
+        estado_civil_values: list[object],
+    ) -> None:
+        for idx, genero in enumerate(genero_values):
+            rows.append(
+                {
+                    "ANO_ELEICAO": ano,
+                    "NR_TURNO": 1,
+                    "SG_UF": "SP",
+                    "NM_UE": "SAO PAULO",
+                    "DS_CARGO": cargo,
+                    "SQ_CANDIDATO": candidato,
+                    "NM_CANDIDATO": nome,
+                    "DS_SIT_TOT_TURNO": situacao,
+                    "DS_GENERO": genero,
+                    "DS_GRAU_INSTRUCAO": instrucao_values[idx],
+                    "DS_COR_RACA": cor_raca_values[idx],
+                    "DS_ESTADO_CIVIL": estado_civil_values[idx],
+                }
+            )
+
+    add_candidate(
+        ano=2020,
+        cargo="Prefeito",
+        candidato=100,
+        nome="Prefeito A",
+        situacao="ELEITO",
+        genero_values=["M", "", ""],
+        instrucao_values=["SUPERIOR COMPLETO", "", ""],
+        cor_raca_values=["BRANCA", "", ""],
+        estado_civil_values=["CASADO(A)", "", ""],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Prefeito",
+        candidato=101,
+        nome="Prefeita B",
+        situacao="NAO ELEITO",
+        genero_values=["FEMININO", ""],
+        instrucao_values=["ENSINO MEDIO COMPLETO", ""],
+        cor_raca_values=["PARDA", ""],
+        estado_civil_values=["SOLTEIRO(A)", ""],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Prefeito",
+        candidato=102,
+        nome="Prefeito C",
+        situacao="NAO ELEITO",
+        genero_values=["MASC", "NÃO INFORMADO"],
+        instrucao_values=["SUPERIOR COMPLETO", "N/A"],
+        cor_raca_values=["PRETA", "NÃO INFORMADO"],
+        estado_civil_values=["DIVORCIADO(A)", "N/A"],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Prefeito",
+        candidato=103,
+        nome="Pessoa D",
+        situacao="NAO ELEITO",
+        genero_values=[None, ""],
+        instrucao_values=[None, ""],
+        cor_raca_values=[None, ""],
+        estado_civil_values=[None, ""],
+    )
+
+    add_candidate(
+        ano=2020,
+        cargo="Vereador",
+        candidato=200,
+        nome="Vereadora A",
+        situacao="ELEITO",
+        genero_values=["F", "", ""],
+        instrucao_values=["SUPERIOR COMPLETO", "", ""],
+        cor_raca_values=["BRANCA", "", ""],
+        estado_civil_values=["CASADO(A)", "", ""],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Vereador",
+        candidato=201,
+        nome="Vereador B",
+        situacao="NAO ELEITO",
+        genero_values=["MASCULINO", "", "NA"],
+        instrucao_values=["ENSINO MEDIO COMPLETO", "", "N/A"],
+        cor_raca_values=["PARDA", "", "N/A"],
+        estado_civil_values=["SOLTEIRO(A)", "", "N/A"],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Vereador",
+        candidato=202,
+        nome="Vereadora C",
+        situacao="NAO ELEITO",
+        genero_values=["FEM", ""],
+        instrucao_values=["SUPERIOR COMPLETO", ""],
+        cor_raca_values=["PRETA", ""],
+        estado_civil_values=["DIVORCIADO(A)", ""],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Vereador",
+        candidato=203,
+        nome="Pessoa D",
+        situacao="NAO ELEITO",
+        genero_values=["", ""],
+        instrucao_values=["", ""],
+        cor_raca_values=["", ""],
+        estado_civil_values=["", ""],
+    )
+    add_candidate(
+        ano=2020,
+        cargo="Vereador",
+        candidato=204,
+        nome="Vereador E",
+        situacao="NAO ELEITO",
+        genero_values=["M", "IGNORADO"],
+        instrucao_values=["ENSINO FUNDAMENTAL COMPLETO", "IGNORADO"],
+        cor_raca_values=["AMARELA", "IGNORADO"],
+        estado_civil_values=["VIUVO(A)", "IGNORADO"],
+    )
+
+    add_candidate(
+        ano=2022,
+        cargo="Deputado Estadual",
+        candidato=300,
+        nome="Deputado A",
+        situacao="ELEITO",
+        genero_values=["M", "", ""],
+        instrucao_values=["SUPERIOR COMPLETO", "", ""],
+        cor_raca_values=["BRANCA", "", ""],
+        estado_civil_values=["CASADO(A)", "", ""],
+    )
+    add_candidate(
+        ano=2022,
+        cargo="Deputado Estadual",
+        candidato=301,
+        nome="Deputada B",
+        situacao="ELEITO",
+        genero_values=["FEMININO", "", ""],
+        instrucao_values=["SUPERIOR COMPLETO", "", ""],
+        cor_raca_values=["PARDA", "", ""],
+        estado_civil_values=["SOLTEIRO(A)", "", ""],
+    )
+    add_candidate(
+        ano=2022,
+        cargo="Deputado Estadual",
+        candidato=302,
+        nome="Deputado C",
+        situacao="ELEITO",
+        genero_values=["MASC", "NÃO INFORMADO"],
+        instrucao_values=["ENSINO MEDIO COMPLETO", "NÃO INFORMADO"],
+        cor_raca_values=["PRETA", "NÃO INFORMADO"],
+        estado_civil_values=["DIVORCIADO(A)", "NÃO INFORMADO"],
+    )
+    add_candidate(
+        ano=2022,
+        cargo="Deputado Estadual",
+        candidato=303,
+        nome="Pessoa D",
+        situacao="NAO ELEITO",
+        genero_values=[None, ""],
+        instrucao_values=[None, ""],
+        cor_raca_values=[None, ""],
+        estado_civil_values=[None, ""],
+    )
+    add_candidate(
+        ano=2022,
+        cargo="Deputado Estadual",
+        candidato=304,
+        nome="Deputada E",
+        situacao="ELEITO",
+        genero_values=["F", "F"],
+        instrucao_values=["SUPERIOR COMPLETO", "SUPERIOR COMPLETO"],
+        cor_raca_values=["AMARELA", "AMARELA"],
+        estado_civil_values=["CASADO(A)", "CASADO(A)"],
+    )
+    add_candidate(
+        ano=2022,
+        cargo="Deputado Estadual",
+        candidato=305,
+        nome="Pessoa F",
+        situacao="ELEITO",
+        genero_values=["", ""],
+        instrucao_values=["", ""],
+        cor_raca_values=["", ""],
+        estado_civil_values=["", ""],
+    )
+
+    return pd.DataFrame(rows)
+
+
+def _distribution_items_by_label(items: list[dict]) -> dict[str, tuple[float, float]]:
+    return {item["label"]: (item["value"], item["percentage"]) for item in items}
+
+
+@pytest.mark.parametrize(
+    ("ano", "cargo", "somente_eleitos", "expected"),
+    [
+        (
+            2020,
+            "Prefeito",
+            False,
+            [
+                {"label": "MASCULINO", "value": 2.0, "percentage": 66.67},
+                {"label": "FEMININO", "value": 1.0, "percentage": 33.33},
+            ],
+        ),
+        (
+            2020,
+            "Vereador",
+            False,
+            [
+                {"label": "FEMININO", "value": 2.0, "percentage": 50.0},
+                {"label": "MASCULINO", "value": 2.0, "percentage": 50.0},
+            ],
+        ),
+        (
+            2022,
+            "Deputado Estadual",
+            False,
+            [
+                {"label": "FEMININO", "value": 2.0, "percentage": 50.0},
+                {"label": "MASCULINO", "value": 2.0, "percentage": 50.0},
+            ],
+        ),
+        (
+            2022,
+            "Deputado Estadual",
+            True,
+            [
+                {"label": "FEMININO", "value": 2.0, "percentage": 50.0},
+                {"label": "MASCULINO", "value": 2.0, "percentage": 50.0},
+            ],
+        ),
+    ],
+)
+def test_distribution_genero_resolves_candidate_level_labels_across_recortes(tmp_path, ano, cargo, somente_eleitos, expected):
+    df = _distribution_regression_df()
+    csv_path = tmp_path / "distribution_regression.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    try:
+        pandas_payload = pandas_service.distribution(
+            group_by="genero",
+            ano=ano,
+            cargo=cargo,
+            somente_eleitos=somente_eleitos,
+        )
+        duckdb_payload = duckdb_service.distribution(
+            group_by="genero",
+            ano=ano,
+            cargo=cargo,
+            somente_eleitos=somente_eleitos,
+        )
+    finally:
+        duckdb_service.close()
+
+    expected_by_label = _distribution_items_by_label(expected)
+    assert _distribution_items_by_label(pandas_payload) == expected_by_label
+    assert _distribution_items_by_label(duckdb_payload) == expected_by_label
+
+
+def test_distribution_demographic_fields_prefer_informative_values_over_na(tmp_path):
+    df = _distribution_regression_df()
+    csv_path = tmp_path / "distribution_demographics.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    try:
+        pandas_instrucao = pandas_service.distribution(group_by="instrucao", ano=2020, cargo="Prefeito")
+        duckdb_instrucao = duckdb_service.distribution(group_by="instrucao", ano=2020, cargo="Prefeito")
+        pandas_cor_raca = pandas_service.distribution(group_by="cor_raca", ano=2020, cargo="Prefeito")
+        duckdb_cor_raca = duckdb_service.distribution(group_by="cor_raca", ano=2020, cargo="Prefeito")
+        pandas_estado_civil = pandas_service.distribution(group_by="estado_civil", ano=2020, cargo="Prefeito")
+        duckdb_estado_civil = duckdb_service.distribution(group_by="estado_civil", ano=2020, cargo="Prefeito")
+    finally:
+        duckdb_service.close()
+
+    expected_instrucao = {
+        "SUPERIOR COMPLETO": 2.0,
+        "ENSINO MEDIO COMPLETO": 1.0,
+    }
+    expected_cor_raca = {
+        "BRANCA": 1.0,
+        "PARDA": 1.0,
+        "PRETA": 1.0,
+    }
+    expected_estado_civil = {
+        "CASADO(A)": 1.0,
+        "SOLTEIRO(A)": 1.0,
+        "DIVORCIADO(A)": 1.0,
+    }
+
+    assert {item["label"]: item["value"] for item in pandas_instrucao} == expected_instrucao
+    assert {item["label"]: item["value"] for item in duckdb_instrucao} == expected_instrucao
+    assert {item["label"]: item["value"] for item in pandas_cor_raca} == expected_cor_raca
+    assert {item["label"]: item["value"] for item in duckdb_cor_raca} == expected_cor_raca
+    assert {item["label"]: item["value"] for item in pandas_estado_civil} == expected_estado_civil
+    assert {item["label"]: item["value"] for item in duckdb_estado_civil} == expected_estado_civil
+
+
+def test_occupation_gender_omits_na_and_rows_without_known_gender(tmp_path):
+    df = pd.DataFrame(
+        [
+            {"DS_OCUPACAO": "ADVOGADO", "DS_GENERO": "M"},
+            {"DS_OCUPACAO": "N/A", "DS_GENERO": "F"},
+            {"DS_OCUPACAO": "", "DS_GENERO": "M"},
+            {"DS_OCUPACAO": "PROFESSOR", "DS_GENERO": "IGNORADO"},
+        ]
+    )
+    csv_path = tmp_path / "occupation_gender_hide_na.csv"
+    df.to_csv(csv_path, index=False)
+
+    pandas_service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+    duckdb_service = DuckDBAnalyticsService.from_file(
+        file_path=str(csv_path),
+        default_top_n=20,
+        max_top_n=100,
+    )
+
+    try:
+        pandas_payload = pandas_service.occupation_gender_distribution()
+        duckdb_payload = duckdb_service.occupation_gender_distribution()
+    finally:
+        duckdb_service.close()
+
+    expected = [{"ocupacao": "ADVOGADO", "masculino": 1, "feminino": 0}]
+    assert pandas_payload == expected
+    assert duckdb_payload == expected
 
 
 @pytest.mark.parametrize(
