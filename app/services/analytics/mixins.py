@@ -20,6 +20,28 @@ import unicodedata
 
 
 class AnalyticsSupportMixin:
+    _NA_LABELS = {
+        "",
+        "N/A",
+        "NA",
+        "NONE",
+        "NAN",
+        "NULL",
+        "NULO",
+        "NAO INFORMADO",
+        "NAO INFORMADA",
+        "NÃO INFORMADO",
+        "NÃO INFORMADA",
+        "NAO DIVULGAVEL",
+        "NÃO DIVULGAVEL",
+        "NÃO DIVULGÁVEL",
+        "NAO DECLARADO",
+        "NÃO DECLARADO",
+        "SEM INFORMACAO",
+        "SEM INFORMAÇÃO",
+        "IGNORADO",
+    }
+
     def _normalize_value(self, value: object, uppercase: bool = False) -> str:
         text = str(value or "").strip()
         if not text:
@@ -110,6 +132,93 @@ class AnalyticsSupportMixin:
         if "INDIGENA" in text:
             return "INDIGENA"
         return "NAO_INFORMADO"
+
+    def _is_na_label(self, value: object) -> bool:
+        return self._normalize_value(value or "", uppercase=True) in self._NA_LABELS
+
+    def _distribution_uses_candidate_resolution(self, group_by: str) -> bool:
+        return group_by in {"status", "genero", "instrucao", "cor_raca", "estado_civil", "ocupacao", "cargo"}
+
+    def _normalize_distribution_label(self, group_by: str, value: object) -> str:
+        raw = str(value or "").strip()
+        text = self._normalize_value(raw, uppercase=True)
+        if not text or text in self._NA_LABELS:
+            return "N/A"
+
+        if group_by == "genero":
+            if text in {"M", "MASC", "MASCULINO", "MASCULINA"} or text.startswith("MASC"):
+                return "MASCULINO"
+            if text in {"F", "FEM", "FEMININO", "FEMININA"} or text.startswith("FEM"):
+                return "FEMININO"
+            return "N/A"
+
+        if group_by == "cor_raca":
+            category = self._normalize_cor_raca_category(raw)
+            if category == "NAO_INFORMADO":
+                return "N/A"
+            return category
+
+        return raw if raw else "N/A"
+
+    def _candidate_group_key(self, df: pd.DataFrame) -> pd.Series | None:
+        col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_candidate_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        if not col_candidate_key and not col_candidate_name:
+            return None
+
+        base_key = (
+            self._normalize_text(df[col_candidate_key]).replace("", pd.NA)
+            if col_candidate_key
+            else self._normalize_text(df[col_candidate_name]).str.lower().replace("", pd.NA)
+        )
+        if base_key is None:
+            return None
+
+        key = base_key.astype("string")
+        for col in ("ANO_ELEICAO", "NR_ANO_ELEICAO", "NR_TURNO", "CD_TURNO", "DS_TURNO", "DS_CARGO", "DS_CARGO_D"):
+            resolved = self._pick_col([col])
+            if resolved and resolved in df.columns:
+                part = self._normalize_text(df[resolved]).replace("", pd.NA).astype("string")
+                key = key.str.cat(part, sep="|", na_rep="")
+        return key.replace("", pd.NA)
+
+    def _resolve_distribution_labels(self, df: pd.DataFrame, group_by: str, target_col: str) -> pd.Series:
+        labels = df[target_col].map(lambda value: self._normalize_distribution_label(group_by, value))
+        if df.empty or not self._distribution_uses_candidate_resolution(group_by):
+            return labels
+
+        candidate_key = self._candidate_group_key(df)
+        if candidate_key is None:
+            return labels
+
+        prepared = pd.DataFrame({"_candidate_key": candidate_key, "_label": labels}, index=df.index).dropna(
+            subset=["_candidate_key"]
+        )
+        if prepared.empty:
+            return labels
+
+        ranked = prepared.assign(_is_known=(prepared["_label"] != "N/A").astype(int))
+        per_candidate = (
+            ranked.groupby(["_candidate_key", "_label"], as_index=False)
+            .agg(_count=("_label", "size"), _is_known=("_is_known", "max"))
+            .sort_values(["_candidate_key", "_is_known", "_count", "_label"], ascending=[True, False, False, True])
+            .drop_duplicates(subset=["_candidate_key"], keep="first")
+        )
+        return per_candidate["_label"]
+
+    def _filter_distribution_items(self, items: list[dict]) -> list[dict]:
+        filtered = [item for item in items if not self._is_na_label(item.get("label"))]
+        total = float(sum(float(item.get("value") or 0) for item in filtered))
+        if total <= 0:
+            return []
+        return [
+            {
+                "label": str(item["label"]),
+                "value": float(item["value"] or 0),
+                "percentage": round((float(item["value"] or 0) / total) * 100, 2),
+            }
+            for item in filtered
+        ]
 
     def _dedupe_national_presidential_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:

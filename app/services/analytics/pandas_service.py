@@ -489,10 +489,9 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         )
         if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio) and group_by != "uf":
             df = self._dedupe_national_presidential_candidates(df)
+        labels = self._resolve_distribution_labels(df, group_by, target_col)
         counts = (
-            df[target_col]
-            .fillna("N/A")
-            .astype(str)
+            labels
             .value_counts(dropna=False)
             .rename_axis("label")
             .reset_index(name="value")
@@ -509,7 +508,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     "percentage": round((val / total) * 100, 2),
                 }
             )
-        return items
+        return self._filter_distribution_items(items)
 
     def cor_raca_comparativo(
         self,
@@ -522,18 +521,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         col_cor_raca = self._pick_col(["DS_COR_RACA"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
         if not col_cor_raca:
-            return {
-                "items": [
-                    {
-                        "categoria": COR_RACA_CATEGORY_LABELS[key],
-                        "candidatos": 0,
-                        "eleitos": 0,
-                        "percentual_candidatos": 0.0,
-                        "percentual_eleitos": 0.0,
-                    }
-                    for key in COR_RACA_CATEGORY_ORDER
-                ]
-            }
+            return {"items": []}
 
         df = self._apply_filters(
             ano=ano,
@@ -544,18 +532,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             somente_eleitos=False,
         )
         if df.empty:
-            return {
-                "items": [
-                    {
-                        "categoria": COR_RACA_CATEGORY_LABELS[key],
-                        "candidatos": 0,
-                        "eleitos": 0,
-                        "percentual_candidatos": 0.0,
-                        "percentual_eleitos": 0.0,
-                    }
-                    for key in COR_RACA_CATEGORY_ORDER
-                ]
-            }
+            return {"items": []}
 
         categorias = df[col_cor_raca].apply(self._normalize_cor_raca_category)
         candidatos = categorias.value_counts()
@@ -566,13 +543,18 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             else pd.Series(dtype="int64")
         )
 
-        total_candidatos = int(candidatos.sum() or 0)
-        total_eleitos = int(eleitos.sum() or 0)
+        valid_keys = [key for key in COR_RACA_CATEGORY_ORDER if key != "NAO_INFORMADO"]
+        total_candidatos = int(sum(int(candidatos.get(key, 0)) for key in valid_keys))
+        total_eleitos = int(sum(int(eleitos.get(key, 0)) for key in valid_keys))
 
         items: list[dict] = []
         for key in COR_RACA_CATEGORY_ORDER:
+            if key == "NAO_INFORMADO":
+                continue
             qtd_candidatos = int(candidatos.get(key, 0))
             qtd_eleitos = int(eleitos.get(key, 0))
+            if qtd_candidatos == 0 and qtd_eleitos == 0:
+                continue
             items.append(
                 {
                     "categoria": COR_RACA_CATEGORY_LABELS[key],
@@ -629,6 +611,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             .agg(masculino=("masculino", "sum"), feminino=("feminino", "sum"))
             .astype({"masculino": int, "feminino": int})
         )
+        grouped = grouped[(grouped["ocupacao"] != "N/A") & ((grouped["masculino"] > 0) | (grouped["feminino"] > 0))]
         grouped = grouped.sort_values(["masculino", "feminino", "ocupacao"], ascending=[False, False, True])
 
         return [

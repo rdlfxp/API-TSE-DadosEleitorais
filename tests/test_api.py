@@ -680,16 +680,18 @@ def test_cor_raca_comparativo_endpoint_normalizes_and_orders_categories(client: 
     assert response.status_code == 200
     payload = response.json()
     categorias = [item["categoria"] for item in payload["items"]]
-    assert categorias == ["Branca", "Preta", "Parda", "Amarela", "Indígena", "Não informado"]
+    assert categorias == ["Branca", "Preta", "Parda"]
     by_categoria = {item["categoria"]: item for item in payload["items"]}
     assert by_categoria["Branca"]["candidatos"] == 1
     assert by_categoria["Branca"]["eleitos"] == 1
+    assert by_categoria["Branca"]["percentual_candidatos"] == 25.0
     assert by_categoria["Preta"]["candidatos"] == 1
     assert by_categoria["Preta"]["eleitos"] == 1
+    assert by_categoria["Preta"]["percentual_candidatos"] == 25.0
     assert by_categoria["Parda"]["candidatos"] == 2
     assert by_categoria["Parda"]["eleitos"] == 0
-    assert by_categoria["Não informado"]["candidatos"] == 1
-    assert by_categoria["Não informado"]["eleitos"] == 0
+    assert by_categoria["Parda"]["percentual_candidatos"] == 50.0
+    assert "Não informado" not in by_categoria
 
 
 def test_cor_raca_comparativo_endpoint_respects_filters(client: TestClient):

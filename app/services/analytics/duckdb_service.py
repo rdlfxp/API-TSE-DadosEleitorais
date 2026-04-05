@@ -228,6 +228,46 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             base = f"UPPER({base})"
         return f"(CASE WHEN {base} = '' THEN CAST(NULL AS VARCHAR) ELSE {base} END)"
 
+    def _candidate_group_key_sql_expr(self) -> str | None:
+        col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_candidate_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        base_candidate = self._nullable_text_sql_expr(col_candidate_key) if col_candidate_key else self._nullable_text_sql_expr(col_candidate_name)
+        if base_candidate == "CAST(NULL AS VARCHAR)":
+            return None
+
+        parts = [base_candidate]
+        for col in ("ANO_ELEICAO", "NR_ANO_ELEICAO", "NR_TURNO", "CD_TURNO", "DS_TURNO", "DS_CARGO", "DS_CARGO_D"):
+            resolved = self._pick_col([col])
+            if resolved:
+                parts.append(self._nullable_text_sql_expr(resolved))
+        return f"NULLIF(concat_ws('|', {', '.join(parts)}), '')"
+
+    def _distribution_label_sql_expr(self, group_by: str, target_col: str) -> str:
+        trimmed = f"regexp_replace(TRIM(CAST({target_col} AS VARCHAR)), '\\s+', ' ')"
+        normalized = self._normalized_sql_text_expr(target_col)
+        normalized_or_empty = f"COALESCE({normalized}, '')"
+        na_values = "', '".join(sorted(self._NA_LABELS))
+        if group_by == "genero":
+            return (
+                "CASE "
+                f"WHEN {normalized_or_empty} = '' OR {normalized_or_empty} IN ('{na_values}') THEN 'N/A' "
+                f"WHEN {normalized_or_empty} IN ('M', 'MASC', 'MASCULINO', 'MASCULINA') OR {normalized_or_empty} LIKE 'MASC%' THEN 'MASCULINO' "
+                f"WHEN {normalized_or_empty} IN ('F', 'FEM', 'FEMININO', 'FEMININA') OR {normalized_or_empty} LIKE 'FEM%' THEN 'FEMININO' "
+                "ELSE 'N/A' END"
+            )
+        if group_by == "cor_raca":
+            return (
+                "CASE "
+                f"WHEN {normalized_or_empty} = '' OR {normalized_or_empty} IN ('{na_values}') THEN 'N/A' "
+                f"WHEN {normalized_or_empty} LIKE '%BRANCA%' THEN 'BRANCA' "
+                f"WHEN {normalized_or_empty} LIKE '%PRETA%' OR {normalized_or_empty} LIKE '%NEGRA%' THEN 'PRETA' "
+                f"WHEN {normalized_or_empty} LIKE '%PARDA%' THEN 'PARDA' "
+                f"WHEN {normalized_or_empty} LIKE '%AMARELA%' THEN 'AMARELA' "
+                f"WHEN {normalized_or_empty} LIKE '%INDIG%' THEN 'INDIGENA' "
+                "ELSE 'N/A' END"
+            )
+        return f"CASE WHEN {normalized_or_empty} = '' OR {normalized_or_empty} IN ('{na_values}') THEN 'N/A' ELSE {trimmed} END"
+
     def _parse_int(self, value: object) -> int | None:
         try:
             if value is None:
@@ -864,43 +904,88 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 if col_situacao and col_situacao in df.columns:
                     df = df[self._is_elected_series(df[col_situacao])]
             df = self._dedupe_national_presidential_candidates(df)
+            labels = self._resolve_distribution_labels(df, group_by, target_col)
             counts = (
-                df[target_col]
-                .fillna("N/A")
-                .astype(str)
-                .str.strip()
-                .replace("", "N/A")
+                labels
                 .value_counts(dropna=False)
                 .rename_axis("label")
                 .reset_index(name="value")
             )
             total = float(counts["value"].sum()) or 1.0
-            return [
+            return self._filter_distribution_items([
                 {
                     "label": str(row["label"]),
                     "value": float(row["value"]),
                     "percentage": round((float(row["value"]) / total) * 100, 2),
                 }
                 for _, row in counts.iterrows()
-            ]
+            ])
+        label_expr = self._distribution_label_sql_expr(group_by, target_col)
+        if self._distribution_uses_candidate_resolution(group_by):
+            candidate_key_expr = self._candidate_group_key_sql_expr()
+            if candidate_key_expr:
+                rows = self._rows(
+                    (
+                        "WITH prepared AS ("
+                        "  SELECT "
+                        f"    {candidate_key_expr} AS candidate_key, "
+                        f"    {label_expr} AS label "
+                        f"  FROM analytics {where}"
+                        "), ranked AS ("
+                        "  SELECT "
+                        "    candidate_key, "
+                        "    label, "
+                        "    COUNT(*) AS label_count, "
+                        "    MAX(CASE WHEN label <> 'N/A' THEN 1 ELSE 0 END) AS known_rank "
+                        "  FROM prepared "
+                        "  WHERE candidate_key IS NOT NULL "
+                        "  GROUP BY 1, 2"
+                        "), resolved AS ("
+                        "  SELECT candidate_key, label "
+                        "  FROM ("
+                        "    SELECT "
+                        "      candidate_key, "
+                        "      label, "
+                        "      ROW_NUMBER() OVER ("
+                        "        PARTITION BY candidate_key "
+                        "        ORDER BY known_rank DESC, label_count DESC, label ASC"
+                        "      ) AS rn "
+                        "    FROM ranked"
+                        "  ) ranked_labels "
+                        "  WHERE rn = 1"
+                        ") "
+                        "SELECT label, COUNT(*) AS value "
+                        "FROM resolved GROUP BY 1 ORDER BY value DESC"
+                    ),
+                    params,
+                )
+                total = float(sum(int(r[1]) for r in rows) or 1)
+                return self._filter_distribution_items([
+                    {
+                        "label": str(r[0]),
+                        "value": float(r[1]),
+                        "percentage": round((float(r[1]) / total) * 100, 2),
+                    }
+                    for r in rows
+                ])
         rows = self._rows(
             (
                 "SELECT "
-                f"COALESCE(NULLIF(TRIM(CAST({target_col} AS VARCHAR)), ''), 'N/A') AS label, "
+                f"{label_expr} AS label, "
                 "COUNT(*) AS value "
                 f"FROM analytics {where} GROUP BY 1 ORDER BY value DESC"
             ),
             params,
         )
         total = float(sum(int(r[1]) for r in rows) or 1)
-        return [
+        return self._filter_distribution_items([
             {
                 "label": str(r[0]),
                 "value": float(r[1]),
                 "percentage": round((float(r[1]) / total) * 100, 2),
             }
             for r in rows
-        ]
+        ])
 
     def cor_raca_comparativo(
         self,
@@ -913,18 +998,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         col_cor_raca = self._pick_col(["DS_COR_RACA"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
         if not col_cor_raca:
-            return {
-                "items": [
-                    {
-                        "categoria": COR_RACA_CATEGORY_LABELS[key],
-                        "candidatos": 0,
-                        "eleitos": 0,
-                        "percentual_candidatos": 0.0,
-                        "percentual_eleitos": 0.0,
-                    }
-                    for key in COR_RACA_CATEGORY_ORDER
-                ]
-            }
+            return {"items": []}
 
         where, params = self._where(
             ano=ano,
@@ -970,14 +1044,19 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             str(row[0]): {"candidatos": int(row[1] or 0), "eleitos": int(row[2] or 0)}
             for row in rows
         }
-        total_candidatos = int(sum(v["candidatos"] for v in by_category.values()))
-        total_eleitos = int(sum(v["eleitos"] for v in by_category.values()))
+        valid_keys = [key for key in COR_RACA_CATEGORY_ORDER if key != "NAO_INFORMADO"]
+        total_candidatos = int(sum(by_category.get(key, {"candidatos": 0})["candidatos"] for key in valid_keys))
+        total_eleitos = int(sum(by_category.get(key, {"eleitos": 0})["eleitos"] for key in valid_keys))
 
         items: list[dict] = []
         for key in COR_RACA_CATEGORY_ORDER:
+            if key == "NAO_INFORMADO":
+                continue
             values = by_category.get(key, {"candidatos": 0, "eleitos": 0})
             candidatos = int(values["candidatos"])
             eleitos = int(values["eleitos"])
+            if candidatos == 0 and eleitos == 0:
+                continue
             items.append(
                 {
                     "categoria": COR_RACA_CATEGORY_LABELS[key],
@@ -1034,6 +1113,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         return [
             {"ocupacao": str(r[0]), "masculino": int(r[1] or 0), "feminino": int(r[2] or 0)}
             for r in rows
+            if str(r[0]) != "N/A" and (int(r[1] or 0) > 0 or int(r[2] or 0) > 0)
         ]
 
     def age_stats(
