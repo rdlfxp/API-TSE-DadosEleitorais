@@ -20,6 +20,9 @@ ANALYTICS_CACHE: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
 DATA_LAST_MODIFIED_TS: float | None = None
 DATA_CACHE_VERSION: str | None = None
 
+EDGE_CACHE_180_DAYS_SECONDS = 60 * 60 * 24 * 180
+EDGE_CACHE_365_DAYS_SECONDS = 60 * 60 * 24 * 365
+
 MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
     "/v1/analytics/filtros": 3600,
     "/v1/analytics/overview": 600,
@@ -31,21 +34,21 @@ MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
 }
 
 EDGE_CACHE_TTL_BY_PATH: dict[str, int] = {
-    "/v1/analytics/filtros": 3600,
-    "/v1/analytics/overview": 600,
-    "/v1/analytics/top-candidatos": 300,
-    "/v1/analytics/candidatos/search": 120,
-    "/v1/analytics/candidatos": 120,
-    "/v1/analytics/distribuicao": 600,
-    "/v1/analytics/cor-raca-comparativo": 1200,
-    "/v1/analytics/ocupacao-genero": 1200,
-    "/v1/analytics/idade": 1200,
-    "/v1/analytics/serie-temporal": 1200,
-    "/v1/analytics/ranking": 600,
-    "/v1/analytics/mapa-uf": 1200,
-    "/v1/analytics/vagas-oficiais": 1800,
-    "/v1/analytics/polarizacao": 1200,
-    "/v1/candidates/compare": 600,
+    "/v1/analytics/filtros": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/overview": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/top-candidatos": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/candidatos/search": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/candidatos": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/distribuicao": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/cor-raca-comparativo": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/ocupacao-genero": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/idade": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/serie-temporal": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/ranking": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/mapa-uf": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/vagas-oficiais": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/polarizacao": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/candidates/compare": EDGE_CACHE_365_DAYS_SECONDS,
 }
 
 
@@ -162,13 +165,13 @@ def edge_cache_ttl_for_path(path: str) -> int | None:
     if path in EDGE_CACHE_TTL_BY_PATH:
         return EDGE_CACHE_TTL_BY_PATH[path]
     if path.startswith("/v1/candidates/") and path.endswith("/summary"):
-        return 1800
+        return EDGE_CACHE_365_DAYS_SECONDS
     if path.startswith("/v1/candidates/") and path.endswith("/vote-history"):
-        return 1800
+        return EDGE_CACHE_365_DAYS_SECONDS
     if path.startswith("/v1/candidates/") and path.endswith("/electorate-profile"):
-        return 1800
+        return EDGE_CACHE_365_DAYS_SECONDS
     if path.startswith("/v1/candidates/") and path.endswith("/vote-distribution"):
-        return 1200
+        return EDGE_CACHE_365_DAYS_SECONDS
     return None
 
 
