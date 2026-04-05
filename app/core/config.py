@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     rate_limit_max_requests_per_ip: int = 120
     analytics_cache_ttl_seconds: int = 60
     analytics_top_candidates_cache_ttl_seconds: int = 45
-    analytics_search_cache_ttl_seconds: int = 43200
-    analytics_vote_history_cache_ttl_seconds: int = 86400
+    analytics_search_cache_ttl_seconds: int = 15552000
+    analytics_vote_history_cache_ttl_seconds: int = 31536000
     analytics_cache_max_entries: int = 256
     analytics_cache_max_total_mb: int = 16
     analytics_cache_max_entry_kb: int = 256
