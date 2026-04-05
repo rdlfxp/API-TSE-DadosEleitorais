@@ -416,6 +416,8 @@ def test_overview_with_filters(client: TestClient):
         params={"ano": 2022, "turno": 1, "uf": "SP", "cargo": "Deputado Estadual"},
     )
     assert response.status_code == 200
+    assert response.headers["X-Cache-Policy"] == "public"
+    assert response.headers["X-Cache-TTL"] == str(60 * 60 * 24 * 180)
     payload = response.json()
     assert payload["total_registros"] == 2
     assert payload["total_candidatos"] == 2
@@ -992,6 +994,8 @@ def test_top_candidates_includes_stable_identity_fields(client: TestClient):
 def test_candidate_vote_history_endpoint(client: TestClient):
     response = client.get("/v1/candidates/4/vote-history", params={"state": "SP", "office": "Prefeito"})
     assert response.status_code == 200
+    assert response.headers["X-Cache-Policy"] == "public"
+    assert response.headers["X-Cache-TTL"] == str(60 * 60 * 24 * 365)
     payload = response.json()
     assert payload["candidate_id"] == "4"
     assert "nr_cpf_candidato" in payload
