@@ -31,7 +31,17 @@ ANALYTICS_ENCODING=utf-8
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS_PER_IP=120
+REDIS_ENABLED=true
+REDIS_URL=redis://redis:6379/0
 ```
+
+Quando a stack sobe via `docker-compose`, o projeto agora inclui um Redis com persistencia **RDB** usando volume Docker em `/data`. Os snapshots sao gravados como `dump.rdb` e o Redis continua usando TTL por chave para cache e rate limiting.
+
+Configuracao padrao do snapshot:
+
+- salva se houver ao menos 1 mudanca em 900 segundos
+- salva se houver ao menos 10 mudancas em 300 segundos
+- salva se houver ao menos 10000 mudancas em 60 segundos
 
 Para volume alto (produção), prefira `analytics.parquet` com DuckDB:
 
