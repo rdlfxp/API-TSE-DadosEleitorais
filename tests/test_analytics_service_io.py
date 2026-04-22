@@ -653,6 +653,8 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
                 "SQ_CANDIDATO": 30,
                 "NM_CANDIDATO": "Presidente X",
                 "SG_PARTIDO": "PXX",
+                "DS_OCUPACAO": "TORNEIRO MECANICO",
+                "DS_GENERO": "MASCULINO",
                 "QT_VOTOS_NOMINAIS_VALIDOS": 110000,
             },
             {
@@ -665,6 +667,8 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
                 "SQ_CANDIDATO": 30,
                 "NM_CANDIDATO": "Presidente X",
                 "SG_PARTIDO": "PXX",
+                "DS_OCUPACAO": "TORNEIRO MECANICO",
+                "DS_GENERO": "MASCULINO",
                 "QT_VOTOS_NOMINAIS_VALIDOS": 90000,
             },
             {
@@ -677,6 +681,8 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
                 "SQ_CANDIDATO": 31,
                 "NM_CANDIDATO": "Presidente Y",
                 "SG_PARTIDO": "PYY",
+                "DS_OCUPACAO": "ADVOGADO",
+                "DS_GENERO": "FEMININO",
                 "QT_VOTOS_NOMINAIS_VALIDOS": 50000,
             },
             {
@@ -689,7 +695,23 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
                 "SQ_CANDIDATO": 31,
                 "NM_CANDIDATO": "Presidente Y",
                 "SG_PARTIDO": "PYY",
+                "DS_OCUPACAO": "ADVOGADO",
+                "DS_GENERO": "FEMININO",
                 "QT_VOTOS_NOMINAIS_VALIDOS": 40000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "SAO PAULO",
+                "DS_CARGO": "Presidente",
+                "DS_SIT_TOT_TURNO": "2º TURNO",
+                "SQ_CANDIDATO": 30,
+                "NM_CANDIDATO": "Presidente X",
+                "SG_PARTIDO": "PXX",
+                "DS_OCUPACAO": "TORNEIRO MECANICO",
+                "DS_GENERO": "MASCULINO",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 100000,
             },
         ]
     )
@@ -721,6 +743,18 @@ def test_presidente_nacional_analytics_are_consistent_between_pandas_and_duckdb(
         page=1,
         page_size=50,
     )
+    expected_occupation_gender = [
+        {"ocupacao": "TORNEIRO MECANICO", "masculino": 1, "feminino": 0},
+        {"ocupacao": "ADVOGADO", "masculino": 0, "feminino": 1},
+    ]
+    assert pandas_service.occupation_gender_distribution(ano=2022, cargo="Presidente") == expected_occupation_gender
+    assert duckdb_service.occupation_gender_distribution(ano=2022, cargo="Presidente") == expected_occupation_gender
+    assert pandas_service.occupation_gender_distribution(ano=2022, cargo="Presidente", somente_eleitos=True) == [
+        {"ocupacao": "TORNEIRO MECANICO", "masculino": 1, "feminino": 0}
+    ]
+    assert duckdb_service.occupation_gender_distribution(ano=2022, cargo="Presidente", somente_eleitos=True) == [
+        {"ocupacao": "TORNEIRO MECANICO", "masculino": 1, "feminino": 0}
+    ]
 
 
 def test_top_candidates_without_turno_uses_latest_round_consistently_between_pandas_and_duckdb(tmp_path):

@@ -228,7 +228,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             base = f"UPPER({base})"
         return f"(CASE WHEN {base} = '' THEN CAST(NULL AS VARCHAR) ELSE {base} END)"
 
-    def _candidate_group_key_sql_expr(self) -> str | None:
+    def _candidate_group_key_sql_expr(self, *, include_turno: bool = True) -> str | None:
         col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_candidate_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         base_candidate = self._nullable_text_sql_expr(col_candidate_key) if col_candidate_key else self._nullable_text_sql_expr(col_candidate_name)
@@ -236,7 +236,10 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             return None
 
         parts = [base_candidate]
-        for col in ("ANO_ELEICAO", "NR_ANO_ELEICAO", "NR_TURNO", "CD_TURNO", "DS_TURNO", "DS_CARGO", "DS_CARGO_D"):
+        key_columns = ["ANO_ELEICAO", "NR_ANO_ELEICAO", "DS_CARGO", "DS_CARGO_D"]
+        if include_turno:
+            key_columns[2:2] = ["NR_TURNO", "CD_TURNO", "DS_TURNO"]
+        for col in key_columns:
             resolved = self._pick_col([col])
             if resolved:
                 parts.append(self._nullable_text_sql_expr(resolved))
@@ -1092,6 +1095,70 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             municipio=municipio,
             somente_eleitos=somente_eleitos,
         )
+        candidate_key_expr = self._candidate_group_key_sql_expr(include_turno=False)
+        if candidate_key_expr:
+            ocupacao_expr = self._distribution_label_sql_expr("ocupacao", col_ocupacao)
+            genero_expr = self._distribution_label_sql_expr("genero", col_genero)
+            rows = self._rows(
+                (
+                    "WITH prepared AS ("
+                    "  SELECT "
+                    f"    {candidate_key_expr} AS candidate_key, "
+                    f"    {ocupacao_expr} AS ocupacao, "
+                    f"    {genero_expr} AS genero "
+                    f"  FROM analytics {where}"
+                    "), occupation_ranked AS ("
+                    "  SELECT candidate_key, ocupacao "
+                    "  FROM ("
+                    "    SELECT "
+                    "      candidate_key, "
+                    "      ocupacao, "
+                    "      ROW_NUMBER() OVER ("
+                    "        PARTITION BY candidate_key "
+                    "        ORDER BY MAX(CASE WHEN ocupacao <> 'N/A' THEN 1 ELSE 0 END) DESC, COUNT(*) DESC, ocupacao ASC"
+                    "      ) AS rn "
+                    "    FROM prepared "
+                    "    WHERE candidate_key IS NOT NULL "
+                    "    GROUP BY 1, 2"
+                    "  ) ranked "
+                    "  WHERE rn = 1"
+                    "), gender_ranked AS ("
+                    "  SELECT candidate_key, genero "
+                    "  FROM ("
+                    "    SELECT "
+                    "      candidate_key, "
+                    "      genero, "
+                    "      ROW_NUMBER() OVER ("
+                    "        PARTITION BY candidate_key "
+                    "        ORDER BY MAX(CASE WHEN genero <> 'N/A' THEN 1 ELSE 0 END) DESC, COUNT(*) DESC, genero ASC"
+                    "      ) AS rn "
+                    "    FROM prepared "
+                    "    WHERE candidate_key IS NOT NULL "
+                    "    GROUP BY 1, 2"
+                    "  ) ranked "
+                    "  WHERE rn = 1"
+                    "), resolved AS ("
+                    "  SELECT o.ocupacao, g.genero "
+                    "  FROM occupation_ranked o "
+                    "  JOIN gender_ranked g USING (candidate_key) "
+                    "  WHERE o.ocupacao <> 'N/A' AND g.genero IN ('MASCULINO', 'FEMININO')"
+                    ") "
+                    "SELECT "
+                    "  ocupacao, "
+                    "  SUM(CASE WHEN genero = 'MASCULINO' THEN 1 ELSE 0 END) AS masculino, "
+                    "  SUM(CASE WHEN genero = 'FEMININO' THEN 1 ELSE 0 END) AS feminino "
+                    "FROM resolved "
+                    "GROUP BY 1 "
+                    "ORDER BY masculino DESC, feminino DESC, ocupacao ASC"
+                ),
+                params,
+            )
+            return [
+                {"ocupacao": str(r[0]), "masculino": int(r[1] or 0), "feminino": int(r[2] or 0)}
+                for r in rows
+                if int(r[1] or 0) > 0 or int(r[2] or 0) > 0
+            ]
+
         rows = self._rows(
             (
                 "SELECT "

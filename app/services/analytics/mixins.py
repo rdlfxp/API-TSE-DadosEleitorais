@@ -160,7 +160,7 @@ class AnalyticsSupportMixin:
 
         return raw if raw else "N/A"
 
-    def _candidate_group_key(self, df: pd.DataFrame) -> pd.Series | None:
+    def _candidate_group_key(self, df: pd.DataFrame, *, include_turno: bool = True) -> pd.Series | None:
         col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         col_candidate_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         if not col_candidate_key and not col_candidate_name:
@@ -175,7 +175,10 @@ class AnalyticsSupportMixin:
             return None
 
         key = base_key.astype("string")
-        for col in ("ANO_ELEICAO", "NR_ANO_ELEICAO", "NR_TURNO", "CD_TURNO", "DS_TURNO", "DS_CARGO", "DS_CARGO_D"):
+        key_columns = ["ANO_ELEICAO", "NR_ANO_ELEICAO", "DS_CARGO", "DS_CARGO_D"]
+        if include_turno:
+            key_columns[2:2] = ["NR_TURNO", "CD_TURNO", "DS_TURNO"]
+        for col in key_columns:
             resolved = self._pick_col([col])
             if resolved and resolved in df.columns:
                 part = self._normalize_text(df[resolved]).replace("", pd.NA).astype("string")
