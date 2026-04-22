@@ -595,6 +595,55 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         if df.empty:
             return []
 
+        candidate_key = self._candidate_group_key(df, include_turno=False)
+        if candidate_key is not None:
+            occupation_labels = df[col_ocupacao].map(lambda value: self._normalize_distribution_label("ocupacao", value))
+            gender_labels = df[col_genero].map(lambda value: self._normalize_distribution_label("genero", value))
+            prepared = pd.DataFrame(
+                {
+                    "_candidate_key": candidate_key,
+                    "ocupacao": occupation_labels,
+                    "genero": gender_labels,
+                },
+                index=df.index,
+            ).dropna(subset=["_candidate_key"])
+            if not prepared.empty:
+                ranked_occupation = prepared.assign(_is_known=(prepared["ocupacao"] != "N/A").astype(int))
+                per_candidate_occupation = (
+                    ranked_occupation.groupby(["_candidate_key", "ocupacao"], as_index=False)
+                    .agg(_count=("ocupacao", "size"), _is_known=("_is_known", "max"))
+                    .sort_values(["_candidate_key", "_is_known", "_count", "ocupacao"], ascending=[True, False, False, True])
+                    .drop_duplicates(subset=["_candidate_key"], keep="first")
+                    .loc[:, ["_candidate_key", "ocupacao"]]
+                )
+
+                ranked_gender = prepared.assign(_is_known=(prepared["genero"] != "N/A").astype(int))
+                per_candidate_gender = (
+                    ranked_gender.groupby(["_candidate_key", "genero"], as_index=False)
+                    .agg(_count=("genero", "size"), _is_known=("_is_known", "max"))
+                    .sort_values(["_candidate_key", "_is_known", "_count", "genero"], ascending=[True, False, False, True])
+                    .drop_duplicates(subset=["_candidate_key"], keep="first")
+                    .loc[:, ["_candidate_key", "genero"]]
+                )
+
+                resolved = per_candidate_occupation.merge(per_candidate_gender, on="_candidate_key", how="inner")
+                resolved = resolved[(resolved["ocupacao"] != "N/A") & (resolved["genero"].isin(["MASCULINO", "FEMININO"]))]
+                if not resolved.empty:
+                    grouped = (
+                        resolved.assign(
+                            masculino=(resolved["genero"] == "MASCULINO"),
+                            feminino=(resolved["genero"] == "FEMININO"),
+                        )
+                        .groupby("ocupacao", as_index=False)
+                        .agg(masculino=("masculino", "sum"), feminino=("feminino", "sum"))
+                        .astype({"masculino": int, "feminino": int})
+                    )
+                    grouped = grouped.sort_values(["masculino", "feminino", "ocupacao"], ascending=[False, False, True])
+                    return [
+                        {"ocupacao": str(row["ocupacao"]), "masculino": int(row["masculino"]), "feminino": int(row["feminino"])}
+                        for _, row in grouped.iterrows()
+                    ]
+
         prepared = pd.DataFrame(
             {
                 "ocupacao": df[col_ocupacao].fillna("N/A").astype(str).str.strip().replace("", "N/A"),
