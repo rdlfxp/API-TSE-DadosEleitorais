@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     r2_bucket: str | None = None
     r2_object_key_csv: str = "latest/analytics.csv"
     r2_object_key_parquet: str = "latest/analytics.parquet"
+    r2_object_key_candidate_history: str = "latest/candidate_history.parquet"
     r2_endpoint: str | None = None
     r2_region_name: str = "auto"
     rate_limit_enabled: bool = True

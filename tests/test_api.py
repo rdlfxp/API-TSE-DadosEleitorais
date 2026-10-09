@@ -1174,6 +1174,52 @@ def test_candidate_vote_history_returns_multicargo_multiyear_series(client: Test
     assert payload["items"][0]["round"] == 2
     assert all(item["person_id"] == payload["person_id"] for item in payload["items"])
     assert all(item["canonical_candidate_id"] == payload["canonical_candidate_id"] for item in payload["items"])
+
+
+def test_candidate_vote_history_uses_official_2026_history_identity_without_cpf():
+    history_id = "tse-history:2026:26001"
+    df = pd.DataFrame(
+        [
+            {
+                "ANO_ELEICAO": 2026,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Deputado Estadual",
+                "DS_SIT_TOT_TURNO": "ELEITO POR QP",
+                "SQ_CANDIDATO": 26001,
+                "NR_CANDIDATO": 40123,
+                "NR_CPF_CANDIDATO": pd.NA,
+                "HISTORICO_CANDIDATURA_ID": history_id,
+                "NM_CANDIDATO": "Candidata 2026",
+                "SG_PARTIDO": "PSB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 20000,
+            },
+            {
+                "ANO_ELEICAO": 2022,
+                "NR_TURNO": 1,
+                "SG_UF": "SP",
+                "NM_UE": "CAMPINAS",
+                "DS_CARGO": "Deputado Estadual",
+                "DS_SIT_TOT_TURNO": "SUPLENTE",
+                "SQ_CANDIDATO": 22001,
+                "NR_CANDIDATO": 40111,
+                "NR_CPF_CANDIDATO": pd.NA,
+                "HISTORICO_CANDIDATURA_ID": history_id,
+                "NM_CANDIDATO": "Nome anterior",
+                "SG_PARTIDO": "PSB",
+                "QT_VOTOS_NOMINAIS_VALIDOS": 12000,
+            },
+        ]
+    )
+    service = AnalyticsService(dataframe=df, default_top_n=20, max_top_n=100)
+
+    payload = service.candidate_vote_history("26001")
+
+    assert [item["year"] for item in payload["items"]] == [2026, 2022]
+    assert payload["nr_cpf_candidato"] is None
+    assert payload["person_id"].startswith("person:")
+    assert all(item["person_id"] == payload["person_id"] for item in payload["items"])
     assert all(item["is_projection"] is False for item in payload["items"])
 
 

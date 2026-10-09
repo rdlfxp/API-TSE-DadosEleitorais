@@ -25,6 +25,7 @@ CANONICAL_COLUMNS = [
     "SQ_CANDIDATO",
     "NR_CANDIDATO",
     "NR_CPF_CANDIDATO",
+    "HISTORICO_CANDIDATURA_ID",
     "NM_CANDIDATO",
     "NM_URNA_CANDIDATO",
     "SG_PARTIDO",
@@ -39,6 +40,7 @@ CANONICAL_COLUMNS = [
     "DT_ELEICAO",
     "DS_SIT_TOT_TURNO",
     "QT_VOTOS_NOMINAIS_VALIDOS",
+    "QT_VAGAS",
     "LATITUDE",
     "LONGITUDE",
     "IDADE",
@@ -64,6 +66,15 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=[],
         help="CSVs opcionais de consulta (ex.: consulta_cand/consulta_vagas).",
+    )
+    parser.add_argument(
+        "--historico",
+        nargs="*",
+        default=[],
+        help=(
+            "CSVs opcionais de historico oficial de candidaturas. "
+            "Usado para preservar a identidade multi-ano quando o CPF nao e divulgado."
+        ),
     )
     parser.add_argument(
         "--raw-dir",
@@ -94,6 +105,12 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=["*consulta_cand*.csv", "*consulta_vagas*.csv"],
         help="Padroes glob para descobrir arquivos de consulta em --raw-dir.",
+    )
+    parser.add_argument(
+        "--historico-pattern",
+        nargs="+",
+        default=["*historico_candidatura*.csv"],
+        help="Padroes glob para descobrir arquivos de historico em --raw-dir.",
     )
     parser.add_argument(
         "--exclude-pattern",
@@ -291,6 +308,46 @@ def _normalize_turno(series: pd.Series) -> pd.Series:
     return turno.astype("Int64")
 
 
+TSE_MISSING_TEXT = {
+    "",
+    "#NULO",
+    "#NE",
+    "NAO DIVULGAVEL",
+    "NÃO DIVULGÁVEL",
+    "NAO INFORMADO",
+}
+
+
+def _clean_tse_missing(series: pd.Series) -> pd.Series:
+    text = series.astype("string").str.strip()
+    upper = text.str.upper()
+    numeric_sentinel = upper.isin({"-1", "-3", "-4", "-1.0", "-3.0", "-4.0"})
+    return series.mask(upper.isin(TSE_MISSING_TEXT) | numeric_sentinel, pd.NA)
+
+
+def _normalize_cpf_series(series: pd.Series) -> pd.Series:
+    cleaned = _clean_tse_missing(series)
+
+    def normalize(value: object):
+        if value is None or pd.isna(value):
+            return pd.NA
+        raw = str(value).strip()
+        if raw.startswith("-"):
+            return pd.NA
+        raw = re.sub(r"\.0$", "", raw)
+        digits = re.sub(r"\D", "", raw)
+        if not digits:
+            return pd.NA
+        return digits.zfill(11) if len(digits) <= 11 else digits
+
+    return cleaned.map(normalize).astype("string")
+
+
+def _first_not_null(series: pd.Series):
+    values = series.dropna()
+    return values.iloc[0] if not values.empty else pd.NA
+
+
 def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame:
     if not paths:
         return pd.DataFrame()
@@ -299,6 +356,10 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
     for p in paths:
         df = pd.read_csv(p, sep=sep, encoding=encoding, low_memory=False)
         df = _clean_columns(df)
+        if "SQ_CANDIDATO_ATUAL" in df.columns or "CONSULTA_VAGAS" in Path(p).name.upper():
+            continue
+        if "SQ_CANDIDATO" not in df.columns:
+            continue
         year_col = _find_col(df, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         if year_col is None:
             year_guess = _extract_year_from_path(p)
@@ -306,6 +367,15 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
                 df["ANO_ELEICAO"] = year_guess
         elif year_col != "ANO_ELEICAO":
             df = df.rename(columns={year_col: "ANO_ELEICAO"})
+
+        complement_renames = {
+            "DS_GENERO_FEFC": "DS_GENERO",
+            "DS_COR_RACA_FEFC": "DS_COR_RACA",
+            "NR_IDADE_DATA_POSSE": "IDADE",
+        }
+        for source, target in complement_renames.items():
+            if source in df.columns and target not in df.columns:
+                df = df.rename(columns={source: target})
 
         keep = [
             c
@@ -324,22 +394,198 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
                 "DT_NASCIMENTO",
                 "NM_CANDIDATO",
                 "NM_URNA_CANDIDATO",
+                "IDADE",
             ]
             if c in df.columns
         ]
         if not keep:
             continue
 
-        frames.append(df[keep].copy())
+        prepared = df[keep].copy()
+        if "NR_CPF_CANDIDATO" in prepared.columns:
+            prepared = prepared.assign(
+                NR_CPF_CANDIDATO=_normalize_cpf_series(prepared["NR_CPF_CANDIDATO"])
+            )
+        for col in [
+            "DS_GENERO",
+            "DS_GRAU_INSTRUCAO",
+            "DS_ESTADO_CIVIL",
+            "DS_COR_RACA",
+            "DS_OCUPACAO",
+            "DT_NASCIMENTO",
+            "NM_CANDIDATO",
+            "NM_URNA_CANDIDATO",
+            "IDADE",
+        ]:
+            if col in prepared.columns:
+                prepared = prepared.assign(**{col: _clean_tse_missing(prepared[col])})
+        frames.append(prepared)
 
     if not frames:
         return pd.DataFrame()
 
     consulta = pd.concat(frames, ignore_index=True)
-    key_cols = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO", "NR_CANDIDATO", "NR_CPF_CANDIDATO", "SG_UF", "DS_CARGO"] if c in consulta.columns]
-    if key_cols:
-        consulta = consulta.drop_duplicates(subset=key_cols, keep="last")
+    primary_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in consulta.columns]
+    if len(primary_keys) == 2:
+        value_cols = [c for c in consulta.columns if c not in primary_keys]
+        consulta = (
+            consulta.groupby(primary_keys, dropna=False, as_index=False)[value_cols]
+            .agg(_first_not_null)
+            .copy()
+        )
+    else:
+        fallback_keys = [
+            c
+            for c in ["ANO_ELEICAO", "NR_CANDIDATO", "SG_UF", "DS_CARGO"]
+            if c in consulta.columns
+        ]
+        if fallback_keys:
+            consulta = consulta.drop_duplicates(subset=fallback_keys, keep="last")
     return consulta
+
+
+def _prepare_historico(paths: list[str], sep: str, encoding: str) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for p in paths:
+        df = _clean_columns(pd.read_csv(p, sep=sep, encoding=encoding, low_memory=False))
+        required = {
+            "ANO_ELEICAO_ATUAL",
+            "SQ_CANDIDATO_ATUAL",
+            "ANO_ELEICAO",
+            "SQ_CANDIDATO",
+        }
+        if not required.issubset(df.columns):
+            continue
+        current_year = pd.to_numeric(df["ANO_ELEICAO_ATUAL"], errors="coerce").astype("Int64")
+        current_sq = pd.to_numeric(df["SQ_CANDIDATO_ATUAL"], errors="coerce").astype("Int64")
+        history_id = (
+            "tse-history:"
+            + current_year.astype("string")
+            + ":"
+            + current_sq.astype("string")
+        )
+        frames.append(
+            pd.DataFrame(
+                {
+                    "ANO_ELEICAO": pd.to_numeric(
+                        df["ANO_ELEICAO"], errors="coerce"
+                    ).astype("Int64"),
+                    "SQ_CANDIDATO": pd.to_numeric(
+                        df["SQ_CANDIDATO"], errors="coerce"
+                    ).astype("Int64"),
+                    "HISTORICO_CANDIDATURA_ID": history_id,
+                }
+            )
+        )
+        frames.append(
+            pd.DataFrame(
+                {
+                    "ANO_ELEICAO": current_year,
+                    "SQ_CANDIDATO": current_sq,
+                    "HISTORICO_CANDIDATURA_ID": history_id,
+                }
+            )
+        )
+
+    if not frames:
+        return pd.DataFrame(
+            columns=["ANO_ELEICAO", "SQ_CANDIDATO", "HISTORICO_CANDIDATURA_ID"]
+        )
+
+    result = pd.concat(frames, ignore_index=True).dropna(
+        subset=["ANO_ELEICAO", "SQ_CANDIDATO"]
+    )
+    result = result[result["SQ_CANDIDATO"].notna()]
+    return result.drop_duplicates(
+        subset=["ANO_ELEICAO", "SQ_CANDIDATO"], keep="last"
+    )
+
+
+def _cargo_scope_value(value: object) -> str:
+    cargo = "" if value is None or pd.isna(value) else str(value).strip().upper()
+    if cargo in {"PRESIDENTE", "VICE-PRESIDENTE"}:
+        return "nacional"
+    if cargo in {"PREFEITO", "VICE-PREFEITO", "VEREADOR"}:
+        return "municipio"
+    return "uf"
+
+
+def _prepare_vagas(paths: list[str], sep: str, encoding: str) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for p in paths:
+        if "CONSULTA_VAGAS" not in Path(p).name.upper():
+            continue
+        df = _clean_columns(pd.read_csv(p, sep=sep, encoding=encoding, low_memory=False))
+        col_qt = _find_col(df, ["QT_VAGAS", "QT_VAGA", "QTD_VAGAS", "QTDE_VAGAS"])
+        if not col_qt or not {"ANO_ELEICAO", "DS_CARGO"}.issubset(df.columns):
+            continue
+        keep = [
+            c for c in ["ANO_ELEICAO", "SG_UF", "NM_UE", "DS_CARGO"] if c in df.columns
+        ]
+        prepared = df[keep].copy()
+        prepared.loc[:, "QT_VAGAS"] = pd.to_numeric(
+            df[col_qt], errors="coerce"
+        ).fillna(0)
+        frames.append(prepared)
+
+    if not frames:
+        return pd.DataFrame(
+            columns=["ANO_ELEICAO", "SG_UF", "NM_UE", "DS_CARGO", "QT_VAGAS"]
+        )
+
+    vagas = pd.concat(frames, ignore_index=True)
+    for col in ["SG_UF", "NM_UE", "DS_CARGO"]:
+        if col not in vagas.columns:
+            vagas.loc[:, col] = pd.NA
+        vagas.loc[:, col] = vagas[col].astype("string").str.strip().str.upper()
+    vagas.loc[:, "ANO_ELEICAO"] = pd.to_numeric(
+        vagas["ANO_ELEICAO"], errors="coerce"
+    ).astype("Int64")
+    vagas.loc[:, "ESCOPO_VAGA"] = vagas["DS_CARGO"].map(_cargo_scope_value)
+    return vagas.drop_duplicates(
+        subset=["ANO_ELEICAO", "SG_UF", "NM_UE", "DS_CARGO"], keep="last"
+    )
+
+
+def _merge_vagas(df: pd.DataFrame, vagas_df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or vagas_df.empty or "DS_CARGO" not in df.columns:
+        return df
+
+    years = pd.to_numeric(df["ANO_ELEICAO"], errors="coerce").astype("Int64")
+    cargos = df["DS_CARGO"].astype("string").str.strip().str.upper()
+    ufs = df.get("SG_UF", pd.Series(pd.NA, index=df.index)).astype("string").str.strip().str.upper()
+    municipios = (
+        df.get("NM_UE", pd.Series(pd.NA, index=df.index))
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+    scopes = cargos.map(_cargo_scope_value)
+
+    national = vagas_df[vagas_df["ESCOPO_VAGA"] == "nacional"]
+    uf_rows = vagas_df[vagas_df["ESCOPO_VAGA"] == "uf"]
+    municipal = vagas_df[vagas_df["ESCOPO_VAGA"] == "municipio"]
+    national_map = national.set_index(["ANO_ELEICAO", "DS_CARGO"])["QT_VAGAS"].to_dict()
+    uf_map = uf_rows.set_index(["ANO_ELEICAO", "SG_UF", "DS_CARGO"])["QT_VAGAS"].to_dict()
+    municipal_map = municipal.set_index(
+        ["ANO_ELEICAO", "SG_UF", "NM_UE", "DS_CARGO"]
+    )["QT_VAGAS"].to_dict()
+
+    values: list[object] = []
+    for year, uf, municipio, cargo, scope in zip(years, ufs, municipios, cargos, scopes):
+        if pd.isna(year) or pd.isna(cargo):
+            values.append(pd.NA)
+        elif scope == "nacional":
+            values.append(national_map.get((int(year), str(cargo)), pd.NA))
+        elif scope == "municipio":
+            values.append(
+                municipal_map.get((int(year), str(uf), str(municipio), str(cargo)), pd.NA)
+            )
+        else:
+            values.append(uf_map.get((int(year), str(uf), str(cargo)), pd.NA))
+    result = df.copy()
+    result.loc[:, "QT_VAGAS"] = values
+    return result
 
 
 def _normalize_votacao_file(
@@ -349,7 +595,12 @@ def _normalize_votacao_file(
     encoding: str,
     chunk_size: int = 0,
     merge_consulta: bool = True,
+    historico_df: pd.DataFrame | None = None,
+    vagas_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    historico_df = historico_df if historico_df is not None else pd.DataFrame()
+    vagas_df = vagas_df if vagas_df is not None else pd.DataFrame()
+
     def _normalize_votacao_chunk(df: pd.DataFrame) -> pd.DataFrame:
         df = _clean_columns(df).copy()
 
@@ -371,6 +622,15 @@ def _normalize_votacao_file(
             if year_guess is not None:
                 df.loc[:, "ANO_ELEICAO"] = year_guess
 
+        # Nos arquivos de resultado, NM_UE representa a unidade eleitoral (por exemplo,
+        # o estado), enquanto NM_MUNICIPIO traz a granularidade geografica dos votos.
+        if "NM_MUNICIPIO" in df.columns:
+            municipio = _clean_tse_missing(df["NM_MUNICIPIO"])
+            if "NM_UE" in df.columns:
+                df.loc[:, "NM_UE"] = municipio.fillna(df["NM_UE"])
+            else:
+                df.loc[:, "NM_UE"] = municipio
+
         if merge_consulta and not consulta_df.empty:
             join_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in df.columns and c in consulta_df.columns]
             if not join_keys:
@@ -388,6 +648,7 @@ def _normalize_votacao_file(
                         "NR_CPF_CANDIDATO",
                         "NM_CANDIDATO",
                         "NM_URNA_CANDIDATO",
+                        "IDADE",
                     ]
                     if c in consulta_df.columns
                 ]
@@ -406,6 +667,64 @@ def _normalize_votacao_file(
                                 df = df.drop(columns=[alt])
                             else:
                                 df = df.rename(columns={alt: col})
+
+        for col in [
+            "DS_GENERO",
+            "DS_GRAU_INSTRUCAO",
+            "DS_ESTADO_CIVIL",
+            "DS_COR_RACA",
+            "DS_OCUPACAO",
+            "DT_NASCIMENTO",
+            "IDADE",
+        ]:
+            if col in df.columns:
+                df = df.assign(**{col: _clean_tse_missing(df[col])})
+        if "NR_CPF_CANDIDATO" in df.columns:
+            df = df.assign(
+                NR_CPF_CANDIDATO=_normalize_cpf_series(df["NR_CPF_CANDIDATO"])
+            )
+
+        if (
+            not historico_df.empty
+            and "ANO_ELEICAO" in df.columns
+            and "SQ_CANDIDATO" in df.columns
+        ):
+            df = df.merge(
+                historico_df,
+                on=["ANO_ELEICAO", "SQ_CANDIDATO"],
+                how="left",
+                suffixes=("", "_HIST"),
+            )
+            if "HISTORICO_CANDIDATURA_ID_HIST" in df.columns:
+                if "HISTORICO_CANDIDATURA_ID" in df.columns:
+                    df.loc[:, "HISTORICO_CANDIDATURA_ID"] = df[
+                        "HISTORICO_CANDIDATURA_ID_HIST"
+                    ].fillna(df["HISTORICO_CANDIDATURA_ID"])
+                    df = df.drop(columns=["HISTORICO_CANDIDATURA_ID_HIST"])
+                else:
+                    df = df.rename(
+                        columns={
+                            "HISTORICO_CANDIDATURA_ID_HIST": "HISTORICO_CANDIDATURA_ID"
+                        }
+                    )
+
+        if "ANO_ELEICAO" in df.columns and "SQ_CANDIDATO" in df.columns:
+            years = pd.to_numeric(df["ANO_ELEICAO"], errors="coerce")
+            sq_values = df["SQ_CANDIDATO"].astype("string").str.strip()
+            fallback_history = (
+                "tse-candidate:" + years.astype("Int64").astype("string") + ":" + sq_values
+            )
+            if "HISTORICO_CANDIDATURA_ID" not in df.columns:
+                df.loc[:, "HISTORICO_CANDIDATURA_ID"] = pd.NA
+            use_fallback = (
+                years.ge(2026)
+                & sq_values.notna()
+                & sq_values.ne("")
+                & df["HISTORICO_CANDIDATURA_ID"].isna()
+            )
+            df.loc[use_fallback, "HISTORICO_CANDIDATURA_ID"] = fallback_history[use_fallback]
+
+        df = _merge_vagas(df, vagas_df)
 
         if "QT_VOTOS_NOMINAIS_VALIDOS" not in df.columns:
             df.loc[:, "QT_VOTOS_NOMINAIS_VALIDOS"] = 0
@@ -435,6 +754,7 @@ def _normalize_votacao_file(
             "SQ_CANDIDATO",
             "NR_CANDIDATO",
             "NR_CPF_CANDIDATO",
+            "HISTORICO_CANDIDATURA_ID",
             "NM_CANDIDATO",
             "NM_URNA_CANDIDATO",
             "SG_PARTIDO",
@@ -448,8 +768,10 @@ def _normalize_votacao_file(
             "DT_NASCIMENTO",
             "DT_ELEICAO",
             "DS_SIT_TOT_TURNO",
+            "QT_VAGAS",
             "LATITUDE",
             "LONGITUDE",
+            "IDADE",
         ]
         agg = (
             df[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
@@ -458,7 +780,6 @@ def _normalize_votacao_file(
             .copy()
         )
 
-        agg.loc[:, "IDADE"] = _compute_age(agg)
         agg.loc[:, "FAIXA_ETARIA"] = agg["IDADE"].apply(_classify_age)
         return agg[CANONICAL_COLUMNS].copy()
 
@@ -476,14 +797,17 @@ def _normalize_votacao_file(
         if not partials:
             return pd.DataFrame(columns=CANONICAL_COLUMNS)
         merged = pd.concat(partials, ignore_index=True)
-        group_cols = [c for c in CANONICAL_COLUMNS if c not in ["QT_VOTOS_NOMINAIS_VALIDOS", "IDADE", "FAIXA_ETARIA"]]
+        group_cols = [
+            c
+            for c in CANONICAL_COLUMNS
+            if c not in ["QT_VOTOS_NOMINAIS_VALIDOS", "FAIXA_ETARIA"]
+        ]
         merged = (
             merged[group_cols + ["QT_VOTOS_NOMINAIS_VALIDOS"]]
             .groupby(group_cols, dropna=False, as_index=False)["QT_VOTOS_NOMINAIS_VALIDOS"]
             .sum()
             .copy()
         )
-        merged.loc[:, "IDADE"] = _compute_age(merged)
         merged.loc[:, "FAIXA_ETARIA"] = merged["IDADE"].apply(_classify_age)
         return merged[CANONICAL_COLUMNS].copy()
 
@@ -502,7 +826,16 @@ def _quality_report(df: pd.DataFrame) -> dict:
     ]
     required_missing = [c for c in required if c not in df.columns]
 
-    duplicates_key = ["ANO_ELEICAO", "NR_TURNO", "SQ_CANDIDATO", "DS_CARGO", "SG_UF"]
+    duplicates_key = [
+        "ANO_ELEICAO",
+        "NR_TURNO",
+        "SQ_CANDIDATO",
+        "DS_CARGO",
+        "SG_UF",
+        "CD_MUNICIPIO",
+        "NR_ZONA",
+        "NR_SECAO",
+    ]
     duplicates_key = [c for c in duplicates_key if c in df.columns]
     duplicate_rows = 0
     if duplicates_key:
@@ -600,6 +933,7 @@ def _sha256(path: Path) -> str:
 def _build_manifest(
     votacao_files: list[str],
     consulta_files: list[str],
+    historico_files: list[str],
     output_path: Path,
     report_path: Path,
     report: dict,
@@ -622,6 +956,17 @@ def _build_manifest(
             source_files.append(
                 {
                     "kind": "consulta",
+                    "path": str(path),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
+            )
+    for p in historico_files:
+        path = Path(p)
+        if path.exists():
+            source_files.append(
+                {
+                    "kind": "historico_candidatura",
                     "path": str(path),
                     "size_bytes": path.stat().st_size,
                     "sha256": _sha256(path),
@@ -673,7 +1018,7 @@ def _finalize_normalized_frames(normalized_frames: list[pd.DataFrame]) -> pd.Dat
             final_df.loc[:, col] = pd.NA
 
     vote_col = "QT_VOTOS_NOMINAIS_VALIDOS"
-    profile_cols = ["IDADE", "FAIXA_ETARIA"]
+    profile_cols = ["FAIXA_ETARIA"]
     group_cols = [c for c in CANONICAL_COLUMNS if c not in [vote_col, *profile_cols]]
 
     dedup_subset = group_cols + [vote_col]
@@ -688,7 +1033,6 @@ def _finalize_normalized_frames(normalized_frames: list[pd.DataFrame]) -> pd.Dat
     )
     final_df.loc[:, "ANO_ELEICAO"] = pd.to_numeric(final_df["ANO_ELEICAO"], errors="coerce").astype("Int64")
     final_df.loc[:, "NR_TURNO"] = _normalize_turno(final_df["NR_TURNO"])
-    final_df.loc[:, "IDADE"] = _compute_age(final_df)
     final_df.loc[:, "FAIXA_ETARIA"] = final_df["IDADE"].apply(_classify_age)
     return final_df[CANONICAL_COLUMNS].copy()
 
@@ -698,6 +1042,7 @@ def main() -> None:
 
     discovered_votacao: list[str] = []
     discovered_consulta: list[str] = []
+    discovered_historico: list[str] = []
     if args.raw_dir:
         discovered_votacao = _discover_files(
             raw_dir=args.raw_dir,
@@ -711,13 +1056,21 @@ def main() -> None:
             patterns=args.consulta_pattern,
             exclude_patterns=args.exclude_pattern,
         )
+        discovered_historico = _discover_files(
+            raw_dir=args.raw_dir,
+            years=args.years,
+            patterns=args.historico_pattern,
+            exclude_patterns=args.exclude_pattern,
+        )
         print(
             f"[normalize] descobertos em raw-dir: "
-            f"{len(discovered_votacao)} votacao, {len(discovered_consulta)} consulta"
+            f"{len(discovered_votacao)} votacao, {len(discovered_consulta)} consulta, "
+            f"{len(discovered_historico)} historico"
         )
 
     votacao_files = _merge_unique_paths(args.votacao, discovered_votacao)
     consulta_files = _merge_unique_paths(args.consulta, discovered_consulta)
+    historico_files = _merge_unique_paths(args.historico, discovered_historico)
 
     if not votacao_files:
         print("[normalize] erro: nenhum arquivo de votacao informado/encontrado.")
@@ -732,6 +1085,10 @@ def main() -> None:
         if args.disable_consulta_merge
         else _prepare_consulta(consulta_files, sep=args.sep, encoding=args.encoding)
     )
+    historico = _prepare_historico(
+        historico_files, sep=args.sep, encoding=args.encoding
+    )
+    vagas = _prepare_vagas(consulta_files, sep=args.sep, encoding=args.encoding)
     normalized_frames: list[pd.DataFrame] = []
 
     for vot_file in votacao_files:
@@ -744,6 +1101,8 @@ def main() -> None:
                 encoding=args.encoding,
                 chunk_size=args.chunk_size,
                 merge_consulta=(not args.disable_consulta_merge),
+                historico_df=historico,
+                vagas_df=vagas,
             )
         )
 
@@ -771,6 +1130,7 @@ def main() -> None:
     manifest = _build_manifest(
         votacao_files=votacao_files,
         consulta_files=consulta_files,
+        historico_files=historico_files,
         output_path=output_path,
         report_path=report_path,
         report=report,
@@ -788,6 +1148,7 @@ def main() -> None:
     print(f"[normalize] linhas: {len(final_df)}")
     print(f"[normalize] arquivos votacao: {len(votacao_files)}")
     print(f"[normalize] arquivos consulta: {len(consulta_files)}")
+    print(f"[normalize] arquivos historico: {len(historico_files)}")
     print(f"[normalize] anos: {anos}")
     print(f"[normalize] qtd cargos: {len(cargos)}")
 

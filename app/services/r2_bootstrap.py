@@ -59,6 +59,12 @@ def ensure_local_analytics_from_r2(preferred_path: Path, prefer_parquet: bool) -
     if not settings.r2_object_key_parquet:
         return None
     if _download(client, settings.r2_object_key_parquet, parquet_path):
+        history_key = str(settings.r2_object_key_candidate_history or "").strip()
+        if history_key:
+            history_path = parquet_path.with_name(
+                parquet_path.name.replace("analytics", "candidate_history", 1)
+            )
+            _download(client, history_key, history_path)
         return parquet_path
 
     return None

@@ -27,6 +27,7 @@ class CandidateHistoryMixin:
             "SG_PARTIDO",
             "NR_CANDIDATO",
             "NR_CPF_CANDIDATO",
+            "HISTORICO_CANDIDATURA_ID",
             "SQ_CANDIDATO",
             "NM_CANDIDATO",
             "NM_URNA_CANDIDATO",
@@ -179,8 +180,13 @@ class CandidateHistoryMixin:
     def _cpf_text(self, value: object) -> str:
         if value is None or pd.isna(value):
             return ""
-        text = re.sub(r"\D", "", str(value))
-        return text.strip()
+        raw = str(value).strip()
+        if raw.startswith("-") or raw.upper() in {"#NULO", "#NE", "NÃO DIVULGÁVEL", "NAO DIVULGAVEL"}:
+            return ""
+        raw = re.sub(r"\.0$", "", raw)
+        text = re.sub(r"\D", "", raw)
+        text = text.strip()
+        return text.zfill(11) if text and len(text) <= 11 else text
 
     def _cpf_series(self, series: pd.Series) -> pd.Series:
         return series.fillna("").astype(str).map(self._cpf_text)
@@ -221,11 +227,14 @@ class CandidateHistoryMixin:
         col_birth = self._select_history_col(df, ["DT_NASCIMENTO"])
         if not col_birth:
             return pd.Series([""] * len(df), index=df.index)
-        birth_series = pd.to_datetime(df[col_birth], errors="coerce", dayfirst=True)
+        birth_series = pd.to_datetime(
+            df[col_birth], errors="coerce", format="mixed", dayfirst=True
+        )
         return birth_series.dt.strftime("%Y-%m-%d").fillna("")
 
     def _person_identity_signature_series(self, df: pd.DataFrame) -> pd.Series:
         col_cpf = self._select_history_col(df, ["NR_CPF_CANDIDATO"])
+        col_history = self._select_history_col(df, ["HISTORICO_CANDIDATURA_ID"])
         name_series = self._person_identity_name_series(df)
         birth_series = self._person_identity_birth_series(df)
         signature = name_series.where(name_series != "", birth_series)
@@ -234,6 +243,9 @@ class CandidateHistoryMixin:
         if col_cpf:
             cpf_series = self._cpf_series(df[col_cpf])
             signature = cpf_series.where(cpf_series != "", signature)
+        if col_history:
+            history_series = self._text_series(df[col_history])
+            signature = history_series.where(history_series != "", signature)
         return signature.fillna("")
 
     def _cpf_person_identity_signature_series(self, df: pd.DataFrame) -> pd.Series:
@@ -810,15 +822,26 @@ class CandidateHistoryMixin:
         state: str | None = None,
         office: str | None = None,
     ) -> dict[str, Any]:
-        base_df = self._prepare_candidate_compact_rows(self._candidate_compact_frame())
-        candidate_rows, identity = self._historical_candidate_rows(
-            candidate_id=candidate_id,
-            candidate_cpf=candidate_cpf,
-            state=state,
-            office=office,
-            all_rows=base_df,
-            use_cpf_identity=bool(candidate_cpf),
-        )  # type: ignore[attr-defined]
+        targeted_loader = getattr(self, "_candidate_history_targeted_rows", None)
+        if callable(targeted_loader):
+            candidate_rows, identity = targeted_loader(
+                candidate_id=candidate_id,
+                candidate_cpf=candidate_cpf,
+                state=state,
+                office=office,
+            )
+            base_df = self._prepare_candidate_compact_rows(candidate_rows)
+            candidate_rows = base_df
+        else:
+            base_df = self._prepare_candidate_compact_rows(self._candidate_compact_frame())
+            candidate_rows, identity = self._historical_candidate_rows(
+                candidate_id=candidate_id,
+                candidate_cpf=candidate_cpf,
+                state=state,
+                office=office,
+                all_rows=base_df,
+                use_cpf_identity=bool(candidate_cpf),
+            )  # type: ignore[attr-defined]
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
@@ -850,7 +873,12 @@ class CandidateHistoryMixin:
             }
 
         history_context_cols = ["_year", "_office", "_context_state", "_context_municipality", "_round"]
-        total_by_context = self._candidate_history_context_totals_frame()
+        targeted_totals_loader = getattr(self, "_candidate_history_context_totals_for_rows", None)
+        total_by_context = (
+            targeted_totals_loader(candidate_rows)
+            if callable(targeted_totals_loader)
+            else self._candidate_history_context_totals_frame()
+        )
         grouped = (
             candidate_rows.groupby(history_context_cols, as_index=False)
             .agg(
