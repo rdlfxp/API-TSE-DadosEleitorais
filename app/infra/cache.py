@@ -34,6 +34,7 @@ MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
 }
 
 EDGE_CACHE_TTL_BY_PATH: dict[str, int] = {
+    "/v1/resultados": 10,
     "/v1/analytics/filtros": EDGE_CACHE_180_DAYS_SECONDS,
     "/v1/analytics/overview": EDGE_CACHE_180_DAYS_SECONDS,
     "/v1/analytics/top-candidatos": EDGE_CACHE_180_DAYS_SECONDS,
@@ -183,6 +184,12 @@ def configure_cache_headers(request: Request, response: Any) -> tuple[str, int]:
         response.headers["X-Cache-Policy"] = "no-store"
         response.headers["X-Cache-TTL"] = "0"
         return "no-store", 0
+
+    if path == "/v1/resultados":
+        response.headers["Cache-Control"] = "public, max-age=10"
+        response.headers["X-Cache-Policy"] = "public"
+        response.headers["X-Cache-TTL"] = "10"
+        return "public", 10
 
     edge_ttl_seconds = edge_cache_ttl_for_path(path)
     if edge_ttl_seconds is None:

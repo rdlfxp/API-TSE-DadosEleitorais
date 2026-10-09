@@ -683,6 +683,29 @@ python3 scripts/upload_to_r2.py \
 Execucao manual:
 - GitHub > `Actions` > `Data Refresh` > `Run workflow`
 
+### 10.2) Publicação incremental de 2026
+
+Para evitar reconstruir todos os anos no runner, o workflow aceita o input
+`incremental_year`. Para publicar a partição de 2026:
+
+1. Atualize o secret `TSE_SOURCES_JSON` com o JSON local de
+   `config/tse_sources.json` (esse arquivo é ignorado pelo git e não contém
+   credenciais).
+2. Em `Actions > Data Refresh > Run workflow`, informe
+   `incremental_year=2026`, `publish_to_r2=true` e o número de snapshots desejado.
+3. O job baixa `latest/analytics.parquet` e
+   `latest/candidate_history.parquet` do R2, baixa somente as fontes de 2026,
+   normaliza em chunks e substitui apenas a partição 2026 com
+   `merge_curated_year.py`.
+4. Após o job terminar, reinicie o serviço no Easypanel para que o bootstrap
+   baixe o novo Parquet. Verifique `/health`, `/v1/analytics/filtros` e
+   `/v1/analytics/overview?ano=2026&cargo=Presidente&turno=1`.
+
+O endpoint `GET /v1/resultados` é um adaptador isolado dos JSONs públicos do
+TSE. Sua estrutura e exemplos reais estão documentados em
+`docs/live-results-tse.md`; ele usa cache de no máximo 10 segundos e não usa
+stale-if-error.
+
 Validacao go/no-go local:
 
 ```bash

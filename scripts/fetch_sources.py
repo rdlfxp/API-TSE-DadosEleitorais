@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Pula arquivos que ja existem no destino.",
     )
+    parser.add_argument(
+        "--target-year",
+        type=int,
+        default=None,
+        help="Baixa somente entradas cujo target pertence ao ano informado.",
+    )
     return parser.parse_args()
 
 
@@ -132,6 +138,8 @@ def main() -> None:
             continue
         url = str(entry.get("url", "")).strip()
         target = str(entry.get("target", "")).strip()
+        if args.target_year is not None and not target.startswith(f"{args.target_year}/"):
+            continue
         do_extract = bool(entry.get("extract", False))
         extract_members = entry.get("extract_members", [])
         if not isinstance(extract_members, list):

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     r2_read_timeout_seconds: int = 30
     redis_url: str | None = None
     redis_enabled: bool = False
+    live_results_base_url: str = "https://resultados.tse.jus.br"
+    live_results_timeout_seconds: int = 10
+    live_results_redis_ttl_seconds: int = 10
+    live_results_elections_json: str = '{"2024":{"1":619,"2":620},"2026":{"1":6257}}'
 
 
 settings = Settings()

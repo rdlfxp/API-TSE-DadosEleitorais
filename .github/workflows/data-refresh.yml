@@ -18,6 +18,11 @@ on:
         required: false
         default: "7"
         type: string
+      incremental_year:
+        description: "Atualiza somente esta partição (ex.: 2026); vazio executa carga completa"
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: "0 9 * * 1"
 
@@ -43,21 +48,21 @@ jobs:
 
       - name: Fetch configured TSE sources
         run: |
+          INCREMENTAL_YEAR="${{ inputs.incremental_year || '' }}"
           if [ -n "${{ secrets.TSE_SOURCES_JSON }}" ]; then
             printf '%s' '${{ secrets.TSE_SOURCES_JSON }}' > /tmp/tse_sources.json
-            python -u scripts/fetch_sources.py \
-              --config /tmp/tse_sources.json \
-              --raw-dir data/raw \
-              --timeout 180 \
-              --retries 3
+            FETCH_ARGS=(--config /tmp/tse_sources.json --raw-dir data/raw --timeout 180 --retries 3)
           elif [ -f config/tse_sources.json ]; then
-            python -u scripts/fetch_sources.py \
-              --config config/tse_sources.json \
-              --raw-dir data/raw \
-              --timeout 180 \
-              --retries 3
+            FETCH_ARGS=(--config config/tse_sources.json --raw-dir data/raw --timeout 180 --retries 3)
           else
             echo "No remote source config found (secret/local file); skipping remote fetch."
+            FETCH_ARGS=()
+          fi
+          if [ -n "$INCREMENTAL_YEAR" ] && [ "${#FETCH_ARGS[@]}" -gt 0 ]; then
+            FETCH_ARGS+=(--target-year "$INCREMENTAL_YEAR")
+          fi
+          if [ "${#FETCH_ARGS[@]}" -gt 0 ]; then
+            python -u scripts/fetch_sources.py "${FETCH_ARGS[@]}"
           fi
 
       - name: Check raw data availability
@@ -67,8 +72,23 @@ jobs:
           echo "csv_count=$CSV_COUNT" >> "$GITHUB_OUTPUT"
           echo "CSV files found: $CSV_COUNT"
 
-      - name: Normalize raw data
-        if: steps.raw_check.outputs.csv_count != '0'
+      - name: Download base snapshot for incremental refresh
+        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year != ''
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          test -n "$R2_ACCOUNT_ID" -a -n "$R2_ACCESS_KEY_ID" -a -n "$R2_SECRET_ACCESS_KEY" -a -n "$R2_BUCKET"
+          python scripts/download_curated_from_r2.py \
+            --account-id "$R2_ACCOUNT_ID" \
+            --access-key-id "$R2_ACCESS_KEY_ID" \
+            --secret-access-key "$R2_SECRET_ACCESS_KEY" \
+            --bucket "$R2_BUCKET"
+
+      - name: Normalize raw data (full)
+        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year == ''
         run: |
           NORMALIZE_YEARS="${{ inputs.normalize_years || '2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026' }}"
           echo "Normalize years: $NORMALIZE_YEARS"
@@ -84,8 +104,40 @@ jobs:
             --report data/curated/quality_report.json \
             --manifest data/curated/manifest.json
 
+      - name: Normalize incremental partition
+        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year != ''
+        run: |
+          YEAR="${{ inputs.incremental_year }}"
+          python scripts/normalize.py \
+            --raw-dir data/raw \
+            --years "$YEAR" \
+            --chunk-size 250000 \
+            --output "data/curated/analytics_${YEAR}.parquet" \
+            --report "data/curated/quality_report_${YEAR}.json" \
+            --manifest "data/curated/manifest_${YEAR}.json" \
+            --quality-gate \
+            --max-duplicate-rows 0 \
+            --max-negative-votes 0 \
+            --max-required-null-rate 0.02
+
+      - name: Merge incremental partition
+        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year != ''
+        run: |
+          YEAR="${{ inputs.incremental_year }}"
+          python scripts/merge_curated_year.py \
+            --base data/curated/analytics.parquet \
+            --year-file "data/curated/analytics_${YEAR}.parquet" \
+            --target-year "$YEAR" \
+            --historico "data/raw/${YEAR}/historico_candidatura_${YEAR}_BRASIL.csv" \
+            --output data/curated/analytics.with-incremental.parquet \
+            --history-output data/curated/candidate_history.with-incremental.parquet \
+            --report data/curated/quality_report.json \
+            --manifest data/curated/manifest.json
+          mv data/curated/analytics.with-incremental.parquet data/curated/analytics.parquet
+          mv data/curated/candidate_history.with-incremental.parquet data/curated/candidate_history.parquet
+
       - name: Convert curated CSV to Parquet
-        if: steps.raw_check.outputs.csv_count != '0'
+        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year == ''
         run: |
           python scripts/convert_csv_to_parquet.py \
             --input data/curated/analytics.csv \
@@ -121,8 +173,12 @@ jobs:
       - name: Go/No-Go validation
         if: steps.raw_check.outputs.csv_count != '0'
         run: |
+          ANALYTICS_VALIDATION_FILE="data/curated/analytics.csv"
+          if [ -n "${{ inputs.incremental_year }}" ]; then
+            ANALYTICS_VALIDATION_FILE="data/curated/analytics.parquet"
+          fi
           python scripts/go_no_go.py \
-            --analytics data/curated/analytics.csv \
+            --analytics "$ANALYTICS_VALIDATION_FILE" \
             --quality-report data/curated/quality_report.json \
             --manifest data/curated/manifest.json \
             --expected-years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026 \
