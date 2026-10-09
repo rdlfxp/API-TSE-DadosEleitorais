@@ -42,6 +42,7 @@ from app.schemas.candidates import (
 )
 from app.schemas.common import SeriesItem
 from app.schemas.errors import ErrorResponse
+from app.schemas.live_results import LiveCandidate, LiveResultsResponse
 
 __all__ = [
     "AgeBandsProfile",
@@ -59,6 +60,8 @@ __all__ = [
     "CorRacaComparativoResponse",
     "ElectorateProfileResponse",
     "ErrorResponse",
+    "LiveCandidate",
+    "LiveResultsResponse",
     "FilterOptionsResponse",
     "GenderProfile",
     "GroupedDistributionResponse",

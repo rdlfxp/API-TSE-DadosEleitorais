@@ -5,6 +5,7 @@ from app.schemas import ErrorResponse
 
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Bad Request"},
+    404: {"model": ErrorResponse, "description": "Not Found"},
     429: {"model": ErrorResponse, "description": "Too Many Requests"},
     422: {"model": ErrorResponse, "description": "Validation Error"},
     500: {"model": ErrorResponse, "description": "Internal Server Error"},
@@ -19,6 +20,8 @@ def error_code_for_status(status_code: int) -> str:
         return "VALIDATION_ERROR"
     if status_code == 429:
         return "RATE_LIMITED"
+    if status_code == 404:
+        return "NOT_FOUND"
     if status_code == 503:
         return "SERVICE_UNAVAILABLE"
     if status_code >= 500:
