@@ -9,7 +9,13 @@ from pathlib import Path
 import boto3
 
 
-DEFAULT_FILES = ["analytics.csv", "analytics.parquet", "quality_report.json", "manifest.json"]
+DEFAULT_FILES = [
+    "analytics.csv",
+    "analytics.parquet",
+    "candidate_history.parquet",
+    "quality_report.json",
+    "manifest.json",
+]
 
 
 def parse_args() -> argparse.Namespace:

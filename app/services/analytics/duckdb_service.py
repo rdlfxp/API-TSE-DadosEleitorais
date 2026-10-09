@@ -34,6 +34,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     _columns: set[str]
     _source_path: Path | None = field(default=None, init=False, repr=False)
     _database_path: str | None = field(default=None, init=False, repr=False)
+    _candidate_history_relation: str = field(default="analytics", init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
     _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
@@ -121,6 +122,15 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         )
         service._source_path = path
         service._database_path = db_path
+        if suffix == ".parquet":
+            history_path = path.with_name(path.name.replace("analytics", "candidate_history", 1))
+            if history_path.exists():
+                escaped_history_path = str(history_path).replace("'", "''")
+                conn.execute(
+                    "CREATE OR REPLACE VIEW candidate_history AS "
+                    f"SELECT * FROM read_parquet('{escaped_history_path}')"
+                )
+                service._candidate_history_relation = "candidate_history"
         if create_indexes and materialize_table:
             service._create_indexes()
         return service
@@ -363,6 +373,33 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             if requested:
                 select_clause = ", ".join(dict.fromkeys(requested))
         return self._df(f"SELECT {select_clause} FROM analytics {where}", params)
+
+    def _candidate_filtered_df(
+        self,
+        candidate_id: str,
+        ano: int | None = None,
+        turno: int | None = None,
+        uf: str | None = None,
+        cargo: str | None = None,
+        municipio: str | None = None,
+        columns: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Load only one candidate's rows instead of materializing a full context."""
+        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+        if not candidate_clauses:
+            return pd.DataFrame()
+
+        select_clause = "*"
+        if columns:
+            requested = [str(col).strip() for col in columns if str(col).strip() and self._has(str(col).strip())]
+            if requested:
+                select_clause = ", ".join(dict.fromkeys(requested))
+        connector = "AND" if where else "WHERE"
+        return self._df(
+            f"SELECT {select_clause} FROM analytics {where} {connector} ({' OR '.join(candidate_clauses)})",
+            params + candidate_params,
+        )
 
     def _candidate_clauses_and_params(self, candidate_id: str) -> tuple[list[str], list[str]]:
         candidate_norm = str(candidate_id or "").strip()
@@ -1696,8 +1733,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
-        scoped = self._filtered_df(ano=year, uf=state, cargo=office)
-        candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
+        candidate_rows = self._candidate_filtered_df(candidate_id, ano=year, uf=state, cargo=office)
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
@@ -1774,37 +1810,41 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         vote_share = 0.0
         rank = None
         if col_votes and col_year and latest_year:
-            context_df = self._filtered_df(ano=latest_year, turno=turno_referencia, uf=latest_state, cargo=latest_office)
+            context_where, context_params = self._where(
+                ano=latest_year,
+                turno=turno_referencia,
+                uf=latest_state,
+                cargo=latest_office,
+            )
+            context_key_expr = self._candidate_group_key_sql_expr(include_turno=False)
+            context_df = (
+                self._df(
+                    "SELECT "
+                    f"{context_key_expr} AS _candidate_key, "
+                    f"SUM(COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)) AS _votes "
+                    f"FROM analytics {context_where} "
+                    f"GROUP BY {context_key_expr}",
+                    context_params,
+                )
+                if context_key_expr
+                else pd.DataFrame()
+            )
             if not context_df.empty:
-                context_df = context_df.assign(_votes=pd.to_numeric(context_df[col_votes], errors="coerce").fillna(0))
                 total_votes = float(context_df["_votes"].sum())
                 vote_share = round((latest_votes / total_votes) * 100, 4) if total_votes > 0 else 0.0
-                name_col = "NM_CANDIDATO" if "NM_CANDIDATO" in context_df.columns else ("NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in context_df.columns else None)
-                if name_col:
-                    context_df = context_df.assign(
-                        _candidate_key=(
-                            context_df["SQ_CANDIDATO"].fillna("").astype(str).str.strip()
-                            if "SQ_CANDIDATO" in context_df.columns
-                            else (
-                                context_df["NR_CANDIDATO"].fillna("").astype(str).str.strip()
-                                if "NR_CANDIDATO" in context_df.columns
-                                else context_df[name_col].fillna("").astype(str).str.strip().str.lower()
-                            )
-                        )
+                ranking = context_df.sort_values("_votes", ascending=False).reset_index(drop=True)
+                candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+                candidate_key_row = (
+                    self._rows(
+                        f"SELECT {context_key_expr} FROM analytics {context_where} "
+                        f"{'AND' if context_where else 'WHERE'} ({' OR '.join(candidate_clauses)}) LIMIT 1",
+                        context_params + candidate_params,
                     )
-                    ranking = (
-                        context_df.groupby("_candidate_key", as_index=False)
-                        .agg(votes=("_votes", "sum"))
-                        .sort_values("votes", ascending=False)
-                        .reset_index(drop=True)
-                    )
-                    if "SQ_CANDIDATO" in latest_rows.columns and latest_rows["SQ_CANDIDATO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any():
-                        key = latest_rows["SQ_CANDIDATO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]
-                    elif "NR_CANDIDATO" in latest_rows.columns and latest_rows["NR_CANDIDATO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().any():
-                        key = latest_rows["NR_CANDIDATO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna().iloc[0]
-                    else:
-                        key = latest_rows[name_col].fillna("").astype(str).str.strip().str.lower().iloc[0]
-                    matches = ranking[ranking["_candidate_key"] == str(key)]
+                    if candidate_clauses
+                    else []
+                )
+                if candidate_key_row:
+                    matches = ranking[ranking["_candidate_key"] == candidate_key_row[0][0]]
                     if not matches.empty:
                         rank = int(matches.index[0]) + 1
 
@@ -1884,6 +1924,127 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     ) -> dict:
         return CandidateHistoryMixin.candidate_vote_history(self, candidate_id, candidate_cpf=candidate_cpf, state=state, office=office)
 
+    def _candidate_history_targeted_rows(
+        self,
+        *,
+        candidate_id: str,
+        candidate_cpf: str | None = None,
+        state: str | None = None,
+        office: str | None = None,
+    ) -> tuple[pd.DataFrame, dict[str, str | None]]:
+        columns = self._projection_columns(self._candidate_history_projection_columns()) or []
+        select_clause = ", ".join(columns) if columns else "*"
+
+        def load_seed(seed_state: str | None, seed_office: str | None) -> pd.DataFrame:
+            where, where_params = self._where(uf=seed_state, cargo=seed_office)
+            candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+            if not candidate_clauses:
+                return pd.DataFrame()
+            connector = "AND" if where else "WHERE"
+            return self._df(
+                f"SELECT {select_clause} FROM {self._candidate_history_relation} {where} "
+                f"{connector} ({' OR '.join(candidate_clauses)})",
+                where_params + candidate_params,
+            )
+
+        seed_rows = load_seed(state, office)
+        if seed_rows.empty and (state or office):
+            seed_rows = load_seed(None, None)
+        if seed_rows.empty:
+            return seed_rows, {
+                "source_id": None,
+                "nr_cpf_candidato": self._cpf_text(candidate_cpf) or None,
+                "canonical_candidate_id": None,
+                "person_id": None,
+            }
+
+        identity = (
+            self._candidate_cpf_identity(seed_rows, candidate_cpf=candidate_cpf)
+            if candidate_cpf
+            else self._candidate_identity_payload(seed_rows)
+        )
+        clauses: list[str] = []
+        params: list[str] = []
+
+        cpf_value = self._cpf_text(candidate_cpf) or self._candidate_cpf(seed_rows)
+        history_ids: list[str] = []
+        if self._has("HISTORICO_CANDIDATURA_ID") and "HISTORICO_CANDIDATURA_ID" in seed_rows.columns:
+            history_ids = sorted(
+                {
+                    str(value).strip()
+                    for value in seed_rows["HISTORICO_CANDIDATURA_ID"].dropna().tolist()
+                    if str(value).strip().startswith("tse-history:")
+                }
+            )
+        if history_ids and not candidate_cpf:
+            placeholders = ", ".join(["?"] * len(history_ids))
+            clauses.append(f"TRIM(CAST(HISTORICO_CANDIDATURA_ID AS VARCHAR)) IN ({placeholders})")
+            params.extend(history_ids)
+        elif cpf_value and self._has("NR_CPF_CANDIDATO"):
+            cpf_sql = (
+                "LPAD(regexp_replace(regexp_replace(TRIM(CAST(NR_CPF_CANDIDATO AS VARCHAR)), "
+                "'\\.0$', ''), '[^0-9]', '', 'g'), 11, '0')"
+            )
+            clauses.append(f"{cpf_sql} = ?")
+            params.append(cpf_value)
+        else:
+            col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+            if col_name and col_name in seed_rows.columns:
+                names = self._person_identity_name_series(seed_rows).replace("", pd.NA).dropna()
+                if not names.empty:
+                    clauses.append(f"{self._normalized_sql_text_expr(col_name)} = ?")
+                    params.append(str(names.iloc[0]))
+            if self._has("DT_NASCIMENTO") and "DT_NASCIMENTO" in seed_rows.columns:
+                births = seed_rows["DT_NASCIMENTO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna()
+                if not births.empty:
+                    clauses.append("TRIM(CAST(DT_NASCIMENTO AS VARCHAR)) = ?")
+                    params.append(str(births.iloc[0]))
+
+        if not clauses:
+            return seed_rows, identity
+        candidate_rows = self._df(
+            f"SELECT {select_clause} FROM {self._candidate_history_relation} WHERE {' AND '.join(clauses)}",
+            params,
+        )
+        return (candidate_rows if not candidate_rows.empty else seed_rows), identity
+
+    def _candidate_history_context_totals_for_rows(self, candidate_rows: pd.DataFrame) -> pd.DataFrame:
+        prepared = self._prepare_candidate_compact_rows(candidate_rows)
+        context_cols = ["_year", "_office", "_context_state", "_context_municipality", "_round"]
+        if prepared.empty:
+            return pd.DataFrame(columns=[*context_cols, "total_votes"])
+
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        records: list[dict[str, object]] = []
+        contexts = prepared[context_cols].drop_duplicates()
+        for row in contexts.to_dict("records"):
+            year = self._parse_int(row["_year"])
+            round_no = self._parse_int(row["_round"])
+            office = str(row["_office"] or "").strip() or None
+            context_state = str(row["_context_state"] or "").strip() or None
+            context_municipality = str(row["_context_municipality"] or "").strip() or None
+            where, params = self._where(
+                ano=year,
+                turno=round_no if round_no and round_no > 0 else None,
+                uf=context_state,
+                cargo=office,
+                municipio=context_municipality,
+            )
+            total_votes = (
+                float(
+                    self._scalar(
+                        f"SELECT SUM(COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)) "
+                        f"FROM {self._candidate_history_relation} {where}",
+                        params,
+                    )
+                    or 0.0
+                )
+                if col_votes
+                else 0.0
+            )
+            records.append({**row, "total_votes": total_votes})
+        return pd.DataFrame.from_records(records, columns=[*context_cols, "total_votes"])
+
     def candidate_electorate_profile(
         self,
         candidate_id: str,
@@ -1892,8 +2053,13 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         office: str | None = None,
         municipality: str | None = None,
     ) -> dict:
-        scoped = self._filtered_df(ano=year, uf=state, cargo=office, municipio=municipality)
-        candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
+        candidate_rows = self._candidate_filtered_df(
+            candidate_id,
+            ano=year,
+            uf=state,
+            cargo=office,
+            municipio=municipality,
+        )
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
@@ -2000,14 +2166,14 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         normalized_state = (state or "").strip().upper() or None
         if normalized_state in {"BR", "BRASIL"}:
             normalized_state = None
-        scoped = self._filtered_df(
+        candidate_rows = self._candidate_filtered_df(
+            candidate_id,
             ano=year,
             turno=round_filter,
             uf=normalized_state,
             cargo=office,
             municipio=municipality,
         )
-        candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
         col_votes = (
             "QT_VOTOS_NOMINAIS_VALIDOS"
             if "QT_VOTOS_NOMINAIS_VALIDOS" in candidate_rows.columns
@@ -2109,7 +2275,8 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             )
 
             count_sql = cte_sql + "SELECT COUNT(*) FROM candidate_totals"
-            count_params = where_params + candidate_params
+            # Candidate placeholders occur in SELECT before the context WHERE.
+            count_params = candidate_params + where_params
             total_items = int(self._scalar(count_sql, count_params) or 0)
             if total_items == 0:
                 return {
@@ -2161,7 +2328,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             order_by_sql = f"ORDER BY {sort_options[effective_sort_by]} {sort_dir}, c.nm_municipio ASC"
 
             pagination_sql = ""
-            rows_params = where_params + candidate_params
+            rows_params = candidate_params + where_params
             if page is not None and page_size is not None:
                 offset = (int(page) - 1) * int(page_size)
                 pagination_sql = " LIMIT ? OFFSET ?"
@@ -2380,7 +2547,107 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         state: str | None = None,
         office: str | None = None,
     ) -> dict:
-        return CandidateHistoryMixin.candidates_compare(self, candidate_ids, year=year, state=state, office=office)
+        candidate_ids_clean = [str(value).strip() for value in candidate_ids if str(value).strip()]
+        if len(candidate_ids_clean) < 2:
+            return {"context": {"year": year, "state": state, "office": office}, "candidates": [], "deltas": []}
+
+        resolved_year = int(year) if year is not None else None
+        if resolved_year is None:
+            col_year = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+            where, params = self._where(uf=state, cargo=office)
+            if col_year:
+                resolved_year = self._parse_int(
+                    self._scalar(f"SELECT MAX(TRY_CAST({col_year} AS BIGINT)) FROM analytics {where}", params)
+                )
+
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        col_party = self._pick_col(["SG_PARTIDO"])
+        key_expr = self._candidate_group_key_sql_expr(include_turno=False)
+        id_col = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        if resolved_year is None or not col_votes or not key_expr:
+            return {"context": {"year": resolved_year, "state": state, "office": office}, "candidates": [], "deltas": []}
+
+        where, params = self._where(ano=resolved_year, uf=state, cargo=office)
+        id_expr = (
+            f"regexp_replace(TRIM(CAST({id_col} AS VARCHAR)), '\\.0$', '')"
+            if id_col
+            else "CAST(NULL AS VARCHAR)"
+        )
+        ranking = self._df(
+            "SELECT "
+            f"{key_expr} AS candidate_key, MAX({id_expr}) AS candidate_id, "
+            f"SUM(COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)) AS votes "
+            f"FROM analytics {where} GROUP BY {key_expr} ORDER BY votes DESC",
+            params,
+        )
+        total_context_votes = float(ranking["votes"].sum()) if not ranking.empty else 0.0
+        total_context_votes = total_context_votes or 1.0
+        rank_map = {
+            str(row["candidate_id"]): index + 1
+            for index, row in ranking.reset_index(drop=True).iterrows()
+            if pd.notna(row["candidate_id"])
+        }
+
+        candidates_out: list[dict[str, object]] = []
+        for candidate_id in candidate_ids_clean:
+            candidate_rows = self._candidate_filtered_df(
+                candidate_id,
+                ano=resolved_year,
+                uf=state,
+                cargo=office,
+            )
+            if candidate_rows.empty:
+                continue
+            votes = int(pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0).sum())
+            history_rows, _ = self._candidate_history_targeted_rows(
+                candidate_id=candidate_id,
+                state=state,
+                office=office,
+            )
+            retention = self._candidate_retention_from_history(history_rows, resolved_year)
+            identity_payload = self._candidate_identity_payload(candidate_rows)
+            name = ""
+            if col_name and col_name in candidate_rows.columns:
+                names = self._text_series(candidate_rows[col_name]).replace("", pd.NA).dropna()
+                name = str(names.iloc[0]) if not names.empty else ""
+            party = None
+            if col_party and col_party in candidate_rows.columns:
+                parties = self._text_series(candidate_rows[col_party]).replace("", pd.NA).dropna()
+                party = str(parties.iloc[0]) if not parties.empty else None
+            source_id = identity_payload["source_id"] or candidate_id
+            candidates_out.append(
+                {
+                    "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
+                    "name": name,
+                    "party": party,
+                    "votes": votes,
+                    "vote_share": round((votes / total_context_votes) * 100, 4),
+                    "retention": retention,
+                    "state_rank": rank_map.get(str(source_id)),
+                }
+            )
+
+        deltas: list[dict[str, object]] = []
+        for metric in ["votes", "vote_share", "retention"]:
+            ranked_metric = sorted(candidates_out, key=lambda item: float(item.get(metric) or 0), reverse=True)
+            if len(ranked_metric) >= 2:
+                gap = float(ranked_metric[0].get(metric) or 0) - float(ranked_metric[1].get(metric) or 0)
+                deltas.append(
+                    {
+                        "metric": metric,
+                        "best_candidate_id": ranked_metric[0]["candidate_id"],
+                        "gap_to_second": round(gap, 4),
+                    }
+                )
+        return {
+            "context": {"year": resolved_year, "state": state, "office": office},
+            "candidates": candidates_out,
+            "deltas": deltas,
+        }
 
     def search_candidates(
         self,
@@ -2393,7 +2660,169 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
-        return CandidateHistoryMixin.search_candidates(self, q, ano, turno=turno, uf=uf, cargo=cargo, partido=partido, page=page, page_size=page_size)
+        col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
+        candidate_key_expr = self._candidate_group_key_sql_expr(include_turno=False)
+        if not col_name or not candidate_key_expr:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        query = str(q or "").strip()
+        query_norm = self._normalize_value(query, uppercase=True)
+        if not query_norm:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        col_candidate_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_source_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
+        col_number = self._pick_col(["NR_CANDIDATO"])
+        col_party = self._pick_col(["SG_PARTIDO"])
+        col_office = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_state = self._pick_col(["SG_UF"])
+        col_status = self._pick_col(["DS_SIT_TOT_TURNO"])
+        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
+        col_round = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_cpf = self._pick_col(["NR_CPF_CANDIDATO"])
+        col_history = self._pick_col(["HISTORICO_CANDIDATURA_ID"])
+        col_birth = self._pick_col(["DT_NASCIMENTO"])
+
+        def identifier_expr(col: str | None) -> str:
+            if not col:
+                return "CAST(NULL AS VARCHAR)"
+            return f"NULLIF(regexp_replace(TRIM(CAST({col} AS VARCHAR)), '\\.0$', ''), '')"
+
+        name_expr = self._nullable_text_sql_expr(col_name)
+        name_norm_expr = self._normalized_sql_text_expr(col_name)
+        candidate_id_expr = identifier_expr(col_candidate_id)
+        source_id_expr = identifier_expr(col_source_id)
+        number_expr = identifier_expr(col_number)
+        party_expr = self._nullable_text_sql_expr(col_party, uppercase=True)
+        office_expr = self._nullable_text_sql_expr(col_office)
+        state_expr = self._nullable_text_sql_expr(col_state, uppercase=True)
+        status_expr = self._nullable_text_sql_expr(col_status)
+        cpf_expr = identifier_expr(col_cpf)
+        history_expr = self._nullable_text_sql_expr(col_history)
+        birth_expr = self._nullable_text_sql_expr(col_birth)
+        votes_expr = f"COALESCE(TRY_CAST({col_votes} AS BIGINT), 0)" if col_votes else "0"
+        round_expr = (
+            "COALESCE("
+            f"TRY_CAST({col_round} AS BIGINT), "
+            f"TRY_CAST(regexp_extract(CAST({col_round} AS VARCHAR), '(\\d+)', 1) AS BIGINT), 0)"
+            if col_round
+            else "0"
+        )
+
+        where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido)
+        connector = "AND" if where else "WHERE"
+        params.extend([f"%{query_norm}%", query_norm, f"{query_norm}%"])
+        latest_filter = ""
+        if turno is None and col_round:
+            latest_filter = (
+                "QUALIFY round_no = MAX(round_no) OVER (PARTITION BY candidate_key)"
+            )
+
+        sql = (
+            "WITH scoped AS ("
+            "SELECT "
+            f"{candidate_key_expr} AS candidate_key, "
+            f"{candidate_id_expr} AS candidate_id, "
+            f"{source_id_expr} AS source_id, "
+            f"{number_expr} AS candidate_number, "
+            f"{name_expr} AS candidate_name, "
+            f"{party_expr} AS party, "
+            f"{office_expr} AS office, "
+            f"{state_expr} AS state, "
+            f"{status_expr} AS status, "
+            f"{cpf_expr} AS candidate_cpf, "
+            f"{history_expr} AS history_id, "
+            f"{birth_expr} AS birth_date, "
+            f"{round_expr} AS round_no, "
+            f"{votes_expr} AS votes, "
+            f"CASE WHEN {name_norm_expr} = ? THEN 6 "
+            f"WHEN {name_norm_expr} LIKE ? THEN 3 ELSE 1 END AS score "
+            f"FROM analytics {where} {connector} "
+            f"{candidate_key_expr} IS NOT NULL AND {name_norm_expr} LIKE ?"
+            "), latest AS ("
+            "SELECT * FROM scoped "
+            f"{latest_filter}"
+            "), grouped AS ("
+            "SELECT candidate_key, "
+            "MAX(candidate_id) AS candidate_id, "
+            "MAX(source_id) AS source_id, "
+            "MAX(candidate_number) AS candidate_number, "
+            "MAX(candidate_name) AS candidate_name, "
+            "MAX(party) AS party, "
+            "MAX(office) AS office, "
+            "CASE WHEN COUNT(DISTINCT state) = 1 THEN MAX(state) ELSE NULL END AS state, "
+            "MAX(status) AS status, "
+            "MAX(candidate_cpf) AS candidate_cpf, "
+            "MAX(history_id) AS history_id, "
+            "MAX(birth_date) AS birth_date, "
+            "MAX(round_no) AS round_no, "
+            "SUM(votes) AS votes, "
+            "MAX(score) AS score "
+            "FROM latest GROUP BY candidate_key"
+            "), counted AS ("
+            "SELECT *, COUNT(*) OVER () AS total FROM grouped"
+            ") SELECT * FROM counted "
+            "ORDER BY votes DESC, score DESC, candidate_name ASC "
+            "LIMIT ? OFFSET ?"
+        )
+        # The match parameter belongs to the WHERE clause; score parameters are
+        # listed earlier in SELECT and therefore precede it in positional order.
+        where_param_count = len(params) - 3
+        base_params = params[:where_param_count]
+        search_params = params[where_param_count:]
+        sql_params = [search_params[1], search_params[2], *base_params, search_params[0]]
+        sql_params.extend([int(page_size), int((page - 1) * page_size)])
+        rows = self._df(sql, sql_params)
+        if rows.empty:
+            return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+
+        total = int(rows.iloc[0]["total"] or 0)
+        total_pages = (total + page_size - 1) // page_size if total and page_size > 0 else 0
+        items: list[dict[str, object]] = []
+        for row in rows.to_dict("records"):
+            candidate_id = str(row.get("candidate_id") or row.get("candidate_name") or "").strip()
+            identity_row = pd.DataFrame(
+                [
+                    {
+                        "SQ_CANDIDATO": row.get("source_id"),
+                        "NR_CANDIDATO": row.get("candidate_number"),
+                        "NR_CPF_CANDIDATO": row.get("candidate_cpf"),
+                        "HISTORICO_CANDIDATURA_ID": row.get("history_id"),
+                        "NM_CANDIDATO": row.get("candidate_name"),
+                        "DT_NASCIMENTO": row.get("birth_date"),
+                    }
+                ]
+            )
+            identity_payload = self._candidate_identity_payload(identity_row)
+            round_value = self._parse_int(row.get("round_no"))
+            votes_value = int(row.get("votes") or 0)
+            number_value = str(row.get("candidate_number") or candidate_id).strip() or None
+            items.append(
+                {
+                    "candidate_id": candidate_id,
+                    "source_id": identity_payload["source_id"],
+                    "canonical_candidate_id": identity_payload["canonical_candidate_id"],
+                    "person_id": identity_payload["person_id"],
+                    "turno_referencia": round_value if round_value and round_value > 0 else None,
+                    "latest_vote_round": round_value if round_value and round_value > 0 else None,
+                    "latest_vote_value": votes_value,
+                    "candidato": str(row.get("candidate_name") or "").strip(),
+                    "partido": str(row["party"]).strip() if pd.notna(row.get("party")) else None,
+                    "cargo": str(row["office"]).strip() if pd.notna(row.get("office")) else None,
+                    "uf": str(row["state"]).strip() if pd.notna(row.get("state")) else None,
+                    "numero": number_value,
+                    "votos": votes_value if col_votes else None,
+                    "situacao": str(row["status"]).strip() if pd.notna(row.get("status")) else None,
+                }
+            )
+
+        return {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "items": items,
+        }
 
         col_candidato = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         if not col_candidato:

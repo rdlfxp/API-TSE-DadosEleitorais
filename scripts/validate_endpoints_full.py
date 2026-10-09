@@ -12,6 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Valida endpoints principais da API com foco em anos legados.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="URL base da API")
     parser.add_argument("--legacy-year", type=int, default=2016, help="Ano legado esperado para validação")
+    parser.add_argument("--target-year", type=int, default=2026, help="Ano mais recente validado em todos os fluxos")
     parser.add_argument("--timeout", type=float, default=30.0, help="Timeout por request")
     return parser.parse_args()
 
@@ -65,12 +66,24 @@ def main() -> None:
     ufs = filtros_obj.get("ufs", []) if isinstance(filtros_obj.get("ufs", []), list) else []
     cargos = filtros_obj.get("cargos", []) if isinstance(filtros_obj.get("cargos", []), list) else []
 
-    year = args.legacy_year if args.legacy_year in anos else (max([a for a in anos if isinstance(a, int) and a <= args.legacy_year], default=None))
-    if year is None:
-        raise SystemExit(f"[validate-endpoints] nenhum ano legado <= {args.legacy_year} encontrado em filtros")
+    if args.legacy_year not in anos:
+        raise SystemExit(
+            f"[validate-endpoints] ano legado {args.legacy_year} ausente em filtros"
+        )
+    if args.target_year not in anos:
+        raise SystemExit(
+            f"[validate-endpoints] ano alvo {args.target_year} ausente em filtros"
+        )
+    year = args.target_year
 
     uf = "SP" if "SP" in ufs else (ufs[0] if ufs else None)
-    cargo = "Vereador" if "Vereador" in cargos else (cargos[0] if cargos else None)
+    preferred_cargos = (
+        ["Deputado Estadual", "Deputado Federal", "Senador", "Governador"]
+        if year % 4 == 2
+        else ["Vereador", "Prefeito"]
+    )
+    cargo = next((value for value in preferred_cargos if value in cargos), None)
+    cargo = cargo or (cargos[0] if cargos else None)
 
     run("/v1/analytics/overview", {"ano": year, "uf": uf, "cargo": cargo})
     run("/v1/analytics/top-candidatos", {"ano": year, "turno": 1, "uf": uf, "cargo": cargo, "top_n": 5})
@@ -84,7 +97,12 @@ def main() -> None:
     run("/v1/analytics/ranking", {"group_by": "partido", "metric": "votos_nominais", "ano": year, "uf": uf, "cargo": cargo, "top_n": 5})
     run("/v1/analytics/mapa-uf", {"metric": "votos_nominais", "ano": year, "cargo": cargo})
     run("/v1/analytics/vagas-oficiais", {"ano": year, "uf": uf, "group_by": "cargo"})
-    run("/v1/analytics/polarizacao", {"uf": uf, "ano_governador": 2014, "ano_municipal": 2016})
+    governor_year = year if year % 4 == 2 else max(year - 2, 2002)
+    municipal_year = year if year % 4 == 0 else year - 2
+    run(
+        "/v1/analytics/polarizacao",
+        {"uf": uf, "ano_governador": governor_year, "ano_municipal": municipal_year},
+    )
 
     _, top_obj = run("/v1/analytics/top-candidatos", {"ano": year, "turno": 1, "uf": uf, "cargo": cargo, "top_n": 10})
     items = top_obj.get("items", []) if isinstance(top_obj, dict) else []

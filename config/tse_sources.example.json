@@ -214,5 +214,45 @@
     "extract_members": [
       "*votacao_candidato_munzona_2024*.csv"
     ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/consulta_cand_2026.zip",
+    "target": "2026/consulta_cand_2026.zip",
+    "extract": true,
+    "extract_members": [
+      "consulta_cand_2026_BRASIL.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand_complementar/consulta_cand_complementar_2026.zip",
+    "target": "2026/consulta_cand_complementar_2026.zip",
+    "extract": true,
+    "extract_members": [
+      "consulta_cand_complementar_2026_BRASIL.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/historico_candidatura/historico_candidatura_2026.zip",
+    "target": "2026/historico_candidatura_2026.zip",
+    "extract": true,
+    "extract_members": [
+      "historico_candidatura_2026_BRASIL.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_vagas/consulta_vagas_2026.zip",
+    "target": "2026/consulta_vagas_2026.zip",
+    "extract": true,
+    "extract_members": [
+      "consulta_vagas_2026_BRASIL.csv"
+    ]
+  },
+  {
+    "url": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_candidato_munzona/votacao_candidato_munzona_2026.zip",
+    "target": "2026/votacao_candidato_munzona_2026.zip",
+    "extract": true,
+    "extract_members": [
+      "votacao_candidato_munzona_2026_BRASIL.csv"
+    ]
   }
 ]

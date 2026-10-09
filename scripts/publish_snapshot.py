@@ -34,7 +34,13 @@ def main() -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
 
     copied: list[str] = []
-    for filename in ["analytics.csv", "analytics.parquet", "quality_report.json", "manifest.json"]:
+    for filename in [
+        "analytics.csv",
+        "analytics.parquet",
+        "candidate_history.parquet",
+        "quality_report.json",
+        "manifest.json",
+    ]:
         src = source_dir / filename
         if src.exists():
             shutil.copy2(src, target_dir / filename)

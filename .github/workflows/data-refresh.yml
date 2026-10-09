@@ -6,7 +6,7 @@ on:
       normalize_years:
         description: "Anos para normalizacao (separados por espaco)"
         required: false
-        default: "2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024"
+        default: "2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026"
         type: string
       publish_to_r2:
         description: "Publicar curated/snapshots no Cloudflare R2"
@@ -70,11 +70,12 @@ jobs:
       - name: Normalize raw data
         if: steps.raw_check.outputs.csv_count != '0'
         run: |
-          NORMALIZE_YEARS="${{ inputs.normalize_years || '2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024' }}"
+          NORMALIZE_YEARS="${{ inputs.normalize_years || '2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026' }}"
           echo "Normalize years: $NORMALIZE_YEARS"
           python scripts/normalize.py \
             --raw-dir data/raw \
             --years $NORMALIZE_YEARS \
+            --chunk-size 250000 \
             --quality-gate \
             --max-duplicate-rows 0 \
             --max-negative-votes 0 \
@@ -110,7 +111,8 @@ jobs:
 
           python scripts/validate_endpoints_full.py \
             --base-url http://127.0.0.1:8000 \
-            --legacy-year 2016
+            --legacy-year 2016 \
+            --target-year 2026
 
       - name: Publish snapshot
         if: steps.raw_check.outputs.csv_count != '0'
@@ -123,6 +125,7 @@ jobs:
             --analytics data/curated/analytics.csv \
             --quality-report data/curated/quality_report.json \
             --manifest data/curated/manifest.json \
+            --expected-years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026 \
             --require-release \
             --max-duplicate-rows 0 \
             --max-negative-votes 0 \
@@ -136,6 +139,7 @@ jobs:
           path: |
             data/curated/analytics.csv
             data/curated/analytics.parquet
+            data/curated/candidate_history.parquet
             data/curated/quality_report.json
             data/curated/manifest.json
 

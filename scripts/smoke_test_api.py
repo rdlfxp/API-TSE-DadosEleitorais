@@ -95,28 +95,38 @@ def main() -> None:
     assert_true(bool(anos), "filtros sem anos")
     print("[smoke] ok: /v1/analytics/filtros")
 
-    overview_params = {"ano": anos[0]}
-    if ufs:
-        overview_params["uf"] = ufs[0]
-    if cargos:
-        overview_params["cargo"] = cargos[0]
+    year = max(int(value) for value in anos)
+    uf = "SP" if "SP" in ufs else (ufs[0] if ufs else None)
+    preferred_cargos = (
+        ["Deputado Estadual", "Deputado Federal", "Senador", "Governador"]
+        if year % 4 == 2
+        else ["Vereador", "Prefeito"]
+    )
+    cargo = next((value for value in preferred_cargos if value in cargos), None)
+    cargo = cargo or (cargos[0] if cargos else None)
+
+    overview_params = {"ano": year}
+    if uf:
+        overview_params["uf"] = uf
+    if cargo:
+        overview_params["cargo"] = cargo
     status, _ = fetch_json(base_url, "/v1/analytics/overview", args.timeout, overview_params, retries=args.retries, retry_delay=args.retry_delay)
     assert_true(status == 200, "overview status != 200")
     print("[smoke] ok: /v1/analytics/overview")
 
     query = "ca"
-    if cargos:
-        query = str(cargos[0]).split(" ")[0]
+    if cargo:
+        query = str(cargo).split(" ")[0]
     candidate_params = {
         "q": query[:2] if len(query) > 1 else "ca",
-        "ano": anos[0],
+        "ano": year,
         "page": 1,
         "page_size": 5,
     }
-    if ufs:
-        candidate_params["uf"] = ufs[0]
-    if cargos:
-        candidate_params["cargo"] = cargos[0]
+    if uf:
+        candidate_params["uf"] = uf
+    if cargo:
+        candidate_params["cargo"] = cargo
     status, busca = fetch_json(
         base_url,
         "/v1/analytics/candidatos/search",
@@ -129,13 +139,14 @@ def main() -> None:
     assert_true("items" in busca and "total" in busca, "resposta candidatos invalida")
     print("[smoke] ok: /v1/analytics/candidatos/search")
 
-    top_attempts: list[dict[str, object]] = [{"ano": anos[0], "top_n": 3}]
-    if ufs:
-        top_attempts.append({"ano": anos[0], "top_n": 3, "uf": ufs[0]})
-    if cargos:
-        top_attempts.append({"ano": anos[0], "top_n": 3, "cargo": cargos[0]})
-    if ufs and cargos:
-        top_attempts.append({"ano": anos[0], "top_n": 3, "uf": ufs[0], "cargo": cargos[0]})
+    top_attempts: list[dict[str, object]] = []
+    if uf and cargo:
+        top_attempts.append({"ano": year, "top_n": 3, "uf": uf, "cargo": cargo})
+    if cargo:
+        top_attempts.append({"ano": year, "top_n": 3, "cargo": cargo})
+    if uf:
+        top_attempts.append({"ano": year, "top_n": 3, "uf": uf})
+    top_attempts.append({"ano": year, "top_n": 3})
 
     top = {}
     top_items: list[dict] = []
@@ -249,7 +260,7 @@ def main() -> None:
         base_url,
         "/v1/analytics/distribuicao",
         args.timeout,
-        {"group_by": "genero", "ano": anos[0]},
+        {"group_by": "genero", "ano": year},
         retries=args.retries,
         retry_delay=args.retry_delay,
     )

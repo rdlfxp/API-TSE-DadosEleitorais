@@ -19,7 +19,9 @@ Organizacao recomendada:
 - `data/curated/analytics.csv`: artefato legado/publicado junto do snapshot
 - `data/curated/quality_report.json`: relatorio de qualidade da consolidacao
 
-Por padrao, a API carrega apenas `data/curated/analytics.parquet`.
+Por padrao, a API carrega `data/curated/analytics.parquet`. Quando presente,
+`data/curated/candidate_history.parquet` e usado automaticamente como indice
+compacto dos endpoints de historico e comparacao.
 
 Você pode configurar via `.env`:
 
@@ -59,11 +61,14 @@ R2_ACCESS_KEY_ID=seu_access_key
 R2_SECRET_ACCESS_KEY=sua_secret_key
 R2_BUCKET=tse-curated
 R2_OBJECT_KEY_PARQUET=latest/analytics.parquet
+R2_OBJECT_KEY_CANDIDATE_HISTORY=latest/candidate_history.parquet
 R2_CONNECT_TIMEOUT_SECONDS=5
 R2_READ_TIMEOUT_SECONDS=30
 ```
 
-Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap usa apenas `latest/analytics.parquet` para a API.
+Com `PREFER_PARQUET_IF_AVAILABLE=true`, o bootstrap baixa
+`latest/analytics.parquet` e tenta baixar o indice historico configurado. Se o
+indice ainda nao existir, a API continua funcional usando o arquivo principal.
 
 ## Compatibilidade de parâmetros de ano
 
@@ -112,7 +117,7 @@ O script sobe um servidor local, executa cada rota de forma isolada e mostra:
 
 Se a API já estiver rodando, use `--base-url` e informe `--pid`.
 
-## 4) Normalizacao multi-ano (2000-2024)
+## 4) Normalizacao multi-ano (2000-2026)
 
 ### 4.1) Fluxo recomendado (auto descoberta em `data/raw`)
 
@@ -150,17 +155,54 @@ Parquet opcional (melhor performance em volume alto):
 pip install pyarrow
 python3 scripts/normalize.py \
   --raw-dir data/raw \
-  --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 \
+  --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026 \
   --output data/curated/analytics.parquet \
   --report data/curated/quality_report.json
 ```
+
+### 4.1.1) Atualizacao incremental de 2026
+
+Para 2026, normalize primeiro apenas a nova particao com as cinco fontes
+oficiais (candidatos, complemento, historico, vagas e votacao por
+municipio/zona). Depois mescle com o Parquet historico. A mesclagem substitui
+uma eventual particao 2026, enriquece anos anteriores com o identificador do
+historico oficial e gera o indice compacto usado pela API:
+
+O snapshot de 2026 deve refletir exatamente os turnos presentes no arquivo de
+votacao do TSE. Enquanto apenas o primeiro turno estiver publicado, os campos
+de segundo turno permanecem nulos, sem projecoes ou preenchimento artificial.
+
+```bash
+python scripts/normalize.py \
+  --raw-dir data/raw \
+  --years 2026 \
+  --chunk-size 250000 \
+  --output data/curated/analytics_2026.parquet \
+  --report data/curated/quality_report_2026.json \
+  --manifest data/curated/manifest_2026.json \
+  --quality-gate
+
+python scripts/merge_curated_year.py \
+  --base data/curated/analytics.parquet \
+  --year-file data/curated/analytics_2026.parquet \
+  --target-year 2026 \
+  --historico data/raw/2026/historico_candidatura_2026_BRASIL.csv \
+  --output data/curated/analytics.with-2026.parquet \
+  --report data/curated/quality_report.with-2026.json \
+  --manifest data/curated/manifest.with-2026.json
+```
+
+Valide o arquivo separado antes de promovê-lo para
+`data/curated/analytics.parquet`. O indice correspondente e gerado como
+`candidate_history.with-2026.parquet`; ao promover, use o nome
+`candidate_history.parquet`.
 
 Para integrar outras variacoes de planilha de votacao, adicione mais padroes:
 
 ```bash
 python3 scripts/normalize.py \
   --raw-dir data/raw \
-  --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 \
+  --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026 \
   --votacao-pattern '*votacao_candidato*munzona*.csv' '*votacao_candidato*.csv' \
   --consulta-pattern '*consulta_cand*.csv' '*consulta_vagas*.csv'
 ```
@@ -570,7 +612,7 @@ O que ele faz:
 Agendamento semanal:
 - cron atual: `0 9 * * 1` (toda segunda-feira, 09:00 UTC)
 - para runs agendados, `publish_to_r2` fica ativo automaticamente
-- anos padrão de normalização: `2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024`
+- anos padrão de normalização: `2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026`
 
 Configuração de fontes remotas:
 - em `Settings > Secrets and variables > Actions > Secrets`, crie `TSE_SOURCES_JSON`
@@ -581,7 +623,7 @@ Configuração de fontes remotas:
 
 Execução manual com multi-ano customizado:
 - `Actions` > `Data Refresh` > `Run workflow`
-- `normalize_years`: ex. `2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024`
+- `normalize_years`: ex. `2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026`
 - `publish_to_r2`: `true`
 - `keep_snapshots`: ex. `7`
 

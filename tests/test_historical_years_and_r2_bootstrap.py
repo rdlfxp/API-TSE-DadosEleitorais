@@ -412,6 +412,12 @@ def test_r2_bootstrap_downloads_parquet_only(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap.settings, "r2_secret_access_key", "secret", raising=False)
     monkeypatch.setattr(bootstrap.settings, "r2_bucket", "bucket", raising=False)
     monkeypatch.setattr(bootstrap.settings, "r2_object_key_parquet", "latest/analytics.parquet", raising=False)
+    monkeypatch.setattr(
+        bootstrap.settings,
+        "r2_object_key_candidate_history",
+        "latest/candidate_history.parquet",
+        raising=False,
+    )
 
     client = _FakeR2Client(available_keys={"latest/analytics.parquet"})
     monkeypatch.setattr(bootstrap, "_build_client", lambda: client)
@@ -421,7 +427,7 @@ def test_r2_bootstrap_downloads_parquet_only(tmp_path, monkeypatch):
 
     assert chosen == preferred
     assert chosen.exists()
-    assert client.downloaded == ["latest/analytics.parquet"]
+    assert client.downloaded == ["latest/analytics.parquet", "latest/candidate_history.parquet"]
 
 def test_lifespan_loads_from_r2_bootstrap_when_local_missing(tmp_path, monkeypatch):
     downloaded_parquet = tmp_path / "downloaded" / "analytics.parquet"
