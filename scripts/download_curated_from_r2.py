@@ -6,6 +6,7 @@ from pathlib import Path
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 
 def main() -> None:
@@ -28,11 +29,19 @@ def main() -> None:
     )
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    for filename in ("analytics.parquet", "candidate_history.parquet"):
+    # O indice de historico e regenerado por merge_curated_year.py a partir do
+    # Parquet mesclado; por isso sua ausencia no R2 nao bloqueia o refresh.
+    for filename, required in (("analytics.parquet", True), ("candidate_history.parquet", False)):
         key = f"{args.prefix.rstrip('/')}/{filename}"
         destination = output_dir / filename
         print(f"[r2-download] {key} -> {destination}", flush=True)
-        client.download_file(args.bucket, key, str(destination))
+        try:
+            client.download_file(args.bucket, key, str(destination))
+        except ClientError as exc:
+            status = str(exc.response.get("Error", {}).get("Code", ""))
+            if required or status not in {"404", "NoSuchKey", "NotFound"}:
+                raise
+            print(f"[r2-download] {key} ausente no R2; sera regenerado no merge", flush=True)
 
 
 if __name__ == "__main__":
