@@ -48,9 +48,23 @@ jobs:
           # normalize.py grava Parquet via pandas; a imagem da API nao precisa disso.
           pip install pyarrow==17.0.0
 
+      # A carga completa (2000+) excede o runner hospedado; o agendamento semanal
+      # atualiza apenas a eleicao mais recente (ultimo ano par).
+      - name: Resolve refresh mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            CURRENT_YEAR=$(date -u +%Y)
+            YEAR=$((CURRENT_YEAR - CURRENT_YEAR % 2))
+          else
+            YEAR="${{ inputs.incremental_year }}"
+          fi
+          echo "year=$YEAR" >> "$GITHUB_OUTPUT"
+          echo "Incremental year: ${YEAR:-<full refresh>}"
+
       - name: Fetch configured TSE sources
         run: |
-          INCREMENTAL_YEAR="${{ inputs.incremental_year || '' }}"
+          INCREMENTAL_YEAR="${{ steps.mode.outputs.year }}"
           if [ -n "${{ secrets.TSE_SOURCES_JSON }}" ]; then
             printf '%s' '${{ secrets.TSE_SOURCES_JSON }}' > /tmp/tse_sources.json
             FETCH_ARGS=(--config /tmp/tse_sources.json --raw-dir data/raw --timeout 180 --retries 3)
@@ -75,7 +89,7 @@ jobs:
           echo "CSV files found: $CSV_COUNT"
 
       - name: Download base snapshot for incremental refresh
-        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year != ''
+        if: steps.raw_check.outputs.csv_count != '0' && steps.mode.outputs.year != ''
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -90,7 +104,7 @@ jobs:
             --bucket "$R2_BUCKET"
 
       - name: Normalize raw data (full)
-        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year == ''
+        if: steps.raw_check.outputs.csv_count != '0' && steps.mode.outputs.year == ''
         run: |
           NORMALIZE_YEARS="${{ inputs.normalize_years || '2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026' }}"
           echo "Normalize years: $NORMALIZE_YEARS"
@@ -107,9 +121,9 @@ jobs:
             --manifest data/curated/manifest.json
 
       - name: Normalize incremental partition
-        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year != ''
+        if: steps.raw_check.outputs.csv_count != '0' && steps.mode.outputs.year != ''
         run: |
-          YEAR="${{ inputs.incremental_year }}"
+          YEAR="${{ steps.mode.outputs.year }}"
           python scripts/normalize.py \
             --raw-dir data/raw \
             --years "$YEAR" \
@@ -123,9 +137,9 @@ jobs:
             --max-required-null-rate 0.02
 
       - name: Merge incremental partition
-        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year != ''
+        if: steps.raw_check.outputs.csv_count != '0' && steps.mode.outputs.year != ''
         run: |
-          YEAR="${{ inputs.incremental_year }}"
+          YEAR="${{ steps.mode.outputs.year }}"
           python scripts/merge_curated_year.py \
             --base data/curated/analytics.parquet \
             --year-file "data/curated/analytics_${YEAR}.parquet" \
@@ -139,7 +153,7 @@ jobs:
           mv data/curated/candidate_history.with-incremental.parquet data/curated/candidate_history.parquet
 
       - name: Convert curated CSV to Parquet
-        if: steps.raw_check.outputs.csv_count != '0' && inputs.incremental_year == ''
+        if: steps.raw_check.outputs.csv_count != '0' && steps.mode.outputs.year == ''
         run: |
           python scripts/convert_csv_to_parquet.py \
             --input data/curated/analytics.csv \
@@ -176,7 +190,7 @@ jobs:
         if: steps.raw_check.outputs.csv_count != '0'
         run: |
           ANALYTICS_VALIDATION_FILE="data/curated/analytics.csv"
-          if [ -n "${{ inputs.incremental_year }}" ]; then
+          if [ -n "${{ steps.mode.outputs.year }}" ]; then
             ANALYTICS_VALIDATION_FILE="data/curated/analytics.parquet"
           fi
           python scripts/go_no_go.py \
