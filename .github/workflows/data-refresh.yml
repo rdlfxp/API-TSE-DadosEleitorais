@@ -45,6 +45,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # normalize.py grava Parquet via pandas; a imagem da API nao precisa disso.
+          pip install pyarrow==17.0.0
 
       - name: Fetch configured TSE sources
         run: |
