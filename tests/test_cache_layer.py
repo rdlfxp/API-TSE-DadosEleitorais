@@ -259,3 +259,28 @@ def test_warmup_retries_429_and_counts_it(monkeypatch):
     status = {"failed": 0, "throttled": 0}
     cache_warmup._fetch("http://x/v1/analytics/idade", 1.0, None, status)
     assert status["failed"] == 1 and status["throttled"] == cache_warmup.MAX_THROTTLE_RETRIES
+
+
+def test_redis_lock_is_released_after_compute_even_when_it_fails(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(redis_cache, "get_redis_client", lambda: fake)
+    key = "v1:release"
+    ok, _ = cache_module.single_flight(key, lambda: None, lambda: {"v": 1})
+    assert ok == {"v": 1} and f"lock:{key}" not in fake.store
+    with pytest.raises(RuntimeError):
+        cache_module.single_flight(key, lambda: None, lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert f"lock:{key}" not in fake.store
+
+
+def test_l1_is_checked_before_redis_and_redis_hits_are_promoted(monkeypatch):
+    fake = FakeRedis()
+    reads = {"n": 0}
+    original_get = fake.get
+    fake.get = lambda key: reads.__setitem__("n", reads["n"] + 1) or original_get(key)
+    monkeypatch.setattr(redis_cache, "get_redis_client", lambda: fake)
+    cache_module.cache_set("v1:k", 3600, {"a": 1})
+    assert cache_module.cache_get("v1:k") == {"a": 1} and reads["n"] == 0  # L1 resolve sem tocar no Redis
+    cache_module.ANALYTICS_CACHE.clear()
+    assert cache_module.cache_get("v1:k") == {"a": 1} and reads["n"] == 1  # veio do Redis
+    assert cache_module.cache_get("v1:k") == {"a": 1} and reads["n"] == 1  # promovido: segunda leitura no L1
+    assert cache_module.CACHE_STATS["l2_hits"] == 1 and cache_module.CACHE_STATS["l1_hits"] == 2

@@ -95,7 +95,11 @@ def single_flight(cache_key: str, lookup, compute):
                 cached = lookup()
                 if cached is not None:
                     return cached, True
-        return compute(), False
+        try:
+            return compute(), False
+        finally:
+            if got is True:
+                redis_delete(lock_key)  # o TTL e so rede de seguranca; nao deixar a chave por 90 s
     finally:
         flight.release()
         with _FLIGHTS_LOCK:
@@ -146,28 +150,33 @@ EDGE_CACHE_TTL_BY_PATH: dict[str, int] = {
 }
 
 
+L1_PROMOTE_TTL_SECONDS = 600
+
+
 def cache_get(cache_key: str, allow_stale: bool = False) -> Any | None:
+    """L1 (memoria) primeiro: acerto sem ida a rede. Depois o Redis (L2), promovendo para L1."""
     now = time.time()
+    with ANALYTICS_CACHE_LOCK:
+        cached = ANALYTICS_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, serialized_payload = cached
+            if allow_stale or expires_at >= now:
+                ANALYTICS_CACHE.move_to_end(cache_key)
+                _count("l1_hits")
+                return json.loads(serialized_payload)
+            ANALYTICS_CACHE.pop(cache_key, None)
+
     redis_payload = redis_get(cache_key)
     if redis_payload is not None:
         try:
             value = json.loads(redis_payload)
-            _count("l2_hits")
-            return value
         except Exception:
             redis_delete(cache_key)
-
-    with ANALYTICS_CACHE_LOCK:
-        cached = ANALYTICS_CACHE.get(cache_key)
-        if cached is None:
             return None
-        expires_at, serialized_payload = cached
-        if allow_stale or expires_at >= now:
-            ANALYTICS_CACHE.move_to_end(cache_key)
-            _count("l1_hits")
-            return json.loads(serialized_payload)
-        ANALYTICS_CACHE.pop(cache_key, None)
-        return None
+        _count("l2_hits")
+        _l1_store(cache_key, L1_PROMOTE_TTL_SECONDS, bytes(redis_payload))
+        return value
+    return None
 
 
 def dataset_cache_version() -> str:
@@ -219,6 +228,28 @@ def process_memory_mb() -> float | None:
     return round(float(memory_mb), 2)
 
 
+def _l1_store(cache_key: str, ttl_seconds: int, serialized_payload: bytes) -> bool:
+    """Guarda no L1 respeitando os limites de entradas, bytes totais e bytes por entrada."""
+    entry_bytes = len(serialized_payload)
+    max_entries = max(1, int(settings.analytics_cache_max_entries))
+    max_total_bytes = max(0, int(settings.analytics_cache_max_total_mb)) * 1024 * 1024
+    max_entry_bytes = max(0, int(settings.analytics_cache_max_entry_kb)) * 1024
+    if (max_entry_bytes and entry_bytes > max_entry_bytes) or (max_total_bytes and entry_bytes > max_total_bytes):
+        return False
+    now = time.time()
+    with ANALYTICS_CACHE_LOCK:
+        cache_prune_locked(now)
+        ANALYTICS_CACHE.pop(cache_key, None)
+        if max_total_bytes > 0:
+            while ANALYTICS_CACHE and (cache_total_bytes_locked() + entry_bytes) > max_total_bytes:
+                ANALYTICS_CACHE.popitem(last=False)
+        while ANALYTICS_CACHE and len(ANALYTICS_CACHE) >= max_entries:
+            ANALYTICS_CACHE.popitem(last=False)
+        ANALYTICS_CACHE[cache_key] = (now + ttl_seconds, serialized_payload)
+        ANALYTICS_CACHE.move_to_end(cache_key)
+    return True
+
+
 def cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> dict[str, Any]:
     if ttl_seconds <= 0:
         return {"stored": False, "reason": "ttl_disabled", "entry_bytes": 0, "cache_entries": 0, "cache_bytes": 0}
@@ -230,7 +261,6 @@ def cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> dict[str, Any]:
 
     entry_bytes = len(serialized_payload)
     redis_set(cache_key, serialized_payload, ttl_seconds)
-    max_entries = max(1, int(settings.analytics_cache_max_entries))
     max_total_bytes = max(0, int(settings.analytics_cache_max_total_mb)) * 1024 * 1024
     max_entry_bytes = max(0, int(settings.analytics_cache_max_entry_kb)) * 1024
 
@@ -241,19 +271,7 @@ def cache_set(cache_key: str, ttl_seconds: int, payload: Any) -> dict[str, Any]:
         cache_entries, cache_bytes = cache_stats()
         return {"stored": False, "reason": "exceeds_total_budget", "entry_bytes": entry_bytes, "cache_entries": cache_entries, "cache_bytes": cache_bytes}
 
-    now = time.time()
-    with ANALYTICS_CACHE_LOCK:
-        cache_prune_locked(now)
-        ANALYTICS_CACHE.pop(cache_key, None)
-        if max_total_bytes > 0:
-            while ANALYTICS_CACHE and (cache_total_bytes_locked() + entry_bytes) > max_total_bytes:
-                ANALYTICS_CACHE.popitem(last=False)
-        if len(ANALYTICS_CACHE) >= max_entries:
-            while ANALYTICS_CACHE and len(ANALYTICS_CACHE) >= max_entries:
-                ANALYTICS_CACHE.popitem(last=False)
-        ANALYTICS_CACHE[cache_key] = (now + ttl_seconds, serialized_payload)
-        ANALYTICS_CACHE.move_to_end(cache_key)
-
+    _l1_store(cache_key, ttl_seconds, serialized_payload)
     cache_entries, cache_bytes = cache_stats()
     return {"stored": True, "reason": "stored", "entry_bytes": entry_bytes, "cache_entries": cache_entries, "cache_bytes": cache_bytes}
 
