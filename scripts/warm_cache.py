@@ -27,7 +27,10 @@ def main() -> None:
     started = time.monotonic()
     status: dict = {}
     result = run_warmup(args.base_url, args.years, timeout=args.timeout, include_ufs=not args.no_ufs, status=status)
-    print(f"[warm] {result['done']}/{result['total']} chamadas em {time.monotonic() - started:.0f}s, falhas 5xx/timeout: {result['failed']}")
+    print(
+        f"[warm] {result['done']}/{result['total']} chamadas em {time.monotonic() - started:.0f}s, "
+        f"falhas (5xx/timeout/429 esgotado): {result['failed']}, repeticoes por limite de IP: {result['throttled']}"
+    )
     sys.exit(1 if result["failed"] else 0)
 
 

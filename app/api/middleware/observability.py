@@ -1,4 +1,5 @@
 import json
+import secrets
 import time
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from app.core.logging import logger
 from app.infra.cache import configure_cache_headers, process_memory_mb
 from app.infra.metrics import METRICS, METRICS_LOCK
 from app.infra.rate_limit import get_rate_limit_bucket_count
+from app.services.cache_warmup import WARMUP_HEADER, WARMUP_TOKEN
 
 
 def register_observability_middleware(app) -> None:
@@ -21,7 +23,8 @@ def register_observability_middleware(app) -> None:
         started_at = time.perf_counter()
         client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
 
-        if settings.rate_limit_enabled:
+        is_warmup = secrets.compare_digest(request.headers.get(WARMUP_HEADER, ""), WARMUP_TOKEN)
+        if settings.rate_limit_enabled and not is_warmup:
             window = max(1, int(settings.rate_limit_window_seconds))
             limit = max(1, int(settings.rate_limit_max_requests_per_ip))
             bucket = int(time.time() // window)
