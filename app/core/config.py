@@ -43,10 +43,22 @@ class Settings(BaseSettings):
     r2_read_timeout_seconds: int = 30
     redis_url: str | None = None
     redis_enabled: bool = False
+    redis_socket_timeout_seconds: float = 1.0
+    # Eleicoes encerradas nao mudam; a chave ja e versionada pelo snapshot, entao o TTL
+    # pode ser longo. Troca de snapshot invalida pela versao, sem FLUSHALL.
+    analytics_closed_cache_ttl_seconds: int = 604800
+    single_flight_wait_seconds: float = 60.0
+    cache_warmup_enabled: bool = False
+    cache_warmup_years: str = "2022,2024,2026"
+    cache_warmup_delay_seconds: float = 5.0
     live_results_base_url: str = "https://resultados.tse.jus.br"
     live_results_timeout_seconds: int = 10
     live_results_redis_ttl_seconds: int = 10
-    live_results_elections_json: str = '{"2024":{"1":619,"2":620},"2026":{"1":6257}}'
+    # 2026: o TSE separa a eleicao federal (Presidente) da estadual (demais cargos).
+    live_results_elections_json: str = (
+        '{"2024":{"1":619,"2":620},'
+        '"2026":{"1":{"federal":6257,"estadual":6259},"2":{"federal":6258,"estadual":6260}}}'
+    )
 
 
 settings = Settings()

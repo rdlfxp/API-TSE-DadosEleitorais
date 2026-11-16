@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,21 +31,73 @@ class LiveResultsService:
         self.timeout_seconds = timeout_seconds or settings.live_results_timeout_seconds
 
     @staticmethod
-    def _election_ids() -> dict[str, dict[str, int]]:
+    def _election_ids() -> dict[str, dict[str, dict[str, int]]]:
+        """Le LIVE_RESULTS_ELECTIONS_JSON.
+
+        Cada turno aceita um codigo unico (vale para todos os cargos, como nas
+        municipais) ou um objeto por escopo: em 2026 o TSE separa a eleicao
+        "federal" (Presidente) da "estadual" (Governador, Senador e Deputados).
+        """
         try:
             value = json.loads(settings.live_results_elections_json)
         except json.JSONDecodeError as exc:
             raise LiveResultsUnavailable("Configuração de eleições ao vivo inválida.") from exc
-        return {
-            str(year): {str(round_number): int(election_id) for round_number, election_id in rounds.items()}
-            for year, rounds in value.items()
-        }
+        result: dict[str, dict[str, dict[str, int]]] = {}
+        for year, rounds in value.items():
+            result[str(year)] = {}
+            for round_number, codes in rounds.items():
+                if isinstance(codes, dict):
+                    result[str(year)][str(round_number)] = {str(k): int(v) for k, v in codes.items()}
+                else:
+                    result[str(year)][str(round_number)] = {"*": int(codes)}
+        return result
 
-    def _election_id(self, year: int, round_number: int) -> int:
-        election_id = self._election_ids().get(str(year), {}).get(str(round_number))
+    @staticmethod
+    def _scope(office: str) -> str:
+        return "federal" if " ".join(office.strip().lower().split()) == "presidente" else "estadual"
+
+    def _election_id(self, year: int, round_number: int, office: str = "") -> int:
+        codes = self._election_ids().get(str(year), {}).get(str(round_number), {})
+        election_id = codes.get(self._scope(office)) if office else None
+        if election_id is None:
+            election_id = codes.get("*")
         if election_id is None:
             raise LiveResultsNotPublished("Recorte de eleição ainda não publicado.")
         return election_id
+
+    _municipality_tables: dict[int, dict[str, list[dict[str, str]]]] = {}
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        text = unicodedata.normalize("NFKD", value.strip().upper())
+        return " ".join("".join(ch for ch in text if not unicodedata.combining(ch)).split())
+
+    def _municipality_table(self, year: int, election_id: int) -> dict[str, list[dict[str, str]]]:
+        cached = self._municipality_tables.get(election_id)
+        if cached is not None:
+            return cached
+        url = f"{self.base_url}/oficial/ele{year}/{election_id}/config/mun-e{election_id:06d}-cm.json"
+        payload = self._get_json(url)
+        table = {str(item.get("cd", "")).lower(): list(item.get("mu", [])) for item in payload.get("abr", [])}
+        self._municipality_tables[election_id] = table
+        return table
+
+    def _resolve_municipality(self, *, year: int, election_id: int, state: str, municipality: str) -> str:
+        """Aceita codigo TSE (ate 5 digitos), codigo IBGE (7 digitos) ou nome do municipio."""
+        value = municipality.strip()
+        if value.isdigit() and len(value) <= 5:
+            return f"{int(value):05d}"
+        entries = self._municipality_table(year, election_id).get(state.lower(), [])
+        if value.isdigit() and len(value) == 7:
+            match = next((m for m in entries if str(m.get("cdi")) == value), None)
+        else:
+            wanted = self._normalize_name(value)
+            match = next((m for m in entries if self._normalize_name(str(m.get("nm", ""))) == wanted), None)
+        if match is None:
+            raise ValueError(
+                "municipio não encontrado: use o código TSE, o código IBGE ou o nome do município na UF informada."
+            )
+        return f"{int(match['cd']):05d}"
 
     @staticmethod
     def _is_municipal(year: int) -> bool:
@@ -69,15 +122,14 @@ class LiveResultsService:
             raise LiveResultsNotPublished("Cargo ainda não configurado para resultados ao vivo.") from exc
 
     def _build_url(self, *, year: int, round_number: int, office: str, state: str | None, municipality: str | None) -> str:
-        election_id = self._election_id(year, round_number)
         cargo = self._cargo_code(office)
+        election_id = self._election_id(year, round_number, office)
         municipal = self._is_municipal(year)
         if municipal:
             if not state or not municipality:
                 raise ValueError("Eleições municipais exigem uf e municipio.")
-            if not municipality.isdigit() or len(municipality) > 5:
-                raise ValueError("municipio deve ser o código eleitoral numérico do TSE.")
-            location = f"{state.lower()}{int(municipality):05d}"
+            code = self._resolve_municipality(year=year, election_id=election_id, state=state, municipality=municipality)
+            location = f"{state.lower()}{code}"
             return f"{self.base_url}/oficial/ele{year}/{election_id}/dados/{state.lower()}/{location}-c{cargo}-e{election_id:06d}-u.json"
 
         if office.strip().lower() != "presidente" and not state:
@@ -85,8 +137,32 @@ class LiveResultsService:
         location = "br" if office.strip().lower() == "presidente" else state.lower()
         return f"{self.base_url}/oficial/ele{year}/{election_id}/dados/{location}/{location}-c{cargo}-e{election_id:06d}-u.json"
 
+    def photo_url(self, *, year: int | None, office: str | None, state: str | None, candidate_sq: str | None) -> str | None:
+        """URL https da foto oficial no site de divulgacao do TSE (mesma fonte de /v1/resultados).
+
+        So para anos com codigo de eleicao configurado; o TSE pode nao ter publicado a foto
+        de algum candidato (404), entao o app deve tratar como imagem opcional.
+        """
+        sq = str(candidate_sq or "").strip()
+        if not year or not office or not sq.isdigit():
+            return None
+        try:
+            election_id = self._election_id(int(year), 1, office)
+        except LiveResultsError:
+            return None
+        if self._scope(office) == "federal" and not self._is_municipal(int(year)):
+            location = "br"
+        elif state and len(state.strip()) == 2:
+            location = state.strip().lower()
+        else:
+            return None
+        return f"{self.base_url}/oficial/ele{int(year)}/{election_id}/fotos/{location}/{sq}.jpeg"
+
     def fetch(self, *, year: int, round_number: int, office: str, state: str | None, municipality: str | None) -> dict[str, Any]:
         url = self._build_url(year=year, round_number=round_number, office=office, state=state, municipality=municipality)
+        return self._get_json(url)
+
+    def _get_json(self, url: str) -> dict[str, Any]:
         request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "MeuCandidato/1.0"})
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:

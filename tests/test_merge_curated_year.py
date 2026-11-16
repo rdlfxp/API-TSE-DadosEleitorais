@@ -118,3 +118,125 @@ def test_merge_curated_year_replaces_partition_and_bridges_history(tmp_path, mon
     finally:
         service.close()
     assert [item["year"] for item in history["items"]] == [2026, 2022]
+
+
+def _write_parquet(df: pd.DataFrame, path) -> None:
+    conn = duckdb.connect()
+    try:
+        conn.register("frame", df)
+        conn.execute(f"COPY frame TO '{str(path).replace(chr(39), chr(39) * 2)}' (FORMAT PARQUET)")
+    finally:
+        conn.close()
+
+
+def _zone_row(cargo: str, sq: int, turno: int, mun: int, zona: int, votos: int, uf: str = "SP", **extra) -> dict:
+    return {
+        "ANO_ELEICAO": 2026,
+        "NR_TURNO": turno,
+        "SG_UF": uf,
+        "NM_UE": f"MUNICIPIO {mun}",
+        "CD_MUNICIPIO": mun,
+        "NR_ZONA": zona,
+        "DS_CARGO": cargo,
+        "SQ_CANDIDATO": sq,
+        "NM_CANDIDATO": f"CANDIDATO {sq}",
+        "SG_PARTIDO": "PX",
+        "DS_GENERO": "FEMININO",
+        "DS_SIT_TOT_TURNO": extra.pop("situacao", "ELEITO"),
+        "QT_VOTOS_NOMINAIS_VALIDOS": votos,
+        "QT_VAGAS": extra.pop("vagas", 3),
+        "IDADE": 50.0,
+        **extra,
+    }
+
+
+def test_merge_compacts_state_offices_to_one_row_per_candidate_turn(tmp_path, monkeypatch):
+    base = tmp_path / "base.parquet"
+    year_file = tmp_path / "year.parquet"
+    output = tmp_path / "analytics.parquet"
+    _write_parquet(
+        pd.DataFrame([{"ANO_ELEICAO": 2022, "NR_TURNO": 1, "SG_UF": "SP", "DS_CARGO": "Senador",
+                       "SQ_CANDIDATO": 1, "QT_VOTOS_NOMINAIS_VALIDOS": 10}]),
+        base,
+    )
+    _write_parquet(
+        pd.DataFrame(
+            [
+                # Senador eleito com votos em 3 zonas: deve virar 1 linha com a soma.
+                _zone_row("Senador", 101, 1, 71072, 1, 100),
+                _zone_row("Senador", 101, 1, 71072, 2, 50),
+                _zone_row("Senador", 101, 1, 62391, 3, 25),
+                # Governador com 2o turno: 1 linha por turno.
+                _zone_row("Governador", 201, 1, 71072, 1, 40, situacao="2º TURNO", vagas=1),
+                _zone_row("Governador", 201, 1, 62391, 3, 60, situacao="2º TURNO", vagas=1),
+                _zone_row("Governador", 201, 2, 71072, 1, 70, vagas=1),
+                _zone_row("Governador", 201, 2, 62391, 3, 30, vagas=1),
+                # Presidente mantem o detalhe por zona (mapa).
+                _zone_row("Presidente", 301, 1, 71072, 1, 5, vagas=1),
+                _zone_row("Presidente", 301, 1, 62391, 3, 7, vagas=1),
+            ]
+        ),
+        year_file,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["merge_curated_year.py", "--base", str(base), "--year-file", str(year_file), "--target-year", "2026",
+         "--output", str(output), "--report", str(tmp_path / "q.json"), "--manifest", str(tmp_path / "m.json")],
+    )
+    merge_curated_year.main()
+
+    conn = duckdb.connect()
+    try:
+        rows = conn.execute(
+            "SELECT DS_CARGO, NR_TURNO, SQ_CANDIDATO, NM_UE, CD_MUNICIPIO, NR_ZONA, QT_VOTOS_NOMINAIS_VALIDOS, "
+            "QT_VAGAS, DS_SIT_TOT_TURNO, DS_GENERO FROM read_parquet(?) WHERE ANO_ELEICAO = 2026 "
+            "AND DS_CARGO <> 'Presidente' ORDER BY 1, 2",
+            [str(output)],
+        ).fetchall()
+        presidente_rows = conn.execute(
+            "SELECT COUNT(*), SUM(QT_VOTOS_NOMINAIS_VALIDOS), COUNT(NR_ZONA) FROM read_parquet(?) "
+            "WHERE DS_CARGO = 'Presidente'",
+            [str(output)],
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert rows == [
+        ("Governador", 1, 201, "SÃO PAULO", None, None, 100, 1, "2º TURNO", "FEMININO"),
+        ("Governador", 2, 201, "SÃO PAULO", None, None, 100, 1, "ELEITO", "FEMININO"),
+        ("Senador", 1, 101, "SÃO PAULO", None, None, 175, 3, "ELEITO", "FEMININO"),
+    ]
+    assert presidente_rows == (2, 12, 2)
+
+    service = DuckDBAnalyticsService.from_file(str(output), default_top_n=20, max_top_n=100)
+    try:
+        ranking = service.ranking(group_by="partido", metric="eleitos", ano=2026, cargo="Senador")
+    finally:
+        service.close()
+    # Antes da compactacao, cada zona contava como um eleito (3 em vez de 1).
+    assert [(item["label"], item["value"]) for item in ranking] == [("PX", 1.0)]
+
+
+def test_merge_no_compact_keeps_zone_rows(tmp_path, monkeypatch):
+    base = tmp_path / "base.parquet"
+    year_file = tmp_path / "year.parquet"
+    output = tmp_path / "analytics.parquet"
+    _write_parquet(pd.DataFrame([{"ANO_ELEICAO": 2022, "NR_TURNO": 1, "SG_UF": "SP", "DS_CARGO": "Senador",
+                                  "SQ_CANDIDATO": 1, "QT_VOTOS_NOMINAIS_VALIDOS": 10}]), base)
+    _write_parquet(pd.DataFrame([_zone_row("Senador", 101, 1, 71072, 1, 100),
+                                 _zone_row("Senador", 101, 1, 71072, 2, 50)]), year_file)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["merge_curated_year.py", "--base", str(base), "--year-file", str(year_file), "--target-year", "2026",
+         "--output", str(output), "--report", str(tmp_path / "q.json"), "--manifest", str(tmp_path / "m.json"),
+         "--no-compact"],
+    )
+    merge_curated_year.main()
+    conn = duckdb.connect()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM read_parquet(?) WHERE ANO_ELEICAO = 2026", [str(output)]).fetchone()
+    finally:
+        conn.close()
+    assert count == (2,)

@@ -470,6 +470,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "ocupacao": ["DS_OCUPACAO"],
             "cargo": ["DS_CARGO", "DS_CARGO_D"],
             "uf": ["SG_UF"],
+            "partido": ["SG_PARTIDO"],
         }
         cols = col_map.get(group_by)
         if not cols:
@@ -1168,6 +1169,9 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             if col_office and self._normalize_text(official_rows[col_office]).replace("", pd.NA).dropna().any()
             else office
         )
+        # Presidente sem UF pedida: o recorte e o Brasil (ver duckdb_service).
+        if self._is_national_presidential_scope(cargo=latest_office, uf=state, municipio=None):
+            latest_state = None
 
         rank = None
         vote_share = 0.0
@@ -1682,8 +1686,9 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         year: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        turno: int | None = None,
     ) -> dict:
-        return CandidateHistoryMixin.candidates_compare(self, candidate_ids, year=year, state=state, office=office)
+        return CandidateHistoryMixin.candidates_compare(self, candidate_ids, year=year, state=state, office=office, turno=turno)
 
     def search_candidates(
         self,

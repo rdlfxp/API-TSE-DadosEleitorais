@@ -55,6 +55,7 @@ class CandidateSummaryResponse(BaseModel):
     votos_segundo_turno: int | None = None
     votos_consolidados: int | None = None
     latest_election: CandidateLatestElection
+    foto_url: str | None = Field(default=None, description="URL https da foto oficial (site de divulgação do TSE). Opcional; pode não existir para alguns candidatos.")
 
 
 class VoteHistoryItem(BaseModel):
@@ -157,6 +158,7 @@ class CompareContext(BaseModel):
     year: int | None = None
     state: str | None = None
     office: str | None = None
+    turno: int | None = Field(default=None, description="Turno comparado: o pedido ou o último turno disputado por todos os candidatos.")
 
 
 class CompareCandidateItem(BaseModel):

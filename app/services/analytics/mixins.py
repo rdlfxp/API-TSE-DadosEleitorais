@@ -78,6 +78,27 @@ class AnalyticsSupportMixin:
             return ""
         return "".join(ch for ch in raw if ch.isdigit())
 
+    def _resolve_compare_turno(self, rows_by_candidate: dict, col_round: str | None, requested: int | None) -> int | None:
+        """Turno da comparacao: o pedido, ou o ultimo turno disputado por todos.
+
+        Somar 1o e 2o turno misturava universos diferentes (ex.: Lula x Flavio 2026
+        somava 118 mi de votos de cada um). Sem turno pedido, usa o 2o turno quando
+        todos o disputaram; senao o 1o, que todos disputaram.
+        """
+        if requested in {1, 2}:
+            return int(requested)
+        if not col_round:
+            return None
+        common: set[int] | None = None
+        for rows in rows_by_candidate.values():
+            if rows is None or rows.empty or col_round not in rows.columns:
+                continue
+            rounds = {int(value) for value in self._extract_turno(rows[col_round]).dropna().tolist() if int(value) in {1, 2}}
+            common = rounds if common is None else common & rounds
+        if not common:
+            return None
+        return max(common)
+
     def _is_national_presidential_scope(
         self,
         *,
@@ -137,7 +158,7 @@ class AnalyticsSupportMixin:
         return self._normalize_value(value or "", uppercase=True) in self._NA_LABELS
 
     def _distribution_uses_candidate_resolution(self, group_by: str) -> bool:
-        return group_by in {"status", "genero", "instrucao", "cor_raca", "estado_civil", "ocupacao", "cargo"}
+        return group_by in {"status", "genero", "instrucao", "cor_raca", "estado_civil", "ocupacao", "cargo", "partido"}
 
     def _normalize_distribution_label(self, group_by: str, value: object) -> str:
         raw = str(value or "").strip()

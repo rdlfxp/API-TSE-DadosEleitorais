@@ -398,32 +398,29 @@ class CandidateHistoryMixin:
             }
 
         all_rows = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
-        if use_cpf_identity:
-            identity = self._candidate_cpf_identity(seed_rows, candidate_cpf=candidate_cpf)
-            candidate_rows = all_rows.iloc[0:0].copy()
-            candidate_cpf_value = identity["nr_cpf_candidato"]
-            if candidate_cpf_value:
-                if "_cpf" in all_rows.columns:
-                    candidate_rows = all_rows[all_rows["_cpf"].fillna("").astype(str) == self._cpf_text(candidate_cpf_value)].copy()
-                elif "NR_CPF_CANDIDATO" in all_rows.columns:
-                    candidate_rows = all_rows[
-                        self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == self._cpf_text(candidate_cpf_value)
-                    ].copy()
-            if candidate_rows.empty:
-                candidate_rows = seed_rows.copy()
+        # Mesma identidade das demais rotas: com ou sem CPF, o person_id e o da pessoa
+        # (historico oficial > CPF > nome+nascimento). O CPF so amplia a busca.
+        identity = self._candidate_identity_payload(seed_rows)
+        person_id = identity["person_id"]
+        if person_id and "_person_id" in all_rows.columns:
+            person_mask = all_rows["_person_id"].fillna("").astype(str) == str(person_id)
+        elif person_id:
+            person_mask = self._person_id_series(all_rows) == str(person_id)
         else:
-            identity = self._candidate_identity_payload(seed_rows)
-            person_id = identity["person_id"]
-            if person_id and "_person_id" in all_rows.columns:
-                candidate_rows = all_rows[all_rows["_person_id"].fillna("").astype(str) == str(person_id)].copy()
-            else:
-                candidate_rows = (
-                    all_rows[self._person_id_series(all_rows) == str(person_id)].copy()
-                    if person_id
-                    else all_rows.iloc[0:0].copy()
-                )
-            if candidate_rows.empty:
-                candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
+            person_mask = pd.Series([False] * len(all_rows), index=all_rows.index)
+        cpf_value = self._cpf_text(candidate_cpf) if use_cpf_identity else ""
+        cpf_value = cpf_value or identity.get("nr_cpf_candidato") or ""
+        if cpf_value:
+            identity["nr_cpf_candidato"] = cpf_value
+            if "_cpf" in all_rows.columns:
+                person_mask = person_mask | (all_rows["_cpf"].fillna("").astype(str) == cpf_value)
+            elif "NR_CPF_CANDIDATO" in all_rows.columns:
+                person_mask = person_mask | (self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == cpf_value)
+        candidate_rows = all_rows[person_mask.fillna(False)].copy()
+        if candidate_rows.empty:
+            candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
+        if candidate_rows.empty:
+            candidate_rows = seed_rows.copy()
 
         return candidate_rows, identity
 
@@ -958,10 +955,11 @@ class CandidateHistoryMixin:
         year: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        turno: int | None = None,
     ) -> dict[str, Any]:
         candidate_ids_clean = [str(v).strip() for v in candidate_ids if str(v).strip()]
         if len(candidate_ids_clean) < 2:
-            return {"context": {"year": year, "state": state, "office": office}, "candidates": [], "deltas": []}
+            return {"context": {"year": year, "state": state, "office": office, "turno": turno}, "candidates": [], "deltas": []}
 
         base_scoped = self._load_history_rows(uf=state, cargo=office)
         col_year = self._select_history_col(base_scoped, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
@@ -977,7 +975,16 @@ class CandidateHistoryMixin:
         col_party = self._select_history_col(context_df, ["SG_PARTIDO"])
         col_name = self._select_history_col(context_df, ["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
         if context_df.empty or not col_votes:
-            return {"context": {"year": resolved_year, "state": state, "office": office}, "candidates": [], "deltas": []}
+            return {"context": {"year": resolved_year, "state": state, "office": office, "turno": turno}, "candidates": [], "deltas": []}
+
+        col_round = self._select_history_col(context_df, ["NR_TURNO", "CD_TURNO"])
+        resolved_turno = self._resolve_compare_turno(
+            {cid: context_df[self._candidate_mask(context_df, cid)] for cid in candidate_ids_clean},  # type: ignore[attr-defined]
+            col_round,
+            turno,
+        )
+        if resolved_turno is not None and col_round:
+            context_df = context_df[self._extract_turno(context_df[col_round]) == resolved_turno]
 
         context_df = context_df.assign(_votes=pd.to_numeric(context_df[col_votes], errors="coerce").fillna(0))
         total_context_votes = float(context_df["_votes"].sum()) or 1.0
@@ -1057,7 +1064,7 @@ class CandidateHistoryMixin:
                 )
 
         return {
-            "context": {"year": resolved_year, "state": state, "office": office},
+            "context": {"year": resolved_year, "state": state, "office": office, "turno": resolved_turno},
             "candidates": candidates_out,
             "deltas": deltas,
         }
