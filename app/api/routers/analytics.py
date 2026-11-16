@@ -87,9 +87,9 @@ def analytics_candidates_search_legacy(request: Request, response: Response, que
 
 
 @router.get("/v1/analytics/distribuicao", response_model=GroupedDistributionResponse, responses=ERROR_RESPONSES)
-def analytics_distribution(request: Request, group_by: str = Query(..., description="Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> GroupedDistributionResponse:
+def analytics_distribution(request: Request, group_by: str = Query(..., description="Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf, partido"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> GroupedDistributionResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    allowed_group_by = {"status", "genero", "instrucao", "cor_raca", "estado_civil", "ocupacao", "cargo", "uf"}
+    allowed_group_by = {"status", "genero", "instrucao", "cor_raca", "estado_civil", "ocupacao", "cargo", "uf", "partido"}
     if group_by not in allowed_group_by:
         raise HTTPException(status_code=400, detail="group_by invalido ou coluna ausente no dataset")
     filters = {"group_by": group_by, "ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos}
@@ -98,54 +98,64 @@ def analytics_distribution(request: Request, group_by: str = Query(..., descript
 
 
 @router.get("/v1/analytics/cor-raca-comparativo", response_model=CorRacaComparativoResponse, responses=ERROR_RESPONSES)
-def analytics_cor_raca_comparativo(ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None) -> CorRacaComparativoResponse:
+def analytics_cor_raca_comparativo(request: Request, ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None) -> CorRacaComparativoResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    return CorRacaComparativoResponse(**get_service().cor_raca_comparativo(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio))
+    filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio}
+    data = run_analytics_query(request, "/v1/analytics/cor-raca-comparativo", filters, lambda: get_service().cor_raca_comparativo(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/cor-raca-comparativo"])
+    return CorRacaComparativoResponse(**data)
 
 
 @router.get("/v1/analytics/ocupacao-genero", response_model=OccupationGenderResponse, responses=ERROR_RESPONSES)
-def analytics_occupation_gender(ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> OccupationGenderResponse:
+def analytics_occupation_gender(request: Request, ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> OccupationGenderResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    return OccupationGenderResponse(items=get_service().occupation_gender_distribution(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos))
+    filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos}
+    items = run_analytics_query(request, "/v1/analytics/ocupacao-genero", filters, lambda: get_service().occupation_gender_distribution(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/ocupacao-genero"])
+    return OccupationGenderResponse(items=items)
 
 
 @router.get("/v1/analytics/idade", response_model=AgeStatsResponse, responses=ERROR_RESPONSES)
-def analytics_age(ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = True) -> AgeStatsResponse:
+def analytics_age(request: Request, ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = True) -> AgeStatsResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    return AgeStatsResponse(**get_service().age_stats(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos))
+    filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos}
+    data = run_analytics_query(request, "/v1/analytics/idade", filters, lambda: get_service().age_stats(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/idade"])
+    return AgeStatsResponse(**data)
 
 
 @router.get("/v1/analytics/serie-temporal", response_model=TimeSeriesResponse, responses=ERROR_RESPONSES)
-def analytics_time_series(metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> TimeSeriesResponse:
-    items = get_service().time_series(metric=metric, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos)
+def analytics_time_series(request: Request, metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> TimeSeriesResponse:
+    filters = {"metric": metric, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos}
+    items = run_analytics_query(request, "/v1/analytics/serie-temporal", filters, lambda: get_service().time_series(metric=metric, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/serie-temporal"])
     if not items:
         raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
     return TimeSeriesResponse(metric=metric, items=items)
 
 
 @router.get("/v1/analytics/ranking", response_model=RankingResponse, responses=ERROR_RESPONSES)
-def analytics_ranking(group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"), metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False, top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n)) -> RankingResponse:
+def analytics_ranking(request: Request, group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"), metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False, top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n)) -> RankingResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
     effective_top_n = top_n or settings.default_top_n
-    items = get_service().ranking(group_by=group_by, metric=metric, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos, top_n=effective_top_n)
+    filters = {"group_by": group_by, "metric": metric, "ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos, "top_n": effective_top_n}
+    items = run_analytics_query(request, "/v1/analytics/ranking", filters, lambda: get_service().ranking(group_by=group_by, metric=metric, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos, top_n=effective_top_n), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/ranking"])
     if not items:
         raise HTTPException(status_code=400, detail="group_by/metric invalido ou coluna ausente no dataset")
     return RankingResponse(group_by=group_by, metric=metric, top_n=effective_top_n, items=items)
 
 
 @router.get("/v1/analytics/mapa-uf", response_model=UFMapResponse, responses=ERROR_RESPONSES)
-def analytics_uf_map(metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> UFMapResponse:
+def analytics_uf_map(request: Request, metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False) -> UFMapResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    items = get_service().uf_map(metric=metric, ano=resolved_ano, turno=turno, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos)
+    filters = {"metric": metric, "ano": resolved_ano, "turno": turno, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos}
+    items = run_analytics_query(request, "/v1/analytics/mapa-uf", filters, lambda: get_service().uf_map(metric=metric, ano=resolved_ano, turno=turno, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/mapa-uf"])
     if not items:
         raise HTTPException(status_code=400, detail="metric invalida ou coluna ausente no dataset")
     return UFMapResponse(metric=metric, items=items)
 
 
 @router.get("/v1/analytics/vagas-oficiais", response_model=OfficialVacanciesResponse, responses=ERROR_RESPONSES)
-def analytics_official_vacancies(group_by: str = Query(default="cargo", description="Valores: cargo, uf, municipio"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None) -> OfficialVacanciesResponse:
+def analytics_official_vacancies(request: Request, group_by: str = Query(default="cargo", description="Valores: cargo, uf, municipio"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None) -> OfficialVacanciesResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    data = get_service().official_vacancies(group_by=group_by, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
+    filters = {"group_by": group_by, "ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio}
+    data = run_analytics_query(request, "/v1/analytics/vagas-oficiais", filters, lambda: get_service().official_vacancies(group_by=group_by, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/vagas-oficiais"])
     if not data.get("items"):
         raise HTTPException(status_code=400, detail="group_by invalido, coluna ausente no dataset ou combinacao sem vagas oficiais (ex.: group_by=municipio para cargo nao municipal).")
     return OfficialVacanciesResponse(**data)

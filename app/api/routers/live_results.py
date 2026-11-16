@@ -59,6 +59,9 @@ def live_results(
         ttl = min(15, max(1, int(settings.live_results_redis_ttl_seconds)))
         cache_set(cache_key, ttl, normalized)
         return LiveResultsResponse(**normalized)
+    except ValueError as exc:
+        # Municipio invalido/inexistente era um 500; e erro do pedido.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LiveResultsNotPublished as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except LiveResultsUnavailable as exc:

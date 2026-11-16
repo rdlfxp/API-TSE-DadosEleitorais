@@ -1,4 +1,5 @@
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.openapi import attach_openapi
 from app.core.redis import close_redis, initialize_redis
+from app.services.cache_warmup import start_background_warmup
 import app.infra.cache as cache_state
 import app.infra.metrics as metrics_state
 import app.infra.rate_limit as rate_limit_state
@@ -108,6 +110,8 @@ async def lifespan(_: FastAPI):
         )
     else:
         logger.info(json.dumps({"event": "startup_data_missing", "path": str(selected_path), "hint": "Configure R2_* vars or provide local analytics file."}, ensure_ascii=False))
+
+    start_background_warmup(int(os.environ.get("PORT", "8000")))
 
     yield
 

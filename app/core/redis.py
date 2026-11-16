@@ -23,7 +23,13 @@ def initialize_redis() -> Any | None:
         _redis_client = None
         return None
     if _redis_client is None:
-        _redis_client = redis.from_url(settings.redis_url, decode_responses=False)
+        _redis_client = redis.from_url(
+            settings.redis_url,
+            decode_responses=False,
+            socket_connect_timeout=settings.redis_socket_timeout_seconds,
+            socket_timeout=settings.redis_socket_timeout_seconds,
+            health_check_interval=30,
+        )
     return _redis_client
 
 

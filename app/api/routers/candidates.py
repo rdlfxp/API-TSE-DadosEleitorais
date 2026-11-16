@@ -14,18 +14,24 @@ from app.api.dependencies import (
 from app.api.errors import ERROR_RESPONSES
 from app.core.config import settings
 from app.domain import is_municipal_office
+from app.services.live_results import LiveResultsService
 from app.schemas import CandidateSummaryResponse, CompareResponse, ElectorateProfileResponse, VoteDistributionResponse, VoteHistoryResponse
 
 
 router = APIRouter()
+_PHOTOS = LiveResultsService()
 
 
 @router.get("/v1/candidates/{candidate_id}/summary", response_model=CandidateSummaryResponse, responses=ERROR_RESPONSES)
-def candidate_summary(candidate_id: str, ano: int | None = Query(default=None), year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None) -> CandidateSummaryResponse:
+def candidate_summary(request: Request, candidate_id: str, ano: int | None = Query(default=None), year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None) -> CandidateSummaryResponse:
     resolved_year = resolve_year_param(ano=ano, year=year)
     resolved_state = resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
-    return CandidateSummaryResponse(**get_service().candidate_summary(candidate_id=candidate_id, year=resolved_year, turno=turno, state=resolved_state, office=resolved_office))
+    filters = {"candidate_id": candidate_id, "year": resolved_year, "turno": turno, "state": resolved_state, "office": resolved_office}
+    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/summary", filters, lambda: get_service().candidate_summary(candidate_id=candidate_id, year=resolved_year, turno=turno, state=resolved_state, office=resolved_office), cache_ttl_seconds=settings.analytics_closed_cache_ttl_seconds)
+    latest_year = (data.get("latest_election") or {}).get("year")
+    photo = _PHOTOS.photo_url(year=latest_year, office=data.get("office"), state=data.get("state"), candidate_sq=data.get("source_id"))
+    return CandidateSummaryResponse(**data, foto_url=photo)
 
 
 @router.get("/v1/candidates/{candidate_id}/vote-history", response_model=VoteHistoryResponse, responses=ERROR_RESPONSES)
@@ -38,12 +44,14 @@ def candidate_vote_history(request: Request, candidate_id: str, nr_cpf_candidato
 
 
 @router.get("/v1/candidates/{candidate_id}/electorate-profile", response_model=ElectorateProfileResponse, responses=ERROR_RESPONSES)
-def candidate_electorate_profile(candidate_id: str, ano: int | None = Query(default=None), year: int | None = None, uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None, municipio: str | None = None, municipality: str | None = None) -> ElectorateProfileResponse:
+def candidate_electorate_profile(request: Request, candidate_id: str, ano: int | None = Query(default=None), year: int | None = None, uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None, municipio: str | None = None, municipality: str | None = None) -> ElectorateProfileResponse:
     resolved_year = resolve_year_param(ano=ano, year=year)
     resolved_state = resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
     resolved_municipality = resolve_municipality_param(municipality=municipality, municipio=municipio)
-    return ElectorateProfileResponse(**get_service().candidate_electorate_profile(candidate_id=candidate_id, year=resolved_year, state=resolved_state, office=resolved_office, municipality=resolved_municipality))
+    filters = {"candidate_id": candidate_id, "year": resolved_year, "state": resolved_state, "office": resolved_office, "municipality": resolved_municipality}
+    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/electorate-profile", filters, lambda: get_service().candidate_electorate_profile(candidate_id=candidate_id, year=resolved_year, state=resolved_state, office=resolved_office, municipality=resolved_municipality), cache_ttl_seconds=settings.analytics_closed_cache_ttl_seconds)
+    return ElectorateProfileResponse(**data)
 
 
 @router.get("/v1/candidates/{candidate_id}/vote-distribution", response_model=VoteDistributionResponse, responses=ERROR_RESPONSES)
@@ -78,7 +86,7 @@ def candidate_vote_distribution(request: Request, candidate_id: str, level: Lite
 
 
 @router.get("/v1/candidates/compare", response_model=CompareResponse, responses=ERROR_RESPONSES)
-def candidates_compare(candidate_ids: list[str] = Query(..., description="IDs de candidatos (CSV: 1,2 ou repetido: ?candidate_ids=1&candidate_ids=2)", openapi_extra={"style": "form", "explode": False}), ano: int | None = Query(default=None), year: int | None = None, uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None) -> CompareResponse:
+def candidates_compare(request: Request, candidate_ids: list[str] = Query(..., description="IDs de candidatos (CSV: 1,2 ou repetido: ?candidate_ids=1&candidate_ids=2)", openapi_extra={"style": "form", "explode": False}), ano: int | None = Query(default=None), year: int | None = None, uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None, turno: int | None = Query(default=None, ge=1, le=2, description="Turno a comparar. Sem turno, usa o último turno disputado por todos."), round_: int | None = Query(default=None, alias="round", ge=1, le=2)) -> CompareResponse:
     parsed_ids: list[str] = []
     for value in candidate_ids:
         parsed_ids.extend([token.strip() for token in str(value).split(",") if token.strip()])
@@ -87,4 +95,7 @@ def candidates_compare(candidate_ids: list[str] = Query(..., description="IDs de
     resolved_year = resolve_year_param(ano=ano, year=year)
     resolved_state = resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
-    return CompareResponse(**get_service().candidates_compare(candidate_ids=parsed_ids, year=resolved_year, state=resolved_state, office=resolved_office))
+    resolved_turno = turno if turno is not None else round_
+    filters = {"candidate_ids": parsed_ids, "year": resolved_year, "state": resolved_state, "office": resolved_office, "turno": resolved_turno}
+    data = run_analytics_query(request, "/v1/candidates/compare", filters, lambda: get_service().candidates_compare(candidate_ids=parsed_ids, year=resolved_year, state=resolved_state, office=resolved_office, turno=resolved_turno), cache_ttl_seconds=settings.analytics_closed_cache_ttl_seconds)
+    return CompareResponse(**data)

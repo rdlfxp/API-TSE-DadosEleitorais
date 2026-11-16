@@ -22,6 +22,9 @@ from app.infra.cache import (
     cache_set,
     estimate_payload_rows,
     process_memory_mb,
+    record_miss,
+    record_route,
+    single_flight,
     versioned_cache_key,
 )
 
@@ -161,17 +164,20 @@ def run_analytics_query(
     fallback_factory: Callable[[], Any] | None = None,
 ) -> Any:
     cache_key = ""
+    request_started = time.perf_counter()
     setattr(request.state, "memory_cache_status", "BYPASS")
     if cache_ttl_seconds > 0:
         cache_key = versioned_cache_key(endpoint, filters)
         cached = cache_get(cache_key)
         if cached is not None:
             setattr(request.state, "memory_cache_status", "HIT")
+            record_route(endpoint, (time.perf_counter() - request_started) * 1000, hit=True)
             return cached
         setattr(request.state, "memory_cache_status", "MISS")
+        record_miss()
 
-    started_at = time.perf_counter()
-    try:
+    def compute() -> Any:
+        started_at = time.perf_counter()
         payload = operation()
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         response_bytes = 0
@@ -183,10 +189,21 @@ def run_analytics_query(
         if settings.analytics_cache_log_metrics:
             logger.info(json.dumps({"event": "analytics_cache_store", "trace_id": trace_id_from_request(request), "endpoint": endpoint, "filters": filters, "stored": bool(cache_store.get("stored")), "reason": str(cache_store.get("reason")), "entry_bytes": int(cache_store.get("entry_bytes") or 0), "cache_entries": int(cache_store.get("cache_entries") or 0), "cache_bytes": int(cache_store.get("cache_bytes") or 0), "response_bytes": response_bytes}, ensure_ascii=False))
         return payload
+
+    try:
+        if cache_key:
+            # Single-flight: N pedidos simultaneos do mesmo recorte frio => 1 consulta.
+            payload, was_cached = single_flight(cache_key, lambda: cache_get(cache_key), compute)
+            if was_cached:
+                setattr(request.state, "memory_cache_status", "HIT")
+        else:
+            payload, was_cached = compute(), False
+        record_route(endpoint, (time.perf_counter() - request_started) * 1000, hit=was_cached)
+        return payload
     except HTTPException:
         raise
     except Exception as exc:
-        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        duration_ms = round((time.perf_counter() - request_started) * 1000, 2)
         logger.exception(json.dumps({"event": "analytics_query_failed", "trace_id": trace_id_from_request(request), "endpoint": endpoint, "filters": filters, "duration_ms": duration_ms, "error_type": exc.__class__.__name__, "error_message": str(exc)}, ensure_ascii=False))
         if fallback_factory is not None:
             if cache_key:

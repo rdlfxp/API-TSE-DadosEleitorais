@@ -11,9 +11,16 @@ JSON públicos da divulgação oficial do TSE. Os fixtures em
 - 2024 Prefeito de São Paulo (código eleitoral 71072): `/oficial/ele2024/619/dados/sp/sp71072-c0011-e000619-u.json`
 
 O caminho é montado a partir do ano/turno, código do cargo e localização. Os
-códigos de eleição ficam em `LIVE_RESULTS_ELECTIONS_JSON`, por padrão `6257`
-para o primeiro turno geral de 2026 e `619/620` para os turnos municipais de
-2024.
+códigos de eleição ficam em `LIVE_RESULTS_ELECTIONS_JSON`. Cada turno aceita um
+código único ou um objeto por escopo. Em 2026 o TSE separa a eleição **federal**
+(Presidente: `6257` no 1º turno, `6258` no 2º) da **estadual** (Governador,
+Senador e Deputados: `6259` e `6260`). Nas municipais de 2024, `619/620` valem
+para todos os cargos. Os códigos vêm de `/oficial/comum/config/ele-c.json`.
+
+Nas municipais, `municipio` aceita o código TSE (até 5 dígitos), o código IBGE
+(7 dígitos) ou o nome. O IBGE e o nome são resolvidos pela tabela oficial
+`/oficial/ele{ano}/{eleição}/config/mun-e{eleição}-cm.json`. Município que não
+existe na UF retorna `422`.
 
 ## Campos observados
 

@@ -25,6 +25,23 @@
         }
       }
     },
+    "/health/cache": {
+      "get": {
+        "summary": "Health Cache",
+        "description": "Snapshot ativo, hit-rate (L1/L2 e Redis) e tempo medio por rota.",
+        "operationId": "health_cache_health_cache_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "summary": "Metrics",
@@ -986,10 +1003,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf",
+              "description": "Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf, partido",
               "title": "Group By"
             },
-            "description": "Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf"
+            "description": "Valores: status, genero, instrucao, cor_raca, estado_civil, ocupacao, cargo, uf, partido"
           },
           {
             "name": "ano",
@@ -3794,6 +3811,44 @@
               ],
               "title": "Office"
             }
+          },
+          {
+            "name": "turno",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Turno a comparar. Sem turno, usa o último turno disputado por todos.",
+              "title": "Turno"
+            },
+            "description": "Turno a comparar. Sem turno, usa o último turno disputado por todos."
+          },
+          {
+            "name": "round",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Round"
+            }
           }
         ],
         "responses": {
@@ -4564,6 +4619,18 @@
           },
           "latest_election": {
             "$ref": "#/components/schemas/CandidateLatestElection"
+          },
+          "foto_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Foto Url",
+            "description": "URL https da foto oficial (site de divulgação do TSE). Opcional; pode não existir para alguns candidatos."
           }
         },
         "type": "object",
@@ -4701,6 +4768,18 @@
               }
             ],
             "title": "Office"
+          },
+          "turno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno",
+            "description": "Turno comparado: o pedido ou o último turno disputado por todos os candidatos."
           }
         },
         "type": "object",

@@ -920,6 +920,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "ocupacao": ["DS_OCUPACAO"],
             "cargo": ["DS_CARGO", "DS_CARGO_D"],
             "uf": ["SG_UF"],
+            "partido": ["SG_PARTIDO"],
         }
         cols = col_map.get(group_by)
         if not cols:
@@ -1806,6 +1807,10 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 else office
             )
         )
+        # Presidente sem UF pedida: o recorte e o Brasil. Sem isso, a primeira UF das
+        # linhas ("AC") virava o contexto e o vote_share saia ~14866%.
+        if self._is_national_presidential_scope(cargo=latest_office, uf=state, municipio=None):
+            latest_state = None
 
         vote_share = 0.0
         rank = None
@@ -1947,9 +1952,18 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 where_params + candidate_params,
             )
 
+        cpf_sql = (
+            "LPAD(regexp_replace(regexp_replace(TRIM(CAST(NR_CPF_CANDIDATO AS VARCHAR)), "
+            "'\\.0$', ''), '[^0-9]', '', 'g'), 11, '0')"
+        )
         seed_rows = load_seed(state, office)
         if seed_rows.empty and (state or office):
             seed_rows = load_seed(None, None)
+        if seed_rows.empty and self._cpf_text(candidate_cpf) and self._has("NR_CPF_CANDIDATO"):
+            seed_rows = self._df(
+                f"SELECT {select_clause} FROM {self._candidate_history_relation} WHERE {cpf_sql} = ?",
+                [self._cpf_text(candidate_cpf)],
+            )
         if seed_rows.empty:
             return seed_rows, {
                 "source_id": None,
@@ -1958,12 +1972,13 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "person_id": None,
             }
 
-        identity = (
-            self._candidate_cpf_identity(seed_rows, candidate_cpf=candidate_cpf)
-            if candidate_cpf
-            else self._candidate_identity_payload(seed_rows)
-        )
-        clauses: list[str] = []
+        # Mesma identidade das demais rotas (top-candidatos, summary, compare): o CPF
+        # ajuda a localizar a pessoa, mas nao troca o person_id nem limita o historico
+        # aos anos que tem CPF (so 2026 traz NR_CPF_CANDIDATO).
+        identity = self._candidate_identity_payload(seed_rows)
+        if self._cpf_text(candidate_cpf):
+            identity["nr_cpf_candidato"] = identity["nr_cpf_candidato"] or self._cpf_text(candidate_cpf)
+        alternatives: list[str] = []
         params: list[str] = []
 
         cpf_value = self._cpf_text(candidate_cpf) or self._candidate_cpf(seed_rows)
@@ -1976,34 +1991,34 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     if str(value).strip().startswith("tse-history:")
                 }
             )
-        if history_ids and not candidate_cpf:
+        if history_ids:
             placeholders = ", ".join(["?"] * len(history_ids))
-            clauses.append(f"TRIM(CAST(HISTORICO_CANDIDATURA_ID AS VARCHAR)) IN ({placeholders})")
+            alternatives.append(f"TRIM(CAST(HISTORICO_CANDIDATURA_ID AS VARCHAR)) IN ({placeholders})")
             params.extend(history_ids)
-        elif cpf_value and self._has("NR_CPF_CANDIDATO"):
-            cpf_sql = (
-                "LPAD(regexp_replace(regexp_replace(TRIM(CAST(NR_CPF_CANDIDATO AS VARCHAR)), "
-                "'\\.0$', ''), '[^0-9]', '', 'g'), 11, '0')"
-            )
-            clauses.append(f"{cpf_sql} = ?")
+        if cpf_value and self._has("NR_CPF_CANDIDATO"):
+            alternatives.append(f"{cpf_sql} = ?")
             params.append(cpf_value)
+        if alternatives:
+            where_sql = " OR ".join(f"({clause})" for clause in alternatives)
         else:
+            name_birth: list[str] = []
             col_name = self._pick_col(["NM_CANDIDATO", "NM_URNA_CANDIDATO"])
             if col_name and col_name in seed_rows.columns:
                 names = self._person_identity_name_series(seed_rows).replace("", pd.NA).dropna()
                 if not names.empty:
-                    clauses.append(f"{self._normalized_sql_text_expr(col_name)} = ?")
+                    name_birth.append(f"{self._normalized_sql_text_expr(col_name)} = ?")
                     params.append(str(names.iloc[0]))
             if self._has("DT_NASCIMENTO") and "DT_NASCIMENTO" in seed_rows.columns:
                 births = seed_rows["DT_NASCIMENTO"].fillna("").astype(str).str.strip().replace("", pd.NA).dropna()
                 if not births.empty:
-                    clauses.append("TRIM(CAST(DT_NASCIMENTO AS VARCHAR)) = ?")
+                    name_birth.append("TRIM(CAST(DT_NASCIMENTO AS VARCHAR)) = ?")
                     params.append(str(births.iloc[0]))
+            where_sql = " AND ".join(name_birth)
 
-        if not clauses:
+        if not where_sql:
             return seed_rows, identity
         candidate_rows = self._df(
-            f"SELECT {select_clause} FROM {self._candidate_history_relation} WHERE {' AND '.join(clauses)}",
+            f"SELECT {select_clause} FROM {self._candidate_history_relation} WHERE {where_sql}",
             params,
         )
         return (candidate_rows if not candidate_rows.empty else seed_rows), identity
@@ -2546,10 +2561,11 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         year: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        turno: int | None = None,
     ) -> dict:
         candidate_ids_clean = [str(value).strip() for value in candidate_ids if str(value).strip()]
         if len(candidate_ids_clean) < 2:
-            return {"context": {"year": year, "state": state, "office": office}, "candidates": [], "deltas": []}
+            return {"context": {"year": year, "state": state, "office": office, "turno": turno}, "candidates": [], "deltas": []}
 
         resolved_year = int(year) if year is not None else None
         if resolved_year is None:
@@ -2566,9 +2582,21 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         key_expr = self._candidate_group_key_sql_expr(include_turno=False)
         id_col = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
         if resolved_year is None or not col_votes or not key_expr:
-            return {"context": {"year": resolved_year, "state": state, "office": office}, "candidates": [], "deltas": []}
+            return {"context": {"year": resolved_year, "state": state, "office": office, "turno": turno}, "candidates": [], "deltas": []}
 
-        where, params = self._where(ano=resolved_year, uf=state, cargo=office)
+        rows_by_candidate = {
+            candidate_id: self._candidate_filtered_df(candidate_id, ano=resolved_year, uf=state, cargo=office)
+            for candidate_id in candidate_ids_clean
+        }
+        col_round = self._pick_col(["NR_TURNO", "CD_TURNO"])
+        resolved_turno = self._resolve_compare_turno(rows_by_candidate, col_round, turno)
+        if resolved_turno is not None and col_round:
+            rows_by_candidate = {
+                cid: rows[self._extract_turno(rows[col_round]) == resolved_turno] if not rows.empty else rows
+                for cid, rows in rows_by_candidate.items()
+            }
+
+        where, params = self._where(ano=resolved_year, turno=resolved_turno, uf=state, cargo=office)
         id_expr = (
             f"regexp_replace(TRIM(CAST({id_col} AS VARCHAR)), '\\.0$', '')"
             if id_col
@@ -2591,12 +2619,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         candidates_out: list[dict[str, object]] = []
         for candidate_id in candidate_ids_clean:
-            candidate_rows = self._candidate_filtered_df(
-                candidate_id,
-                ano=resolved_year,
-                uf=state,
-                cargo=office,
-            )
+            candidate_rows = rows_by_candidate[candidate_id]
             if candidate_rows.empty:
                 continue
             votes = int(pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0).sum())
@@ -2644,7 +2667,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     }
                 )
         return {
-            "context": {"year": resolved_year, "state": state, "office": office},
+            "context": {"year": resolved_year, "state": state, "office": office, "turno": resolved_turno},
             "candidates": candidates_out,
             "deltas": deltas,
         }

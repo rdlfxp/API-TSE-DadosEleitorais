@@ -83,7 +83,7 @@ Nos endpoints que retornam dados de candidato, os campos de identidade seguem es
 - `candidate_id`: identificador de consulta da rota.
 - `source_id`: origem do registro eleitoral retornado.
 - `nr_cpf_candidato`: CPF do candidato quando disponivel. No endpoint de historico, ele e a chave preferencial de consulta e expansao do historico.
-- `person_id`: identidade estavel da pessoa, derivada do CPF do candidato quando disponivel.
+- `person_id`: identidade estavel da pessoa. Ordem de prioridade: ID do historico oficial do TSE (`HISTORICO_CANDIDATURA_ID`), CPF e, por ultimo, nome + data de nascimento. E o mesmo em todas as rotas; informar `nr_cpf_candidato` no `vote-history` so ajuda a localizar a pessoa, nao muda o `person_id`.
 - `canonical_candidate_id`: identidade canonica interna da API. Hoje espelha `person_id` e nunca volta a ser `candidate_id`.
 
 Observacoes:
