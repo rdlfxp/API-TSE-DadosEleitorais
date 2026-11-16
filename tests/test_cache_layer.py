@@ -284,3 +284,44 @@ def test_l1_is_checked_before_redis_and_redis_hits_are_promoted(monkeypatch):
     assert cache_module.cache_get("v1:k") == {"a": 1} and reads["n"] == 1  # veio do Redis
     assert cache_module.cache_get("v1:k") == {"a": 1} and reads["n"] == 1  # promovido: segunda leitura no L1
     assert cache_module.CACHE_STATS["l2_hits"] == 1 and cache_module.CACHE_STATS["l1_hits"] == 2
+
+
+def test_snapshot_version_depends_on_content_not_on_file_time(tmp_path):
+    import os
+
+    first = tmp_path / "a.parquet"
+    second = tmp_path / "b.parquet"
+    first.write_bytes(b"mesmo conteudo")
+    second.write_bytes(b"mesmo conteudo")
+    os.utime(second, (1_000_000_000, 1_000_000_000))  # data de modificacao bem diferente
+    assert cache_module.file_content_version(first) == cache_module.file_content_version(second)
+    second.write_bytes(b"conteudo diferente")
+    assert cache_module.file_content_version(first) != cache_module.file_content_version(second)
+    # arquivo de historico ausente nao quebra; presente, entra na versao
+    history = tmp_path / "candidate_history.parquet"
+    base = cache_module.file_content_version(first, history)
+    history.write_bytes(b"historico")
+    assert cache_module.file_content_version(first, history) != base
+
+
+def test_snapshot_version_is_stable_across_app_restarts(tmp_path, monkeypatch):
+    import os
+
+    import duckdb
+
+    data = tmp_path / "analytics.parquet"
+    frame = pd.DataFrame([{"ANO_ELEICAO": 2026, "NR_TURNO": 1, "SG_UF": "SP", "DS_CARGO": "Senador",
+                           "SQ_CANDIDATO": 1, "QT_VOTOS_NOMINAIS_VALIDOS": 10}])
+    conn = duckdb.connect()
+    conn.register("frame", frame)
+    conn.execute(f"COPY frame TO '{data}' (FORMAT PARQUET)")
+    conn.close()
+    monkeypatch.setattr(main_module.settings, "analytics_data_path", str(data))
+    monkeypatch.setattr(main_module.settings, "analytics_engine", "duckdb")
+    monkeypatch.setattr(main_module.settings, "duckdb_database_path", str(tmp_path / "db.duckdb"))
+    versions = []
+    for stamp in (1_700_000_000, 1_800_000_000):  # "restart" com o arquivo rebaixado do R2 (mtime novo)
+        os.utime(data, (stamp, stamp))
+        with TestClient(main_module.app):
+            versions.append(cache_module.DATA_CACHE_VERSION)
+    assert versions[0] == versions[1] and versions[0] and versions[0] != "no-data-version"
