@@ -6,6 +6,7 @@ import resource
 import time
 from collections import OrderedDict
 from email.utils import formatdate
+from pathlib import Path
 from threading import Lock
 from typing import Any
 
@@ -177,6 +178,38 @@ def cache_get(cache_key: str, allow_stale: bool = False) -> Any | None:
         _l1_store(cache_key, L1_PROMOTE_TTL_SECONDS, bytes(redis_payload))
         return value
     return None
+
+
+# Evita recalcular o hash do mesmo arquivo (mesmo caminho, tamanho e mtime) no mesmo processo.
+_FILE_DIGEST_MEMO: dict[tuple[str, int, int], str] = {}
+
+
+def file_content_version(*paths: Any) -> str:
+    """Versao do snapshot derivada do CONTEUDO dos arquivos (sha256 + tamanho).
+
+    A versao anterior usava mtime_ns, que muda a cada restart porque o arquivo e baixado
+    de novo do R2: todo restart invalidava o cache do Redis e deixava as chaves antigas
+    acumuladas. Com o conteudo, o mesmo snapshot mantem as mesmas chaves entre restarts.
+    """
+    digest = hashlib.sha256()
+    total = 0
+    for raw in paths:
+        path = Path(raw)
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        memo_key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+        file_digest = _FILE_DIGEST_MEMO.get(memo_key)
+        if file_digest is None:
+            file_hash = hashlib.sha256()
+            with path.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(8 * 1024 * 1024), b""):
+                    file_hash.update(chunk)
+            file_digest = file_hash.hexdigest()
+            _FILE_DIGEST_MEMO[memo_key] = file_digest
+        digest.update(file_digest.encode("ascii"))
+        total += stat.st_size
+    return f"{digest.hexdigest()[:16]}:{total}"
 
 
 def dataset_cache_version() -> str:
