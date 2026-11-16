@@ -8,6 +8,7 @@ para nao competir com usuarios pela unica thread do DuckDB.
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import time
 import urllib.error
@@ -28,7 +29,13 @@ PROFILE_GROUPS = ["genero", "instrucao", "estado_civil", "cor_raca", "ocupacao",
 GENERAL_YEARS = {2018, 2022, 2026}
 MUNICIPAL_YEARS = {2016, 2020, 2024}
 
-WARMUP_STATUS: dict[str, object] = {"state": "idle", "done": 0, "total": 0, "failed": 0, "seconds": None}
+# Token por processo: o aquecimento interno chama a propria API e nao deve gastar a cota
+# de requisicoes por IP dos usuarios (120/min). Nao e derivado de nada configuravel.
+WARMUP_TOKEN = secrets.token_hex(16)
+WARMUP_HEADER = "X-Warmup-Token"
+MAX_THROTTLE_RETRIES = 5
+
+WARMUP_STATUS: dict[str, object] = {"state": "idle", "done": 0, "total": 0, "failed": 0, "throttled": 0, "seconds": None}
 
 
 def _cargos_for(year: int) -> list[str]:
@@ -86,21 +93,44 @@ def build_warmup_paths(years: list[int], include_ufs: bool = True) -> Iterator[s
                 yield q("/v1/analytics/distribuicao", **scope, group_by="cor_raca")
 
 
-def run_warmup(base_url: str, years: list[int], *, timeout: float = 120.0, include_ufs: bool = True, status: dict | None = None) -> dict:
+def _fetch(url: str, timeout: float, token: str | None, status: dict) -> None:
+    """GET com repeticao em 429 (limite por IP): sem isso o aquecimento falha em silencio."""
+    headers = {WARMUP_HEADER: token} if token else {}
+    for attempt in range(MAX_THROTTLE_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
+                response.read()
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < MAX_THROTTLE_RETRIES:
+                status["throttled"] = int(status.get("throttled", 0)) + 1
+                time.sleep(min(60.0, float(exc.headers.get("Retry-After", "5") or 5)))
+                continue
+            # 400/404 para combinacoes sem dados (ex.: turno 2 de Senador) sao esperados;
+            # 429 esgotado conta como falha porque a rota nao foi aquecida.
+            if exc.code >= 500 or exc.code == 429:
+                status["failed"] = int(status["failed"]) + 1
+            return
+        except Exception:
+            status["failed"] = int(status["failed"]) + 1
+            return
+
+
+def run_warmup(
+    base_url: str,
+    years: list[int],
+    *,
+    timeout: float = 120.0,
+    include_ufs: bool = True,
+    status: dict | None = None,
+    token: str | None = None,
+) -> dict:
     status = status if status is not None else WARMUP_STATUS
     paths = list(build_warmup_paths(years, include_ufs=include_ufs))
     started = time.monotonic()
-    status.update({"state": "running", "done": 0, "total": len(paths), "failed": 0, "seconds": None})
+    status.update({"state": "running", "done": 0, "total": len(paths), "failed": 0, "throttled": 0, "seconds": None})
     for path in paths:
-        try:
-            with urllib.request.urlopen(f"{base_url.rstrip('/')}{path}", timeout=timeout) as response:
-                response.read()
-        except urllib.error.HTTPError as exc:
-            # 400/404 para combinacoes sem dados (ex.: turno 2 de Senador) sao esperados.
-            if exc.code >= 500:
-                status["failed"] = int(status["failed"]) + 1
-        except Exception:
-            status["failed"] = int(status["failed"]) + 1
+        _fetch(f"{base_url.rstrip('/')}{path}", timeout, token, status)
         status["done"] = int(status["done"]) + 1
     status.update({"state": "done", "seconds": round(time.monotonic() - started, 1)})
     return status
@@ -125,7 +155,7 @@ def start_background_warmup(port: int = 8000) -> threading.Thread | None:
         else:
             WARMUP_STATUS["state"] = "skipped"
             return
-        result = run_warmup(base, years)
+        result = run_warmup(base, years, token=WARMUP_TOKEN)
         logger.info(json.dumps({"event": "cache_warmup_done", **result}, ensure_ascii=False))
 
     thread = threading.Thread(target=worker, name="cache-warmup", daemon=True)
