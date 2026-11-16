@@ -210,3 +210,52 @@ def test_warmup_paths_cover_panels_without_duplicates():
     assert any(p.startswith("/v1/analytics/distribuicao") and "group_by=ocupacao" in p for p in paths)
     assert any("uf=SP" in p and "cargo=Deputado+Federal" in p for p in paths)
     assert not any("turno=2" in p and "Senador" in p for p in paths)
+
+
+def test_internal_warmup_token_bypasses_ip_rate_limit(client, monkeypatch):
+    from app.services.cache_warmup import WARMUP_HEADER, WARMUP_TOKEN
+
+    monkeypatch.setattr(main_module.settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(main_module.settings, "rate_limit_max_requests_per_ip", 3)
+    ip = {"X-Forwarded-For": "203.0.113.77"}
+    codes = [client.get("/v1/analytics/idade?ano=2026", headers=ip).status_code for _ in range(5)]
+    assert codes[:3] == [200, 200, 200] and set(codes[3:]) == {429}
+    warm = {**ip, WARMUP_HEADER: WARMUP_TOKEN}
+    assert all(client.get("/v1/analytics/idade?ano=2026", headers=warm).status_code == 200 for _ in range(10))
+    wrong = {**ip, WARMUP_HEADER: "chute"}
+    assert client.get("/v1/analytics/idade?ano=2026", headers=wrong).status_code == 429
+
+
+def test_warmup_retries_429_and_counts_it(monkeypatch):
+    import urllib.error
+
+    from app.services import cache_warmup
+
+    calls = {"n": 0}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(request, timeout):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many", {"Retry-After": "0"}, None)
+        return Resp()
+
+    monkeypatch.setattr(cache_warmup.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cache_warmup.time, "sleep", lambda _: None)
+    status = {"failed": 0, "throttled": 0}
+    cache_warmup._fetch("http://x/v1/analytics/idade", 1.0, "tok", status)
+    assert calls["n"] == 3 and status == {"failed": 0, "throttled": 2}
+
+    calls["n"] = -100  # nunca sai do 429: esgota as repeticoes e conta como falha
+    status = {"failed": 0, "throttled": 0}
+    cache_warmup._fetch("http://x/v1/analytics/idade", 1.0, None, status)
+    assert status["failed"] == 1 and status["throttled"] == cache_warmup.MAX_THROTTLE_RETRIES
