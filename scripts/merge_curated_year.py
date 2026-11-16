@@ -41,6 +41,28 @@ TEXT_COLUMNS = {
 FLOAT_COLUMNS = {"IDADE"}
 DATE_COLUMNS = {"DT_ELEICAO"}
 
+# Grao publicado para eleicoes gerais (igual a 2018/2022): cargos estaduais e de
+# deputado ficam com 1 linha por candidato e turno; Presidente mantem o detalhe por
+# municipio/zona usado no mapa. Os endpoints contam linhas, entao manter a votacao
+# por zona nesses cargos multiplica eleitos/candidatos pelo numero de zonas.
+COMPACT_CARGOS = (
+    "GOVERNADOR",
+    "SENADOR",
+    "DEPUTADO FEDERAL",
+    "DEPUTADO ESTADUAL",
+    "DEPUTADO DISTRITAL",
+)
+LOCATION_COLUMNS = ("NM_UE", "CD_MUNICIPIO", "NR_ZONA", "NR_SECAO", "LATITUDE", "LONGITUDE")
+UF_NAMES = {
+    "AC": "ACRE", "AL": "ALAGOAS", "AM": "AMAZONAS", "AP": "AMAPÁ", "BA": "BAHIA",
+    "CE": "CEARÁ", "DF": "DISTRITO FEDERAL", "ES": "ESPÍRITO SANTO", "GO": "GOIÁS",
+    "MA": "MARANHÃO", "MG": "MINAS GERAIS", "MS": "MATO GROSSO DO SUL", "MT": "MATO GROSSO",
+    "PA": "PARÁ", "PB": "PARAÍBA", "PE": "PERNAMBUCO", "PI": "PIAUÍ", "PR": "PARANÁ",
+    "RJ": "RIO DE JANEIRO", "RN": "RIO GRANDE DO NORTE", "RO": "RONDÔNIA", "RR": "RORAIMA",
+    "RS": "RIO GRANDE DO SUL", "SC": "SANTA CATARINA", "SE": "SERGIPE", "SP": "SÃO PAULO",
+    "TO": "TOCANTINS",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -61,6 +83,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--compression", default="zstd")
+    parser.add_argument(
+        "--no-compact",
+        action="store_true",
+        help="Mantem a particao no grao de zona (por padrao, cargos estaduais/deputados viram 1 linha por candidato e turno).",
+    )
     return parser.parse_args()
 
 
@@ -137,13 +164,46 @@ def _base_select(base_columns: set[str], target_year: int) -> str:
     )
 
 
-def _year_select(year_columns: set[str], target_year: int) -> str:
+def _year_select(year_columns: set[str], target_year: int, compact: bool = True) -> str:
     expressions = [_cast_expr("y", col, year_columns) for col in CANONICAL_COLUMNS]
-    return (
+    typed = (
         "SELECT "
         + ", ".join(expressions)
         + " FROM year_rows y "
         + f"WHERE TRY_CAST(y.ANO_ELEICAO AS BIGINT) = {int(target_year)}"
+    )
+    if not compact:
+        return typed
+    return _compact_select(typed)
+
+
+def _compact_select(typed_query: str) -> str:
+    cargo_list = ", ".join(f"'{cargo}'" for cargo in COMPACT_CARGOS)
+    is_compact = f"UPPER(TRIM(DS_CARGO)) IN ({cargo_list})"
+    uf_case = " ".join(f"WHEN '{uf}' THEN '{name}'" for uf, name in UF_NAMES.items())
+    group_cols = [
+        col
+        for col in CANONICAL_COLUMNS
+        if col not in LOCATION_COLUMNS and col not in {"QT_VOTOS_NOMINAIS_VALIDOS", "QT_VAGAS"}
+    ]
+    aggregated: list[str] = []
+    for col in CANONICAL_COLUMNS:
+        if col == "NM_UE":
+            aggregated.append(f"CASE UPPER(TRIM(SG_UF)) {uf_case} ELSE MAX(NM_UE) END AS NM_UE")
+        elif col in LOCATION_COLUMNS:
+            aggregated.append(_cast_expr("t", col, set()))
+        elif col == "QT_VOTOS_NOMINAIS_VALIDOS":
+            aggregated.append("CAST(SUM(QT_VOTOS_NOMINAIS_VALIDOS) AS BIGINT) AS QT_VOTOS_NOMINAIS_VALIDOS")
+        elif col == "QT_VAGAS":
+            # Vagas sao do cargo/UF; repetir por zona inflava a soma.
+            aggregated.append("MAX(QT_VAGAS) AS QT_VAGAS")
+        else:
+            aggregated.append(col)
+    return (
+        f"SELECT * FROM ({typed_query}) t WHERE NOT ({is_compact}) "
+        "UNION ALL "
+        f"SELECT {', '.join(aggregated)} FROM ({typed_query}) t WHERE {is_compact} "
+        f"GROUP BY {', '.join(group_cols)}"
     )
 
 
@@ -272,7 +332,8 @@ def main() -> None:
         conn.execute(
             f"CREATE VIEW year_rows AS SELECT * FROM read_parquet('{_quoted_path(year_file)}')"
         )
-        query = f"{_base_select(base_columns, args.target_year)} UNION ALL {_year_select(year_columns, args.target_year)}"
+        year_query = _year_select(year_columns, args.target_year, compact=not args.no_compact)
+        query = f"{_base_select(base_columns, args.target_year)} UNION ALL {year_query}"
         if output.exists():
             output.unlink()
         conn.execute(
