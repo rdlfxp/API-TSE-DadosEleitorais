@@ -427,7 +427,12 @@ def test_r2_bootstrap_downloads_parquet_only(tmp_path, monkeypatch):
 
     assert chosen == preferred
     assert chosen.exists()
-    assert client.downloaded == ["latest/analytics.parquet", "latest/candidate_history.parquet"]
+    # Historico e perfil do eleitorado sao opcionais: tenta baixar, e a ausencia no R2 nao falha.
+    assert client.downloaded == [
+        "latest/analytics.parquet",
+        "latest/candidate_history.parquet",
+        "latest/electorate_profile.parquet",
+    ]
 
 def test_lifespan_loads_from_r2_bootstrap_when_local_missing(tmp_path, monkeypatch):
     downloaded_parquet = tmp_path / "downloaded" / "analytics.parquet"

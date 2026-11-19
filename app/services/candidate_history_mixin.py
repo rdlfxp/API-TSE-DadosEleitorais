@@ -132,6 +132,15 @@ class CandidateHistoryMixin:
             cpf_series = pd.Series([""] * len(df), index=df.index)
 
         name_norm = name_series.map(lambda value: self._normalize_value(value, uppercase=True).lower())
+        col_urna_name = self._select_history_col(df, ["NM_URNA_CANDIDATO"])
+        urna_series = (
+            self._text_series(df[col_urna_name]) if col_urna_name else pd.Series([""] * len(df), index=df.index)
+        )
+        urna_norm = urna_series.map(lambda value: self._normalize_value(value, uppercase=True).lower())
+        registro_series = (
+            self._text_series(df["NM_CANDIDATO"]) if "NM_CANDIDATO" in df.columns else pd.Series([""] * len(df), index=df.index)
+        )
+        registro_norm = registro_series.map(lambda value: self._normalize_value(value, uppercase=True).lower())
         candidate_key = candidate_id_series.replace("", pd.NA)
         if col_candidate_id is None:
             candidate_key = name_norm.replace("", pd.NA)
@@ -151,6 +160,9 @@ class CandidateHistoryMixin:
             _source_id=source_id_series.replace("", pd.NA),
             _name_display=name_series.replace("", pd.NA),
             _name_norm=name_norm.replace("", pd.NA),
+            _urna_display=urna_series.replace("", pd.NA),
+            _urna_norm=urna_norm.replace("", pd.NA),
+            _registro_norm=registro_norm.replace("", pd.NA),
             _cpf=cpf_series.replace("", pd.NA),
             _person_id=person_id_series,
         )
@@ -288,21 +300,20 @@ class CandidateHistoryMixin:
         if not candidate_norm:
             return pd.Series([False] * len(df), index=df.index)
 
-        masks: list[pd.Series] = []
+        # Prioridade SQ > numero > CPF: o primeiro criterio que casa alguma linha vence. Juntar os
+        # tres misturava pessoas (o SQ 23 de 2006 com todo candidato de numero 23).
+        empty = pd.Series([False] * len(df), index=df.index)
         for col in ["SQ_CANDIDATO", "NR_CANDIDATO", "NR_CPF_CANDIDATO"]:
-            if col in df.columns:
-                if col == "NR_CPF_CANDIDATO":
-                    masks.append(self._cpf_series(df[col]) == self._cpf_text(candidate_id))
-                else:
-                    masks.append(self._identity_series(df[col]) == candidate_norm)
-
-        if not masks:
-            return pd.Series([False] * len(df), index=df.index)
-
-        out = masks[0]
-        for mask in masks[1:]:
-            out = out | mask
-        return out.fillna(False)
+            if col not in df.columns:
+                continue
+            if col == "NR_CPF_CANDIDATO":
+                mask = self._cpf_series(df[col]) == self._cpf_text(candidate_id)
+            else:
+                mask = self._identity_series(df[col]) == candidate_norm
+            mask = mask.fillna(False)
+            if mask.any():
+                return mask
+        return empty
 
     def _candidate_source_id(self, df: pd.DataFrame) -> str | None:
         for col in ["SQ_CANDIDATO", "NR_CANDIDATO"]:
@@ -529,11 +540,24 @@ class CandidateHistoryMixin:
         if hasattr(self, "_is_elected_series"):
             return self._is_elected_series(series)  # type: ignore[attr-defined]
         normalized = self._text_series(series).str.upper()
-        return normalized.str.startswith("ELEITO")
+        return normalized.str.startswith("ELEITO") | normalized.isin(["MÉDIA", "MEDIA"])
 
-    def _candidate_retention_from_history(self, candidate_rows: pd.DataFrame, resolved_year: int | None) -> float:
+    def _candidate_retention_from_history(
+        self,
+        candidate_rows: pd.DataFrame,
+        resolved_year: int | None,
+        office: str | None = None,
+        turno: int | None = None,
+    ) -> float | None:
+        """Retencao de votos: votos da eleicao atual / votos da eleicao ANTERIOR comparavel x 100.
+
+        Comparavel = mesmo cargo e mesmo territorio (mesma UF; mesmo municipio nos cargos municipais),
+        no mesmo turno quando o turno anterior existe. Sem eleicao comparavel (primeira candidatura
+        ou troca de cargo) devolve None. Antes pegava a eleicao mais antiga e nao filtrava o cargo,
+        o que dividia, por exemplo, votos de Presidente por votos de Vereador (retention de milhoes).
+        """
         if candidate_rows.empty:
-            return 100.0
+            return None
 
         col_year = self._select_history_col(candidate_rows, ["ANO_ELEICAO", "NR_ANO_ELEICAO"])
         col_votes = self._select_history_col(candidate_rows, ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
@@ -542,7 +566,7 @@ class CandidateHistoryMixin:
         col_state = self._select_history_col(candidate_rows, ["SG_UF"])
         col_municipio = self._select_history_col(candidate_rows, ["NM_UE", "NM_MUNICIPIO"])
         if not col_year or not col_votes:
-            return 100.0
+            return None
 
         history = candidate_rows.assign(
             _year=pd.to_numeric(candidate_rows[col_year], errors="coerce"),
@@ -550,40 +574,51 @@ class CandidateHistoryMixin:
             _round=(self._extract_turno(candidate_rows[col_round]) if col_round else 0),  # type: ignore[attr-defined]
             _office=(self._text_series(candidate_rows[col_cargo]) if col_cargo else ""),
             _state=(self._text_series(candidate_rows[col_state]).str.upper() if col_state else ""),
-            _municipality=(self._text_series(candidate_rows[col_municipio]) if col_municipio else ""),
+            _municipality=(self._text_series(candidate_rows[col_municipio]).str.upper() if col_municipio else ""),
         ).dropna(subset=["_year"])
         if history.empty:
-            return 100.0
+            return None
 
+        scope = history["_office"].apply(self._cargo_scope)  # type: ignore[attr-defined]
         history = history.assign(
-            _scope=history["_office"].apply(self._cargo_scope),  # type: ignore[attr-defined]
-            _context_state=history["_state"].where(history["_office"].apply(self._cargo_scope) != "nacional", ""),  # type: ignore[attr-defined]
-            _context_municipality=history["_municipality"].where(history["_office"].apply(self._cargo_scope) == "municipio", ""),  # type: ignore[attr-defined]
+            _office_key=history["_office"].astype(str).str.strip().str.upper(),
+            _context_state=history["_state"].where(scope != "nacional", ""),
+            _context_municipality=history["_municipality"].where(scope == "municipio", ""),
         )
-        grouped = (
-            history.groupby(["_year", "_office", "_context_state", "_context_municipality", "_round"], as_index=False)
-            .agg(votes=("_votes", "sum"))
-            .sort_values(["_year", "_round", "_office", "votes"], ascending=[False, False, True, False])
-        )
+        grouped = history.groupby(
+            ["_year", "_office_key", "_context_state", "_context_municipality", "_round"], as_index=False
+        ).agg(votes=("_votes", "sum"))
         if grouped.empty:
-            return 100.0
+            return None
 
-        current = None
-        if resolved_year is not None:
-            matches = grouped[grouped["_year"] == resolved_year]
-            if not matches.empty:
-                current = matches.iloc[0]
-        if current is None:
-            current = grouped.iloc[-1]
-
-        previous = grouped[grouped["_year"] < int(current["_year"])]
-        if previous.empty:
-            return 100.0
-
-        prev_votes = float(previous.iloc[-1]["votes"])
-        if prev_votes <= 0:
-            return 100.0
+        current_pool = grouped
+        if resolved_year is not None and (grouped["_year"] == resolved_year).any():
+            current_pool = grouped[grouped["_year"] == resolved_year]
+        office_key = str(office or "").strip().upper()
+        if office_key and (current_pool["_office_key"] == office_key).any():
+            current_pool = current_pool[current_pool["_office_key"] == office_key]
+        current_pool = current_pool[current_pool["_year"] == current_pool["_year"].max()]
+        if turno is not None and (current_pool["_round"] == int(turno)).any():
+            current_pool = current_pool[current_pool["_round"] == int(turno)]
+        else:
+            current_pool = current_pool[current_pool["_round"] == current_pool["_round"].max()]
+        current = current_pool.sort_values("votes", ascending=False).iloc[0]
         current_votes = float(current["votes"])
+
+        previous = grouped[
+            (grouped["_year"] < current["_year"])
+            & (grouped["_office_key"] == current["_office_key"])
+            & (grouped["_context_state"] == current["_context_state"])
+            & (grouped["_context_municipality"] == current["_context_municipality"])
+        ]
+        if previous.empty:
+            return None
+        previous = previous[previous["_year"] == previous["_year"].max()]
+        same_round = previous[previous["_round"] == current["_round"]]
+        previous = same_round if not same_round.empty else previous[previous["_round"] == previous["_round"].max()]
+        prev_votes = float(previous["votes"].sum())
+        if prev_votes <= 0:
+            return None
         return round((current_votes / prev_votes) * 100, 4)
 
     def _collapse_vote_history_rows(self, history_rows: pd.DataFrame) -> pd.DataFrame:
@@ -702,18 +737,35 @@ class CandidateHistoryMixin:
         if filtered.empty or "_name_norm" not in filtered.columns:
             return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
-        names_norm = filtered["_name_norm"].fillna("").astype(str)
-        matched = names_norm.str.contains(q_norm, regex=False)
+        def norm_col(name: str) -> pd.Series:
+            if name in filtered.columns:
+                return filtered[name].fillna("").astype(str)
+            return pd.Series([""] * len(filtered), index=filtered.index)
+
+        # Nome de registro, nome de urna e (consulta so de digitos) numero exato.
+        names_norm = norm_col("_name_norm")
+        registro_norm = norm_col("_registro_norm")
+        urna_norm = norm_col("_urna_norm")
+        numbers = norm_col("_number").str.replace(r"\.0$", "", regex=True).str.strip()
+        is_number_query = q_norm.isdigit()
+        number_match = (numbers == q_norm) if is_number_query else pd.Series(False, index=filtered.index)
+        matched = (
+            names_norm.str.contains(q_norm, regex=False)
+            | registro_norm.str.contains(q_norm, regex=False)
+            | urna_norm.str.contains(q_norm, regex=False)
+            | number_match
+        )
         if not matched.any():
             return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
 
         ranked = filtered.loc[matched].copy()
-        name_match_norm = names_norm.loc[matched]
-        score = (
-            (name_match_norm == q_norm).astype(int) * 3
-            + (name_match_norm.str.startswith(q_norm)).astype(int) * 2
-            + (name_match_norm.str.contains(q_norm, regex=False)).astype(int)
-        )
+        fields = [names_norm.loc[matched], registro_norm.loc[matched], urna_norm.loc[matched]]
+        exact = number_match.loc[matched]
+        starts = pd.Series(False, index=ranked.index)
+        for field in fields:
+            exact = exact | (field == q_norm)
+            starts = starts | field.str.startswith(q_norm)
+        score = exact.astype(int) * 3 + starts.astype(int) * 2 + 1
         votos = pd.to_numeric(ranked["_votes"], errors="coerce").fillna(0).astype("int64") if "_votes" in ranked.columns else pd.Series(0, index=ranked.index, dtype="int64")
         ranked = ranked.assign(
             _score=score,
@@ -723,12 +775,13 @@ class CandidateHistoryMixin:
             _partido=ranked["_party"].fillna(pd.NA).astype("string") if "_party" in ranked.columns else pd.NA,
             _cargo=ranked["_office"].fillna(pd.NA).astype("string") if "_office" in ranked.columns else pd.NA,
             _uf=ranked["_state"].fillna(pd.NA).astype("string") if "_state" in ranked.columns else pd.NA,
+            _urna=ranked["_urna_display"].fillna(pd.NA).astype("string") if "_urna_display" in ranked.columns else pd.NA,
             _numero=ranked["NR_CANDIDATO"].fillna(pd.NA).astype("string") if "NR_CANDIDATO" in ranked.columns else pd.NA,
             _situacao=ranked["DS_SIT_TOT_TURNO"].fillna(pd.NA).astype("string") if "DS_SIT_TOT_TURNO" in ranked.columns else pd.NA,
         )
 
         grouped = (
-            ranked.groupby(["_candidate_id", "_candidato", "_partido", "_cargo", "_uf", "_numero", "_situacao"], dropna=False, as_index=False)
+            ranked.groupby(["_candidate_id", "_candidato", "_urna", "_partido", "_cargo", "_uf", "_numero", "_situacao"], dropna=False, as_index=False)
             .agg(votes=("_votos", "sum"), score=("_score", "max"))
             .sort_values(["votes", "score", "_candidato"], ascending=[False, False, True])
         )
@@ -756,6 +809,7 @@ class CandidateHistoryMixin:
                     "latest_vote_round": turn_breakdown["turno_referencia"],
                     "latest_vote_value": int(row["votes"] or 0),
                     "candidato": str(row["_candidato"]).strip() or "",
+                    "nm_urna_candidato": str(row["_urna"]).strip() if pd.notna(row["_urna"]) and str(row["_urna"]).strip() else None,
                     "partido": str(row["_partido"]).strip() if pd.notna(row["_partido"]) else None,
                     "cargo": str(row["_cargo"]).strip() if pd.notna(row["_cargo"]) else None,
                     "uf": str(row["_uf"]).strip() if pd.notna(row["_uf"]) else None,
@@ -910,6 +964,9 @@ class CandidateHistoryMixin:
             total_votes = float(row["total_votes"] or 0)
             round_int = int(row["_round"]) if int(row["_round"] or 0) > 0 else None
             state_value = str(row["state"]).strip() if pd.notna(row["state"]) and str(row["state"]).strip() else None
+            if self._cargo_scope(str(row["_office"])) == "nacional":  # type: ignore[attr-defined]
+                # Presidente e votado no pais todo: o "state" agregado era uma UF qualquer.
+                state_value = "BR"
             municipality_value = (
                 str(row["municipality"]).strip()
                 if pd.notna(row["municipality"]) and str(row["municipality"]).strip() and self._cargo_scope(str(row["_office"])) == "municipio"  # type: ignore[attr-defined]
@@ -1032,7 +1089,7 @@ class CandidateHistoryMixin:
             )
 
             history_rows, _ = self._historical_candidate_rows(candidate_id=cid, state=state, office=office, all_rows=history_scope_rows)  # type: ignore[attr-defined]
-            retention = self._candidate_retention_from_history(history_rows, resolved_year)
+            retention = self._candidate_retention_from_history(history_rows, resolved_year, office=office, turno=resolved_turno)
             identity_payload = self._candidate_identity_payload(candidate_rows)  # type: ignore[attr-defined]
 
             candidates_out.append(
@@ -1052,7 +1109,9 @@ class CandidateHistoryMixin:
 
         deltas = []
         for metric in ["votes", "vote_share", "retention"]:
-            ranked_metric = sorted(candidates_out, key=lambda item: float(item.get(metric) or 0), reverse=True)
+            # Retencao e None para quem nao tem eleicao anterior comparavel: fica fora do ranking.
+            comparable = [item for item in candidates_out if item.get(metric) is not None]
+            ranked_metric = sorted(comparable, key=lambda item: float(item.get(metric) or 0), reverse=True)
             if len(ranked_metric) >= 2:
                 gap = float(ranked_metric[0].get(metric) or 0) - float(ranked_metric[1].get(metric) or 0)
                 deltas.append(

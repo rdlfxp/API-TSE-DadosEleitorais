@@ -12,12 +12,14 @@ from app.api.dependencies import (
 )
 from app.api.errors import ERROR_RESPONSES
 from app.core.config import settings
+from app.domain.municipios import list_municipios
 from app.schemas import (
     AgeStatsResponse,
     CandidateSearchResponse,
     CorRacaComparativoResponse,
     FilterOptionsResponse,
     GroupedDistributionResponse,
+    MunicipiosResponse,
     OccupationGenderResponse,
     OfficialVacanciesResponse,
     OverviewResponse,
@@ -30,6 +32,28 @@ from app.schemas import (
 
 
 router = APIRouter()
+
+
+@router.get("/v1/analytics/municipios", response_model=MunicipiosResponse, responses=ERROR_RESPONSES)
+def analytics_municipios(request: Request, uf: str = Query(..., min_length=2, max_length=2, description="UF (ex.: SP)."), ano: int | None = Query(default=None, description="Ano municipal para `segundo_turno` (padrao: o mais recente com Prefeito na UF)."), year: int | None = Query(default=None)) -> MunicipiosResponse:
+    resolved_ano = resolve_year_param(ano=ano, year=year)
+    uf_key = uf.strip().upper()
+
+    def build() -> dict[str, object]:
+        resolved_year, second_round = get_service().mayor_second_round(uf_key, resolved_ano)
+        items = [
+            {
+                "nome": row["nome"],
+                "cd_municipio": row["cd_tse"],
+                "cd_municipio_ibge": row["cd_ibge"],
+                "segundo_turno": (row["cd_tse"] in second_round) if second_round is not None else None,
+            }
+            for row in list_municipios(uf_key)
+        ]
+        return {"uf": uf_key, "ano": resolved_year, "total": len(items), "items": items}
+
+    data = run_analytics_query(request, "/v1/analytics/municipios", {"uf": uf_key, "ano": resolved_ano}, build, cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/municipios"])
+    return MunicipiosResponse(**data)
 
 
 @router.get("/v1/analytics/overview", response_model=OverviewResponse, responses=ERROR_RESPONSES)
@@ -47,17 +71,17 @@ def analytics_filter_options(request: Request) -> FilterOptionsResponse:
 
 
 @router.get("/v1/analytics/top-candidatos", response_model=TopCandidatesResponse, responses=ERROR_RESPONSES)
-def analytics_top_candidates(request: Request, ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, partido: str | None = None, municipio: str | None = None, top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n), page: int = Query(default=1, ge=1), page_size: int | None = Query(default=None, ge=1, le=settings.max_top_n)) -> TopCandidatesResponse:
+def analytics_top_candidates(request: Request, ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, partido: str | None = None, municipio: str | None = None, top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n), page: int = Query(default=1, ge=1), page_size: int | None = Query(default=None, ge=1, le=settings.max_top_n), somente_eleitos: bool = Query(default=False, description="Quando true, devolve apenas candidatos eleitos (no ultimo turno do cargo, se turno nao for informado).")) -> TopCandidatesResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
     requested_page_size = min(page_size or top_n or settings.default_top_n, settings.max_top_n)
     effective_page_size = requested_page_size
     if is_broad_top_candidates_scope(uf=uf, cargo=cargo, partido=partido, municipio=municipio):
         effective_page_size = min(requested_page_size, max(1, int(settings.analytics_broad_query_max_page_size)))
-    filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "partido": partido, "municipio": municipio, "top_n": top_n, "page": page, "page_size": page_size, "effective_page_size": effective_page_size}
+    filters = {"ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "partido": partido, "municipio": municipio, "top_n": top_n, "page": page, "page_size": page_size, "effective_page_size": effective_page_size, "somente_eleitos": somente_eleitos}
     def fallback_payload() -> dict[str, object]:
         return {"top_n": effective_page_size, "page": page, "page_size": effective_page_size, "total": 0, "total_pages": 0, "items": []}
 
-    data = run_analytics_query(request, "/v1/analytics/top-candidatos", filters, lambda: get_service().top_candidates(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, municipio=municipio, top_n=effective_page_size, page=page, page_size=effective_page_size), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/top-candidatos"], fallback_factory=fallback_payload)
+    data = run_analytics_query(request, "/v1/analytics/top-candidatos", filters, lambda: get_service().top_candidates(ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, partido=partido, municipio=municipio, top_n=effective_page_size, page=page, page_size=effective_page_size, somente_eleitos=somente_eleitos), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/top-candidatos"], fallback_factory=fallback_payload)
     return TopCandidatesResponse(**data)
 
 
@@ -131,9 +155,11 @@ def analytics_time_series(request: Request, metric: str = Query(default="votos_n
 
 
 @router.get("/v1/analytics/ranking", response_model=RankingResponse, responses=ERROR_RESPONSES)
-def analytics_ranking(request: Request, group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"), metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False, top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n)) -> RankingResponse:
+def analytics_ranking(request: Request, group_by: str = Query(default="partido", description="Valores: candidato, partido, cargo, uf"), metric: str = Query(default="votos_nominais", description="Valores: votos_nominais, candidatos, eleitos, registros"), ano: int | None = None, year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, municipio: str | None = None, somente_eleitos: bool = False, top_n: int | None = Query(default=None, ge=1, le=settings.max_top_n, description="Quantidade de itens (padrao 20, maximo 100). Sem ele a lista e cortada nos 20 primeiros."), page_size: int | None = Query(default=None, ge=1, le=settings.max_top_n, description="Sinonimo de top_n.")) -> RankingResponse:
     resolved_ano = resolve_year_param(ano=ano, year=year)
-    effective_top_n = top_n or settings.default_top_n
+    if top_n is not None and page_size is not None and int(top_n) != int(page_size):
+        raise HTTPException(status_code=400, detail="Parametros conflitantes: top_n e page_size com valores diferentes.")
+    effective_top_n = top_n or page_size or settings.default_top_n
     filters = {"group_by": group_by, "metric": metric, "ano": resolved_ano, "turno": turno, "uf": uf, "cargo": cargo, "municipio": municipio, "somente_eleitos": somente_eleitos, "top_n": effective_top_n}
     items = run_analytics_query(request, "/v1/analytics/ranking", filters, lambda: get_service().ranking(group_by=group_by, metric=metric, ano=resolved_ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio, somente_eleitos=somente_eleitos, top_n=effective_top_n), cache_ttl_seconds=MEMORY_CACHE_TTL_BY_ENDPOINT["/v1/analytics/ranking"])
     if not items:

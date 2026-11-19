@@ -49,7 +49,18 @@ def normalize_search_cache_key(query: str) -> str:
     return " ".join(ascii_only.lower().split())
 
 
+MIN_UNSCOPED_SEARCH_CHARS = 4
+
+
 def is_unscoped_candidate_search(query: str, uf: str | None, cargo: str | None, partido: str | None) -> bool:
+    """Busca sem recorte e curta demais para ser util (devolve vazio sem consultar a base).
+
+    Numero de urna (so digitos) e seletivo e sempre passa; para texto, 4 caracteres cobrem nomes
+    de urna curtos como "lula" e "ciro" (o limite antigo, 8, os bloqueava).
+    """
     if uf or cargo or partido:
         return False
-    return len(normalize_search_cache_key(query).replace(" ", "")) < 8
+    compact = normalize_search_cache_key(query).replace(" ", "")
+    if compact.isdigit():
+        return False
+    return len(compact) < MIN_UNSCOPED_SEARCH_CHARS

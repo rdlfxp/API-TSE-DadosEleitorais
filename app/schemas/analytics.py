@@ -77,6 +77,23 @@ class FilterOptionsResponse(BaseModel):
     cargos: list[str] = Field(default_factory=list)
 
 
+class MunicipioItem(BaseModel):
+    nome: str
+    cd_municipio: str = Field(description="Codigo TSE (5 digitos).")
+    cd_municipio_ibge: str = Field(description="Codigo IBGE (7 digitos).")
+    segundo_turno: bool | None = Field(
+        default=None,
+        description="Se a eleicao para Prefeito do municipio teve 2o turno no `ano`. null quando nao ha eleicao municipal nesse ano.",
+    )
+
+
+class MunicipiosResponse(BaseModel):
+    uf: str
+    ano: int | None = Field(default=None, description="Ano municipal usado para `segundo_turno`.")
+    total: int
+    items: list[MunicipioItem] = Field(default_factory=list)
+
+
 class TimeSeriesItem(BaseModel):
     ano: int
     value: float
@@ -156,7 +173,16 @@ class PolarizacaoMunicipalUFItem(BaseModel):
     turno: int | None = None
 
 
+class PolarizacaoSemResultadoItem(BaseModel):
+    uf: str
+    municipio: str
+    status: str | None = Field(default=None, description="Situacao do candidato mais votado (ex.: NAO ELEITO, #NULO#).")
+    ano: int | None = None
+    turno: int | None = None
+
+
 class PolarizacaoResponse(BaseModel):
     federal: list[PolarizacaoFederalItem] = Field(default_factory=list)
     municipal_brasil: list[PolarizacaoMunicipalBrasilItem] = Field(default_factory=list)
-    municipal_uf: list[PolarizacaoMunicipalUFItem] = Field(default_factory=list)
+    municipal_uf: list[PolarizacaoMunicipalUFItem] = Field(default_factory=list, description="Apenas prefeitos eleitos, um por municipio.")
+    municipal_sem_resultado: list[PolarizacaoSemResultadoItem] = Field(default_factory=list, description="Municipios sem prefeito eleito (eleicao anulada ou pendente). Antes apareciam em municipal_uf com eleito=false.")

@@ -65,6 +65,9 @@ def ensure_local_analytics_from_r2(preferred_path: Path, prefer_parquet: bool) -
                 parquet_path.name.replace("analytics", "candidate_history", 1)
             )
             _download(client, history_key, history_path)
+        profile_key = str(settings.r2_object_key_electorate_profile or "").strip()
+        if profile_key:
+            _download(client, profile_key, parquet_path.with_name("electorate_profile.parquet"))
         return parquet_path
 
     return None

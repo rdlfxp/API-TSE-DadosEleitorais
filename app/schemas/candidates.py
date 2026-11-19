@@ -10,6 +10,7 @@ class CandidateSearchItem(BaseModel):
     latest_vote_round: int | None = Field(default=None, description="Alias explicito do turno efetivamente usado para calcular votos.")
     latest_vote_value: int | None = Field(default=None, description="Valor de votos usado como base do campo votos.")
     candidato: str
+    nm_urna_candidato: str | None = Field(default=None, description="Nome de urna (como o candidato se apresenta). A busca tambem casa por ele e pelo numero.")
     partido: str | None = None
     cargo: str | None = None
     uf: str | None = None
@@ -90,6 +91,7 @@ class GenderProfile(BaseModel):
 
 
 class AgeBandsProfile(BaseModel):
+    under_18: float = Field(default=0.0, description="Eleitores de 16 e 17 anos (% do eleitorado).")
     a18_34: float
     a35_59: float
     a60_plus: float
@@ -103,8 +105,18 @@ class ElectorateProfileResponse(BaseModel):
     gender: GenderProfile
     age_bands: AgeBandsProfile
     dominant_education: str
-    dominant_income_band: str
-    urban_concentration: float
+    dominant_income_band: str = Field(default="N/A", description="O TSE nao publica renda do eleitorado: sempre N/A.")
+    urban_concentration: float | None = Field(default=None, description="Sem fonte no perfil do eleitorado do TSE: sempre null.")
+    basis: str = Field(
+        default="indisponivel",
+        description="`eleitorado`: perfil do eleitorado onde o candidato teve votos, ponderado pelos votos. `indisponivel`: sem dados do eleitorado (nao e o perfil do candidato).",
+    )
+    electorate_year: int | None = Field(default=None, description="Ano do perfil do eleitorado usado (o da eleicao ou o mais recente anterior).")
+    coverage: float | None = Field(default=None, description="% dos votos do candidato cobertos por municipios/UF com perfil do eleitorado.")
+    unavailable: list[str] = Field(
+        default_factory=list,
+        description="Dimensoes sem dado neste perfil: `renda` e `urbano` (nunca existem), `idade` (2000-2006 nao tem faixa etaria) e `escolaridade`. Nao exibir as zeradas.",
+    )
 
 
 class VoteDistributionItem(BaseModel):
@@ -124,6 +136,8 @@ class VoteDistributionItem(BaseModel):
     zone_name: str | None = None
     municipio: str | None = None
     uf: str | None = None
+    cd_municipio: str | None = Field(default=None, description="Codigo TSE do municipio (5 digitos), no nivel municipio.")
+    cd_municipio_ibge: str | None = Field(default=None, description="Codigo IBGE do municipio (7 digitos), no nivel municipio; casa com a malha de mapa.")
 
 
 class VoteDistributionResponse(BaseModel):
@@ -170,7 +184,7 @@ class CompareCandidateItem(BaseModel):
     party: str | None = None
     votes: int
     vote_share: float
-    retention: float
+    retention: float | None = Field(default=None, description="Votos desta eleicao / votos da eleicao anterior do MESMO cargo e territorio (no mesmo turno) x 100. null sem eleicao anterior comparavel (primeira candidatura ou troca de cargo).")
     state_rank: int | None = None
 
 

@@ -60,6 +60,133 @@
         }
       }
     },
+    "/v1/analytics/municipios": {
+      "get": {
+        "summary": "Analytics Municipios",
+        "operationId": "analytics_municipios_v1_analytics_municipios_get",
+        "parameters": [
+          {
+            "name": "uf",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 2,
+              "description": "UF (ex.: SP).",
+              "title": "Uf"
+            },
+            "description": "UF (ex.: SP)."
+          },
+          {
+            "name": "ano",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ano municipal para `segundo_turno` (padrao: o mais recente com Prefeito na UF).",
+              "title": "Ano"
+            },
+            "description": "Ano municipal para `segundo_turno` (padrao: o mais recente com Prefeito na UF)."
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MunicipiosResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/analytics/overview": {
       "get": {
         "summary": "Analytics Overview",
@@ -485,6 +612,18 @@
               ],
               "title": "Page Size"
             }
+          },
+          {
+            "name": "somente_eleitos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Quando true, devolve apenas candidatos eleitos (no ultimo turno do cargo, se turno nao for informado).",
+              "default": false,
+              "title": "Somente Eleitos"
+            },
+            "description": "Quando true, devolve apenas candidatos eleitos (no ultimo turno do cargo, se turno nao for informado)."
           }
         ],
         "responses": {
@@ -2077,8 +2216,30 @@
                   "type": "null"
                 }
               ],
+              "description": "Quantidade de itens (padrao 20, maximo 100). Sem ele a lista e cortada nos 20 primeiros.",
               "title": "Top N"
-            }
+            },
+            "description": "Quantidade de itens (padrao 20, maximo 100). Sem ele a lista e cortada nos 20 primeiros."
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sinonimo de top_n.",
+              "title": "Page Size"
+            },
+            "description": "Sinonimo de top_n."
           }
         ],
         "responses": {
@@ -4093,6 +4254,12 @@
     "schemas": {
       "AgeBandsProfile": {
         "properties": {
+          "under_18": {
+            "type": "number",
+            "title": "Under 18",
+            "description": "Eleitores de 16 e 17 anos (% do eleitorado).",
+            "default": 0.0
+          },
           "a18_34": {
             "type": "number",
             "title": "A18 34"
@@ -4309,6 +4476,18 @@
           "candidato": {
             "type": "string",
             "title": "Candidato"
+          },
+          "nm_urna_candidato": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nm Urna Candidato",
+            "description": "Nome de urna (como o candidato se apresenta). A busca tambem casa por ele e pelo numero."
           },
           "partido": {
             "anyOf": [
@@ -4709,8 +4888,16 @@
             "title": "Vote Share"
           },
           "retention": {
-            "type": "number",
-            "title": "Retention"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention",
+            "description": "Votos desta eleicao / votos da eleicao anterior do MESMO cargo e territorio (no mesmo turno) x 100. null sem eleicao anterior comparavel (primeira candidatura ou troca de cargo)."
           },
           "state_rank": {
             "anyOf": [
@@ -4729,8 +4916,7 @@
           "candidate_id",
           "name",
           "votes",
-          "vote_share",
-          "retention"
+          "vote_share"
         ],
         "title": "CompareCandidateItem"
       },
@@ -4935,11 +5121,59 @@
           },
           "dominant_income_band": {
             "type": "string",
-            "title": "Dominant Income Band"
+            "title": "Dominant Income Band",
+            "description": "O TSE nao publica renda do eleitorado: sempre N/A.",
+            "default": "N/A"
           },
           "urban_concentration": {
-            "type": "number",
-            "title": "Urban Concentration"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urban Concentration",
+            "description": "Sem fonte no perfil do eleitorado do TSE: sempre null."
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis",
+            "description": "`eleitorado`: perfil do eleitorado onde o candidato teve votos, ponderado pelos votos. `indisponivel`: sem dados do eleitorado (nao e o perfil do candidato).",
+            "default": "indisponivel"
+          },
+          "electorate_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Electorate Year",
+            "description": "Ano do perfil do eleitorado usado (o da eleicao ou o mais recente anterior)."
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage",
+            "description": "% dos votos do candidato cobertos por municipios/UF com perfil do eleitorado."
+          },
+          "unavailable": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unavailable",
+            "description": "Dimensoes sem dado neste perfil: `renda` e `urbano` (nunca existem), `idade` (2000-2006 nao tem faixa etaria) e `escolaridade`. Nao exibir as zeradas."
           }
         },
         "type": "object",
@@ -4947,9 +5181,7 @@
           "candidate_id",
           "gender",
           "age_bands",
-          "dominant_education",
-          "dominant_income_band",
-          "urban_concentration"
+          "dominant_education"
         ],
         "title": "ElectorateProfileResponse"
       },
@@ -5279,6 +5511,80 @@
           "candidatos"
         ],
         "title": "LiveResultsResponse"
+      },
+      "MunicipioItem": {
+        "properties": {
+          "nome": {
+            "type": "string",
+            "title": "Nome"
+          },
+          "cd_municipio": {
+            "type": "string",
+            "title": "Cd Municipio",
+            "description": "Codigo TSE (5 digitos)."
+          },
+          "cd_municipio_ibge": {
+            "type": "string",
+            "title": "Cd Municipio Ibge",
+            "description": "Codigo IBGE (7 digitos)."
+          },
+          "segundo_turno": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segundo Turno",
+            "description": "Se a eleicao para Prefeito do municipio teve 2o turno no `ano`. null quando nao ha eleicao municipal nesse ano."
+          }
+        },
+        "type": "object",
+        "required": [
+          "nome",
+          "cd_municipio",
+          "cd_municipio_ibge"
+        ],
+        "title": "MunicipioItem"
+      },
+      "MunicipiosResponse": {
+        "properties": {
+          "uf": {
+            "type": "string",
+            "title": "Uf"
+          },
+          "ano": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ano",
+            "description": "Ano municipal usado para `segundo_turno`."
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MunicipioItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uf",
+          "total"
+        ],
+        "title": "MunicipiosResponse"
       },
       "OccupationGenderItem": {
         "properties": {
@@ -5647,11 +5953,72 @@
               "$ref": "#/components/schemas/PolarizacaoMunicipalUFItem"
             },
             "type": "array",
-            "title": "Municipal Uf"
+            "title": "Municipal Uf",
+            "description": "Apenas prefeitos eleitos, um por municipio."
+          },
+          "municipal_sem_resultado": {
+            "items": {
+              "$ref": "#/components/schemas/PolarizacaoSemResultadoItem"
+            },
+            "type": "array",
+            "title": "Municipal Sem Resultado",
+            "description": "Municipios sem prefeito eleito (eleicao anulada ou pendente). Antes apareciam em municipal_uf com eleito=false."
           }
         },
         "type": "object",
         "title": "PolarizacaoResponse"
+      },
+      "PolarizacaoSemResultadoItem": {
+        "properties": {
+          "uf": {
+            "type": "string",
+            "title": "Uf"
+          },
+          "municipio": {
+            "type": "string",
+            "title": "Municipio"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "Situacao do candidato mais votado (ex.: NAO ELEITO, #NULO#)."
+          },
+          "ano": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ano"
+          },
+          "turno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turno"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uf",
+          "municipio"
+        ],
+        "title": "PolarizacaoSemResultadoItem"
       },
       "RankingItem": {
         "properties": {
@@ -6146,6 +6513,30 @@
               }
             ],
             "title": "Uf"
+          },
+          "cd_municipio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cd Municipio",
+            "description": "Codigo TSE do municipio (5 digitos), no nivel municipio."
+          },
+          "cd_municipio_ibge": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cd Municipio Ibge",
+            "description": "Codigo IBGE do municipio (7 digitos), no nivel municipio; casa com a malha de mapa."
           }
         },
         "type": "object",

@@ -14,15 +14,19 @@ from app.services.candidate_history_mixin import CandidateHistoryMixin
 
 from app.services.analytics.common import (
     COR_RACA_CATEGORY_LABELS,
+    elected_sql_predicate,
     COR_RACA_CATEGORY_ORDER,
     MUNICIPAL_CARGOS,
     NATIONAL_CARGOS,
+    SINGLE_SEAT_CARGOS,
     UF_TO_MACROREGIAO,
     VALID_UF_CODES,
     _impact_category,
     _safe_percent,
     logger,
 )
+from app.domain.municipios import lookup_municipio
+from app.services.analytics.electorate import compute_electorate_profile, empty_electorate_profile
 from app.services.analytics.mixins import AnalyticsSupportMixin
 
 @dataclass
@@ -35,6 +39,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     _source_path: Path | None = field(default=None, init=False, repr=False)
     _database_path: str | None = field(default=None, init=False, repr=False)
     _candidate_history_relation: str = field(default="analytics", init=False, repr=False)
+    _has_electorate_profile: bool = field(default=False, init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
     _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
@@ -131,6 +136,14 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     f"SELECT * FROM read_parquet('{escaped_history_path}')"
                 )
                 service._candidate_history_relation = "candidate_history"
+            profile_path = path.with_name("electorate_profile.parquet")
+            if profile_path.exists():
+                escaped_profile_path = str(profile_path).replace("'", "''")
+                conn.execute(
+                    "CREATE OR REPLACE VIEW electorate_profile AS "
+                    f"SELECT * FROM read_parquet('{escaped_profile_path}')"
+                )
+                service._has_electorate_profile = True
         if create_indexes and materialize_table:
             service._create_indexes()
         return service
@@ -348,7 +361,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             clauses.append(f"{self._normalized_sql_text_expr(col_municipio)} = ?")
             params.append(self._normalize_municipio_filter(municipio))
         if somente_eleitos and col_situacao:
-            clauses.append(f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%'")
+            clauses.append(elected_sql_predicate(col_situacao))
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
@@ -386,7 +399,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     ) -> pd.DataFrame:
         """Load only one candidate's rows instead of materializing a full context."""
         where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, municipio=municipio)
-        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id, where, params)
         if not candidate_clauses:
             return pd.DataFrame()
 
@@ -401,7 +414,20 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             params + candidate_params,
         )
 
-    def _candidate_clauses_and_params(self, candidate_id: str) -> tuple[list[str], list[str]]:
+    def _candidate_clauses_and_params(
+        self,
+        candidate_id: str,
+        where: str | None = None,
+        where_params: list | None = None,
+        relation: str = "analytics",
+    ) -> tuple[list[str], list[str]]:
+        """Criterios de casamento do `candidate_id`, em ordem de prioridade: SQ, numero, nome.
+
+        Sem `where`, devolve os tres (para o chamador combinar). Com `where` (o recorte do
+        chamador), devolve so o primeiro criterio que casa alguma linha nesse recorte: o SQ e o
+        id que a busca entrega, e juntar tudo misturava, para "23", o SQ 23 de 2006 com todo
+        candidato de numero 23 em qualquer ano.
+        """
         candidate_norm = str(candidate_id or "").strip()
         candidate_upper = self._normalize_value(candidate_norm, uppercase=True)
         clauses: list[str] = []
@@ -416,7 +442,17 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         if col_nome:
             clauses.append(f"{self._normalized_sql_text_expr(col_nome)} = ?")
             params.append(candidate_upper)
-        return clauses, params
+        if where is None or len(clauses) <= 1:
+            return clauses, params
+        connector = "AND" if where else "WHERE"
+        for clause, param in zip(clauses, params):
+            hit = self._rows(
+                f"SELECT 1 FROM {relation} {where} {connector} ({clause}) LIMIT 1",
+                list(where_params or []) + [param],
+            )
+            if hit:
+                return [clause], [param]
+        return clauses[-1:], params[-1:]
 
     def resolve_municipal_scope(
         self,
@@ -447,7 +483,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             uf=requested_uf,
             municipio=requested_municipio,
         )
-        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id, where, where_params)
         if not candidate_clauses:
             raise ValueError("Nao foi possivel inferir municipio para candidate_id no recorte informado.")
 
@@ -549,7 +585,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             cargo=office,
             municipio=normalized_municipio,
         )
-        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+        candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id, where, where_params)
         if not candidate_clauses:
             return pd.DataFrame(columns=["_zona", "_municipio", "_uf", "_cd_municipio", "votes"]), str(candidate_id)
 
@@ -707,6 +743,50 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         return {"anos": anos, "ufs": ufs, "cargos": cargos}
 
+    def mayor_second_round(self, uf: str, ano: int | None = None) -> tuple[int | None, set[str] | None]:
+        """(ano municipal, codigos TSE dos municipios da UF com 2o turno de Prefeito nesse ano).
+
+        Devolve (ano, None) quando nao ha eleicao para Prefeito na UF no ano (ex.: ano geral).
+        """
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_mun = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        if not (col_ano and col_turno and col_cargo and col_uf):
+            return ano, None
+        base = (
+            f"UPPER(TRIM(CAST({col_cargo} AS VARCHAR))) = 'PREFEITO' "
+            f"AND UPPER(TRIM(CAST({col_uf} AS VARCHAR))) = ?"
+        )
+        uf_key = str(uf).strip().upper()
+        year = ano
+        if year is None:
+            found = self._scalar(f"SELECT MAX(TRY_CAST({col_ano} AS BIGINT)) FROM analytics WHERE {base}", [uf_key])
+            year = int(found) if found is not None else None
+        if year is None:
+            return None, None
+        exists = self._rows(
+            f"SELECT 1 FROM analytics WHERE {base} AND TRY_CAST({col_ano} AS BIGINT) = ? LIMIT 1", [uf_key, int(year)]
+        )
+        if not exists:
+            return year, None
+        col_cd = "CD_MUNICIPIO" if self._has("CD_MUNICIPIO") else None
+        cd_sql = f"CAST({col_cd} AS VARCHAR)" if col_cd else "CAST(NULL AS VARCHAR)"
+        mun_sql = f"CAST({col_mun} AS VARCHAR)" if col_mun else "CAST(NULL AS VARCHAR)"
+        rows = self._rows(
+            f"SELECT DISTINCT {cd_sql}, {mun_sql} FROM analytics WHERE {base} "
+            f"AND TRY_CAST({col_ano} AS BIGINT) = ? "
+            f"AND COALESCE(TRY_CAST({col_turno} AS BIGINT), TRY_CAST(regexp_extract(CAST({col_turno} AS VARCHAR), '(\\d+)', 1) AS BIGINT)) = 2",
+            [uf_key, int(year)],
+        )
+        codes = {
+            code
+            for cd, nome in rows
+            if (code := lookup_municipio(uf_key, cd, nome)["cd_municipio"])
+        }
+        return year, codes
+
     def overview(
         self,
         ano: int | None = None,
@@ -720,32 +800,17 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             df = self._latest_vote_context_rows(df)
         if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio):
             df = self._dedupe_national_presidential_candidates(df)
-            col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
-            col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-            col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
-            total_eleitos = int(self._is_elected_series(df[col_situacao]).sum()) if col_situacao and col_situacao in df.columns else None
-            total_votos = (
-                int(pd.to_numeric(df[col_votos], errors="coerce").fillna(0).sum())
-                if col_votos and col_votos in df.columns
-                else None
-            )
-            return {
-                "total_registros": int(len(df)),
-                "total_candidatos": int(df[col_candidato].nunique()) if col_candidato and col_candidato in df.columns else None,
-                "total_eleitos": total_eleitos,
-                "total_votos_nominais": total_votos,
-            }
 
-        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
-        total_registros = int(len(df))
-        total_candidatos = int(df[col_candidato].nunique()) if col_candidato and col_candidato in df.columns else None
-        total_eleitos = int(self._is_elected_series(df[col_situacao]).sum()) if col_situacao and col_situacao in df.columns else None
+        # Pessoas distintas, nao linhas por zona/municipio. O Presidente e votado no pais todo e
+        # so entra no total de eleitos quando a consulta nao e de uma UF ou municipio (ou pede o cargo).
+        total_candidatos, total_eleitos = self._overview_candidate_counts(
+            df, exclude_national_elected=cargo is None and bool(uf or municipio)
+        )
         total_votos = int(pd.to_numeric(df[col_votos], errors="coerce").fillna(0).sum()) if col_votos and col_votos in df.columns else None
 
         return {
-            "total_registros": total_registros,
+            "total_registros": int(len(df)),
             "total_candidatos": total_candidatos,
             "total_eleitos": total_eleitos,
             "total_votos_nominais": total_votos,
@@ -762,6 +827,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         top_n: int | None = None,
         page: int = 1,
         page_size: int | None = None,
+        somente_eleitos: bool = False,
     ) -> dict:
         effective_page_size = min(page_size or top_n or self.default_top_n, self.max_top_n)
         col_candidate_key = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO"])
@@ -812,6 +878,10 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 .replace("", pd.NA)
             )
         df = df.dropna(subset=["_candidate_key"]).copy()
+        if somente_eleitos and col_situacao and col_situacao in df.columns:
+            # Candidato eleito = alguma linha eleita (no ultimo turno, quando o turno nao e informado).
+            elected_keys = set(df.loc[self._is_elected(df[col_situacao]), "_candidate_key"])
+            df = df[df["_candidate_key"].isin(elected_keys)].copy()
         if df.empty:
             return {
                 "top_n": effective_page_size,
@@ -1050,7 +1120,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             somente_eleitos=False,
         )
         eleito_expr = (
-            f"CASE WHEN UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%' THEN 1 ELSE 0 END"
+            f"CASE WHEN {elected_sql_predicate(col_situacao)} THEN 1 ELSE 0 END"
             if col_situacao
             else "0"
         )
@@ -1297,10 +1367,34 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "bins": bins,
         }
 
+    def _candidate_unit_key_sql(self) -> str | None:
+        """Chave SQL de uma candidatura (pessoa + ano + cargo + escopo), ignorando zona e turno.
+
+        A tabela tem 1 linha por zona/municipio e por turno; contar linhas conta a mesma pessoa
+        dezenas de vezes. Mesma regra de `AnalyticsSupportMixin._candidate_unit_keys`.
+        """
+        col_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+        if not col_id:
+            return None
+
+        def txt(col: str | None) -> str:
+            return f"COALESCE(TRIM(CAST({col} AS VARCHAR)), '')" if col else "''"
+
+        cargo = f"UPPER({txt(self._pick_col(['DS_CARGO', 'DS_CARGO_D']))})"
+        national = ", ".join(f"'{c}'" for c in sorted(NATIONAL_CARGOS))
+        municipal = ", ".join(f"'{c}'" for c in sorted(MUNICIPAL_CARGOS))
+        uf_part = f"CASE WHEN {cargo} IN ({national}) THEN '' ELSE UPPER({txt(self._pick_col(['SG_UF']))}) END"
+        ue_part = f"CASE WHEN {cargo} IN ({municipal}) THEN {txt(self._pick_col(['NM_UE', 'NM_MUNICIPIO']))} ELSE '' END"
+        ano = txt(self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"]))
+        return (
+            f"(CASE WHEN {txt(col_id)} = '' THEN NULL ELSE "
+            f"{txt(col_id)} || '|' || {ano} || '|' || {cargo} || '|' || {uf_part} || '|' || {ue_part} END)"
+        )
+
     def _metric_sql(self, metric: str) -> str | None:
         col_votos = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        unit_key = self._candidate_unit_key_sql()
 
         if metric == "registros":
             return "COUNT(*)"
@@ -1309,16 +1403,17 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 return None
             return f"COALESCE(SUM(TRY_CAST({col_votos} AS DOUBLE)), 0)"
         if metric == "candidatos":
-            if not col_candidato:
+            if not unit_key:
                 return None
-            return f"COUNT(DISTINCT CAST({col_candidato} AS VARCHAR))"
+            return f"COUNT(DISTINCT {unit_key})"
         if metric == "eleitos":
-            if not col_situacao:
+            if not col_situacao or not unit_key:
                 return None
+            # Pessoas distintas eleitas, nao linhas: a tabela repete a pessoa por zona e por turno.
             return (
-                "SUM(CASE WHEN "
-                f"UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%' "
-                "THEN 1 ELSE 0 END)"
+                "COUNT(DISTINCT CASE WHEN "
+                f"{elected_sql_predicate(col_situacao)} "
+                f"THEN {unit_key} END)"
             )
         return None
 
@@ -1560,7 +1655,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             if col_municipio
             else "NULL"
         )
-        eleito_expr = f"CASE WHEN UPPER({situacao_expr}) LIKE 'ELEITO%' THEN 1 ELSE 0 END"
+        eleito_expr = f"CASE WHEN {elected_sql_predicate(situacao_expr)} THEN 1 ELSE 0 END"
 
         base_clauses = [f"{uf_expr} <> ''", f"{partido_expr} <> ''"]
         base_params: list[object] = []
@@ -1649,6 +1744,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         municipal_uf_items: list[dict] = []
         municipal_brasil_items: list[dict] = []
+        municipal_sem_resultado_items: list[dict] = []
         if should_build_municipal:
             pref_rows, resolved_ano_mun = _winner_rows(
                 cargo="PREFEITO",
@@ -1658,6 +1754,20 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 require_municipio=True,
             )
 
+            # Municipio sem prefeito eleito (eleicao anulada/pendente) nao tem "vencedor": a linha
+            # seria o mais votado nao eleito. Vai para a lista propria e fora das contagens.
+            no_result_rows = [r for r in pref_rows if not bool(r[7])]
+            pref_rows = [r for r in pref_rows if bool(r[7])]
+            municipal_sem_resultado_items = [
+                {
+                    "uf": str(r[0]),
+                    "municipio": str(r[1]),
+                    "status": str(r[3]) if r[3] else None,
+                    "ano": int(r[5]) if r[5] is not None else (int(resolved_ano_mun) if resolved_ano_mun is not None else None),
+                    "turno": int(r[6]) if r[6] is not None else None,
+                }
+                for r in no_result_rows
+            ]
             if return_municipal_uf:
                 municipal_uf_items = [
                     {
@@ -1724,6 +1834,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "federal": federal_items,
             "municipal_brasil": municipal_brasil_items,
             "municipal_uf": municipal_uf_items,
+            "municipal_sem_resultado": municipal_sem_resultado_items if return_municipal_uf else [],
         }
 
     def candidate_summary(
@@ -1838,7 +1949,9 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 total_votes = float(context_df["_votes"].sum())
                 vote_share = round((latest_votes / total_votes) * 100, 4) if total_votes > 0 else 0.0
                 ranking = context_df.sort_values("_votes", ascending=False).reset_index(drop=True)
-                candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
+                candidate_clauses, candidate_params = self._candidate_clauses_and_params(
+                    candidate_id, context_where, context_params
+                )
                 candidate_key_row = (
                     self._rows(
                         f"SELECT {context_key_expr} FROM analytics {context_where} "
@@ -1946,11 +2059,18 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             if not candidate_clauses:
                 return pd.DataFrame()
             connector = "AND" if where else "WHERE"
-            return self._df(
-                f"SELECT {select_clause} FROM {self._candidate_history_relation} {where} "
-                f"{connector} ({' OR '.join(candidate_clauses)})",
-                where_params + candidate_params,
-            )
+            # Em ordem de prioridade (SQ, numero, nome): o SQ e o id que a busca devolve. Casar
+            # tudo de uma vez misturava, para o id "23", o SQ 23 de 2006 com todo candidato de
+            # numero 23 em qualquer ano. Numero e nome so valem quando o SQ nao casa nada.
+            for clause, param in zip(candidate_clauses, candidate_params):
+                rows = self._df(
+                    f"SELECT {select_clause} FROM {self._candidate_history_relation} {where} "
+                    f"{connector} ({clause})",
+                    where_params + [param],
+                )
+                if not rows.empty:
+                    return rows
+            return pd.DataFrame()
 
         cpf_sql = (
             "LPAD(regexp_replace(regexp_replace(TRIM(CAST(NR_CPF_CANDIDATO AS VARCHAR)), "
@@ -2060,6 +2180,16 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             records.append({**row, "total_votes": total_votes})
         return pd.DataFrame.from_records(records, columns=[*context_cols, "total_votes"])
 
+    def _electorate_profile_frame(self, candidate_rows: pd.DataFrame) -> pd.DataFrame | None:
+        """Perfil do eleitorado das UFs do candidato (None se o arquivo nao foi carregado)."""
+        if not self._has_electorate_profile or "SG_UF" not in candidate_rows.columns:
+            return None
+        ufs = sorted({str(v).strip().upper() for v in candidate_rows["SG_UF"].dropna() if str(v).strip()})
+        if not ufs:
+            return None
+        placeholders = ", ".join(["?"] * len(ufs))
+        return self._df(f"SELECT * FROM electorate_profile WHERE uf IN ({placeholders})", ufs)
+
     def candidate_electorate_profile(
         self,
         candidate_id: str,
@@ -2081,69 +2211,11 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "source_id": None,
                 "canonical_candidate_id": None,
                 "person_id": None,
-                "gender": {"male_share": 0.0, "female_share": 0.0},
-                "age_bands": {"a18_34": 0.0, "a35_59": 0.0, "a60_plus": 0.0},
-                "dominant_education": "N/A",
-                "dominant_income_band": "N/A",
-                "urban_concentration": 0.0,
+                **empty_electorate_profile(),
             }
 
-        col_votes = (
-            "QT_VOTOS_NOMINAIS_VALIDOS"
-            if "QT_VOTOS_NOMINAIS_VALIDOS" in candidate_rows.columns
-            else ("NR_VOTACAO_NOMINAL" if "NR_VOTACAO_NOMINAL" in candidate_rows.columns else ("QT_VOTOS_NOMINAIS" if "QT_VOTOS_NOMINAIS" in candidate_rows.columns else None))
-        )
-        weights = pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(1.0) if col_votes else 1.0
-        total_weight = float(weights.sum()) if hasattr(weights, "sum") else float(len(candidate_rows))
-        total_weight = total_weight if total_weight > 0 else 1.0
-
-        male_share = 0.0
-        female_share = 0.0
-        if "DS_GENERO" in candidate_rows.columns:
-            gender_norm = candidate_rows["DS_GENERO"].fillna("").astype(str).str.strip().apply(lambda value: self._normalize_value(value, uppercase=True))
-            male_share = round((weights[gender_norm.str.contains("MASC", na=False)].sum() / total_weight) * 100, 4)
-            female_share = round((weights[gender_norm.str.contains("FEM", na=False)].sum() / total_weight) * 100, 4)
-
-        a18_34 = 0.0
-        a35_59 = 0.0
-        a60_plus = 0.0
-        if "IDADE" in candidate_rows.columns:
-            ages = pd.to_numeric(candidate_rows["IDADE"], errors="coerce")
-            a18_34 = round((weights[(ages >= 18) & (ages <= 34)].sum() / total_weight) * 100, 4)
-            a35_59 = round((weights[(ages >= 35) & (ages <= 59)].sum() / total_weight) * 100, 4)
-            a60_plus = round((weights[ages >= 60].sum() / total_weight) * 100, 4)
-
-        dominant_education = "N/A"
-        edu_col = "DS_GRAU_INSTRUCAO" if "DS_GRAU_INSTRUCAO" in candidate_rows.columns else None
-        if edu_col:
-            edu = (
-                candidate_rows.assign(_w=weights, _label=candidate_rows[edu_col].fillna("").astype(str).str.strip().replace("", "N/A"))
-                .groupby("_label", as_index=False)
-                .agg(weight=("_w", "sum"))
-                .sort_values(["weight", "_label"], ascending=[False, True])
-            )
-            if not edu.empty:
-                dominant_education = str(edu.iloc[0]["_label"])
-
-        dominant_income = "N/A"
-        income_col = "DS_FAIXA_RENDA" if "DS_FAIXA_RENDA" in candidate_rows.columns else ("DS_RENDA" if "DS_RENDA" in candidate_rows.columns else ("FAIXA_RENDA" if "FAIXA_RENDA" in candidate_rows.columns else None))
-        if income_col:
-            income = (
-                candidate_rows.assign(_w=weights, _label=candidate_rows[income_col].fillna("").astype(str).str.strip().replace("", "N/A"))
-                .groupby("_label", as_index=False)
-                .agg(weight=("_w", "sum"))
-                .sort_values(["weight", "_label"], ascending=[False, True])
-            )
-            if not income.empty:
-                dominant_income = str(income.iloc[0]["_label"])
-
-        urban_concentration = 0.0
-        urban_col = "DS_LOCAL_VOTACAO" if "DS_LOCAL_VOTACAO" in candidate_rows.columns else ("DS_TIPO_LOCAL" if "DS_TIPO_LOCAL" in candidate_rows.columns else ("DS_CLASSIFICACAO_UE" if "DS_CLASSIFICACAO_UE" in candidate_rows.columns else None))
-        if urban_col:
-            urban_mask = candidate_rows[urban_col].fillna("").astype(str).str.strip().apply(
-                lambda value: self._normalize_value(value, uppercase=True)
-            ).str.contains("URBAN", na=False)
-            urban_concentration = round((weights[urban_mask].sum() / total_weight) * 100, 4)
+        col_votes = next((c for c in ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"] if c in candidate_rows.columns), None)
+        profile = compute_electorate_profile(candidate_rows, self._electorate_profile_frame(candidate_rows), year, col_votes)
 
         identity_payload = self._candidate_identity_payload(candidate_rows)
 
@@ -2152,11 +2224,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "source_id": identity_payload["source_id"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
-            "gender": {"male_share": male_share, "female_share": female_share},
-            "age_bands": {"a18_34": a18_34, "a35_59": a35_59, "a60_plus": a60_plus},
-            "dominant_education": dominant_education,
-            "dominant_income_band": dominant_income,
-            "urban_concentration": urban_concentration,
+            **profile,
         }
 
     def candidate_vote_distribution(
@@ -2208,6 +2276,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         col_municipio = "NM_UE" if "NM_UE" in candidate_rows.columns else ("NM_MUNICIPIO" if "NM_MUNICIPIO" in candidate_rows.columns else None)
         col_zona = "NR_ZONA" if "NR_ZONA" in candidate_rows.columns else ("CD_ZONA" if "CD_ZONA" in candidate_rows.columns else ("SQ_ZONA" if "SQ_ZONA" in candidate_rows.columns else None))
         col_cargo = "DS_CARGO" if "DS_CARGO" in candidate_rows.columns else ("DS_CARGO_D" if "DS_CARGO_D" in candidate_rows.columns else None)
+        col_cd_municipio = "CD_MUNICIPIO" if "CD_MUNICIPIO" in candidate_rows.columns else None
         if office:
             municipal_scope = self._cargo_scope(office) == "municipio"
         elif col_cargo:
@@ -2262,26 +2331,33 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 }
 
             municipio_expr = f"NULLIF(TRIM(CAST({col_municipio} AS VARCHAR)), '')"
+            # UF e codigo TSE entram na chave: cidades homonimas de UFs diferentes (ex.: BOA VISTA em
+            # PB e RR) nao podem se fundir, e o app precisa do codigo para casar com a malha do IBGE.
+            uf_expr = f"COALESCE(UPPER(TRIM(CAST({col_uf} AS VARCHAR))), '')" if col_uf else "''"
+            col_cd_mun = "CD_MUNICIPIO" if "CD_MUNICIPIO" in candidate_rows.columns else None
+            cd_expr = f"COALESCE(TRIM(CAST({col_cd_mun} AS VARCHAR)), '')" if col_cd_mun else "''"
             votes_expr = f"COALESCE(TRY_CAST({col_votes} AS DOUBLE), 0.0)"
             candidate_case_sql = " OR ".join(f"({clause})" for clause in candidate_clauses)
             cte_sql = (
                 "WITH filtered AS ("
                 f"SELECT {municipio_expr} AS nm_municipio, "
+                f"{uf_expr} AS uf, "
+                f"{cd_expr} AS cd_municipio, "
                 f"{votes_expr} AS votos, "
                 f"CASE WHEN ({candidate_case_sql}) THEN 1 ELSE 0 END AS is_candidate "
                 f"FROM analytics {where}"
                 "), "
                 "municipio_totals AS ("
-                "SELECT nm_municipio, SUM(votos) AS votos_validos_do_municipio "
+                "SELECT nm_municipio, uf, cd_municipio, SUM(votos) AS votos_validos_do_municipio "
                 "FROM filtered "
                 "WHERE nm_municipio IS NOT NULL "
-                "GROUP BY nm_municipio"
+                "GROUP BY nm_municipio, uf, cd_municipio"
                 "), "
                 "candidate_totals AS ("
-                "SELECT nm_municipio, SUM(votos) AS qt_votos "
+                "SELECT nm_municipio, uf, cd_municipio, SUM(votos) AS qt_votos "
                 "FROM filtered "
                 "WHERE is_candidate = 1 AND nm_municipio IS NOT NULL "
-                "GROUP BY nm_municipio"
+                "GROUP BY nm_municipio, uf, cd_municipio"
                 "), "
                 "candidate_grand AS ("
                 "SELECT COALESCE(SUM(qt_votos), 0.0) AS total_votos_candidato_no_recorte "
@@ -2355,27 +2431,35 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "c.nm_municipio, "
                 "m.votos_validos_do_municipio, "
                 "c.qt_votos, "
-                "g.total_votos_candidato_no_recorte "
+                "g.total_votos_candidato_no_recorte, "
+                "c.uf, c.cd_municipio "
                 "FROM candidate_totals c "
                 "JOIN municipio_totals m ON m.nm_municipio = c.nm_municipio "
+                "AND m.uf = c.uf AND m.cd_municipio = c.cd_municipio "
                 "CROSS JOIN candidate_grand g "
                 f"{order_by_sql}{pagination_sql}"
             )
             rows = self._rows(rows_sql, rows_params)
             items: list[dict[str, object]] = []
-            for nm_municipio, votos_validos_do_municipio, qt_votos, total_candidato in rows:
+            for nm_municipio, votos_validos_do_municipio, qt_votos, total_candidato, row_uf, row_cd in rows:
                 qt_votos_f = float(qt_votos or 0.0)
                 votos_validos_f = float(votos_validos_do_municipio or 0.0)
                 total_candidato_f = float(total_candidato or 0.0)
                 percentual_municipio = _safe_percent(qt_votos_f, votos_validos_f)
                 percentual_total = _safe_percent(qt_votos_f, total_candidato_f)
+                codes = lookup_municipio(row_uf, row_cd, nm_municipio)
+                # Particoes antigas gravaram NM_UE="BRASIL" nas linhas por municipio do Presidente.
+                display_name = codes["nome"] if str(nm_municipio).strip().upper() == "BRASIL" and codes["nome"] else str(nm_municipio)
                 items.append(
                     {
-                        "key": str(nm_municipio),
-                        "label": str(nm_municipio),
+                        "key": display_name,
+                        "label": display_name,
+                        "uf": str(row_uf) if row_uf else None,
+                        "cd_municipio": codes["cd_municipio"],
+                        "cd_municipio_ibge": codes["cd_municipio_ibge"],
                         "votes": int(qt_votos_f),
                         "vote_share": round(percentual_total, 4),
-                        "nm_municipio": str(nm_municipio),
+                        "nm_municipio": display_name,
                         "votos_validos_do_municipio": int(votos_validos_f),
                         "qt_votos": int(qt_votos_f),
                         "percentual_candidato_no_municipio": percentual_municipio,
@@ -2423,7 +2507,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     col_votes=col_votes,
                     col_uf=col_uf,
                     col_municipio=col_municipio,
-                    col_cd_municipio=None,
+                    col_cd_municipio=col_cd_municipio,
                     col_zona=col_zona,
                     trace_id=trace_id,
                     source_event="candidate_vote_distribution_municipal_zone_base",
@@ -2441,10 +2525,15 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                         if col_uf
                         else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
                     ),
+                    _cd_municipio=(
+                        candidate_rows[col_cd_municipio].fillna("").astype(str).str.strip().replace("", pd.NA)
+                        if col_cd_municipio
+                        else pd.Series([pd.NA] * len(candidate_rows), index=candidate_rows.index)
+                    ),
                     _votes=pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(0),
                 ).dropna(subset=["_zona"])
                 agg = (
-                    grouped.groupby(["_zona", "_municipio", "_uf"], as_index=False)
+                    grouped.groupby(["_zona", "_municipio", "_uf", "_cd_municipio"], as_index=False, dropna=False)
                     .agg(votes=("_votes", "sum"))
                     .sort_values("votes", ascending=False)
                 )
@@ -2456,6 +2545,12 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 zone_id = str(row["_zona"])
                 row_votes = float(pd.to_numeric(row["votes"], errors="coerce") or 0.0)
                 vote_share = round((row_votes / total_votes_safe) * 100, 4)
+                # Sempre devolve zona, municipio, uf e codigos, em qualquer cargo: o app nao deve
+                # precisar extrair o numero da zona do texto do rotulo.
+                row_municipio = str(row["_municipio"]) if pd.notna(row["_municipio"]) else None
+                row_uf = str(row["_uf"]) if pd.notna(row["_uf"]) else None
+                row_cd = row["_cd_municipio"] if "_cd_municipio" in row.index and pd.notna(row["_cd_municipio"]) else None
+                codes = lookup_municipio(row_uf, row_cd, row_municipio)
                 if municipal_scope:
                     impact = _impact_category(vote_share)
                     items.append(
@@ -2468,8 +2563,10 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                             "candidate_total_share": vote_share,
                             "zone_id": zone_id,
                             "zone_name": f"Zona {zone_id}",
-                            "municipio": str(row["_municipio"]) if pd.notna(row["_municipio"]) else None,
-                            "uf": str(row["_uf"]) if pd.notna(row["_uf"]) else None,
+                            "municipio": row_municipio,
+                            "uf": row_uf,
+                            "cd_municipio": codes["cd_municipio"],
+                            "cd_municipio_ibge": codes["cd_municipio_ibge"],
                             "categoria_impacto": impact,
                             "percentual_no_total_do_candidato": vote_share,
                         }
@@ -2486,6 +2583,12 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                             "label": label,
                             "votes": int(row_votes),
                             "vote_share": vote_share,
+                            "zone_id": zone_id,
+                            "zone_name": f"Zona {zone_id}",
+                            "municipio": row_municipio,
+                            "uf": row_uf,
+                            "cd_municipio": codes["cd_municipio"],
+                            "cd_municipio_ibge": codes["cd_municipio_ibge"],
                         }
                     )
 
@@ -2628,7 +2731,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 state=state,
                 office=office,
             )
-            retention = self._candidate_retention_from_history(history_rows, resolved_year)
+            retention = self._candidate_retention_from_history(history_rows, resolved_year, office=office, turno=resolved_turno)
             identity_payload = self._candidate_identity_payload(candidate_rows)
             name = ""
             if col_name and col_name in candidate_rows.columns:
@@ -2656,7 +2759,9 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         deltas: list[dict[str, object]] = []
         for metric in ["votes", "vote_share", "retention"]:
-            ranked_metric = sorted(candidates_out, key=lambda item: float(item.get(metric) or 0), reverse=True)
+            # Retencao e None para quem nao tem eleicao anterior comparavel: fica fora do ranking.
+            comparable = [item for item in candidates_out if item.get(metric) is not None]
+            ranked_metric = sorted(comparable, key=lambda item: float(item.get(metric) or 0), reverse=True)
             if len(ranked_metric) >= 2:
                 gap = float(ranked_metric[0].get(metric) or 0) - float(ranked_metric[1].get(metric) or 0)
                 deltas.append(
@@ -2687,6 +2792,9 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         candidate_key_expr = self._candidate_group_key_sql_expr(include_turno=False)
         if not col_name or not candidate_key_expr:
             return {"page": page, "page_size": page_size, "total": 0, "total_pages": 0, "items": []}
+        # O indice compacto (1 linha por candidato, sem zonas) tem ~350x menos linhas que a tabela
+        # completa; a busca sem recorte caia de ~9 s para milissegundos.
+        relation = self._candidate_history_relation
 
         query = str(q or "").strip()
         query_norm = self._normalize_value(query, uppercase=True)
@@ -2705,6 +2813,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         col_cpf = self._pick_col(["NR_CPF_CANDIDATO"])
         col_history = self._pick_col(["HISTORICO_CANDIDATURA_ID"])
         col_birth = self._pick_col(["DT_NASCIMENTO"])
+        col_urna = self._pick_col(["NM_URNA_CANDIDATO"])
 
         def identifier_expr(col: str | None) -> str:
             if not col:
@@ -2713,6 +2822,8 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         name_expr = self._nullable_text_sql_expr(col_name)
         name_norm_expr = self._normalized_sql_text_expr(col_name)
+        urna_expr = self._nullable_text_sql_expr(col_urna) if col_urna else "CAST(NULL AS VARCHAR)"
+        urna_norm_expr = self._normalized_sql_text_expr(col_urna) if col_urna else "CAST(NULL AS VARCHAR)"
         candidate_id_expr = identifier_expr(col_candidate_id)
         source_id_expr = identifier_expr(col_source_id)
         number_expr = identifier_expr(col_number)
@@ -2732,9 +2843,28 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             else "0"
         )
 
+        # SQ_CANDIDATO se repete entre UFs/municipios em 2002-2008: sem o escopo, a chave juntava
+        # pessoas diferentes e somava os votos. Presidente (votado no pais) nao tem escopo.
+        col_ue = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        if col_state and col_office:
+            office_upper = f"UPPER(TRIM(CAST({col_office} AS VARCHAR)))"
+            ue_part = f"COALESCE({self._nullable_text_sql_expr(col_ue)}, '')" if col_ue else "''"
+            scope_expr = (
+                f"CASE WHEN {office_upper} IN ('PRESIDENTE', 'VICE-PRESIDENTE') THEN '' "
+                f"WHEN {office_upper} IN ('PREFEITO', 'VICE-PREFEITO', 'VEREADOR') "
+                f"THEN COALESCE({state_expr}, '') || '/' || {ue_part} "
+                f"ELSE COALESCE({state_expr}, '') END"
+            )
+            candidate_key_expr = f"NULLIF(concat_ws('|', {candidate_key_expr}, {scope_expr}), '')"
         where, params = self._where(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido)
         connector = "AND" if where else "WHERE"
-        params.extend([f"%{query_norm}%", query_norm, f"{query_norm}%"])
+        # Busca por nome de registro, nome de urna (como o candidato se apresenta) e, quando a
+        # consulta e so digitos, pelo numero exato. Tudo sem acento e sem diferenciar caixa.
+        is_number_query = query_norm.isdigit()
+        number_equals = f" OR {number_expr} = ?" if is_number_query else ""
+        exact_params = [query_norm, query_norm, *([query_norm] if is_number_query else [])]
+        select_params = [*exact_params, f"{query_norm}%", f"{query_norm}%"]
+        match_params = [f"%{query_norm}%", f"%{query_norm}%", *([query_norm] if is_number_query else [])]
         latest_filter = ""
         if turno is None and col_round:
             latest_filter = (
@@ -2756,12 +2886,14 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             f"{cpf_expr} AS candidate_cpf, "
             f"{history_expr} AS history_id, "
             f"{birth_expr} AS birth_date, "
+            f"{urna_expr} AS urna_name, "
             f"{round_expr} AS round_no, "
             f"{votes_expr} AS votes, "
-            f"CASE WHEN {name_norm_expr} = ? THEN 6 "
-            f"WHEN {name_norm_expr} LIKE ? THEN 3 ELSE 1 END AS score "
-            f"FROM analytics {where} {connector} "
-            f"{candidate_key_expr} IS NOT NULL AND {name_norm_expr} LIKE ?"
+            f"CASE WHEN {name_norm_expr} = ? OR {urna_norm_expr} = ?{number_equals} THEN 6 "
+            f"WHEN {name_norm_expr} LIKE ? OR {urna_norm_expr} LIKE ? THEN 3 ELSE 1 END AS score "
+            f"FROM {relation} {where} {connector} "
+            f"{candidate_key_expr} IS NOT NULL AND "
+            f"({name_norm_expr} LIKE ? OR {urna_norm_expr} LIKE ?{number_equals})"
             "), latest AS ("
             "SELECT * FROM scoped "
             f"{latest_filter}"
@@ -2778,6 +2910,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "MAX(candidate_cpf) AS candidate_cpf, "
             "MAX(history_id) AS history_id, "
             "MAX(birth_date) AS birth_date, "
+            "MAX(urna_name) AS urna_name, "
             "MAX(round_no) AS round_no, "
             "SUM(votes) AS votes, "
             "MAX(score) AS score "
@@ -2788,12 +2921,8 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "ORDER BY votes DESC, score DESC, candidate_name ASC "
             "LIMIT ? OFFSET ?"
         )
-        # The match parameter belongs to the WHERE clause; score parameters are
-        # listed earlier in SELECT and therefore precede it in positional order.
-        where_param_count = len(params) - 3
-        base_params = params[:where_param_count]
-        search_params = params[where_param_count:]
-        sql_params = [search_params[1], search_params[2], *base_params, search_params[0]]
+        # Ordem posicional: placeholders do SELECT (score), depois o recorte, depois o match.
+        sql_params = [*select_params, *params, *match_params]
         sql_params.extend([int(page_size), int((page - 1) * page_size)])
         rows = self._df(sql, sql_params)
         if rows.empty:
@@ -2830,6 +2959,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     "latest_vote_round": round_value if round_value and round_value > 0 else None,
                     "latest_vote_value": votes_value,
                     "candidato": str(row.get("candidate_name") or "").strip(),
+                    "nm_urna_candidato": str(row["urna_name"]).strip() if pd.notna(row.get("urna_name")) and str(row["urna_name"]).strip() else None,
                     "partido": str(row["party"]).strip() if pd.notna(row.get("party")) else None,
                     "cargo": str(row["office"]).strip() if pd.notna(row.get("office")) else None,
                     "uf": str(row["state"]).strip() if pd.notna(row.get("state")) else None,
@@ -3032,7 +3162,10 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             group_expr = f"COALESCE(NULLIF(TRIM(CAST({group_col} AS VARCHAR)), ''), 'N/A')"
 
         if col_qt_vagas:
-            def norm_expr(col: str | None, uppercase: bool = False) -> str:
+            # Uma "unidade" e uma disputa: Presidente = pais; estaduais = UF; municipais = municipio.
+            # QT_VAGAS so existe onde o TSE publicou consulta_vagas (2018+ e 2026); nas demais
+            # disputas vale o numero de eleitos distintos, que em eleicao encerrada e o de cadeiras.
+            def txt(col: str | None, uppercase: bool = False) -> str:
                 if not col:
                     return "'N/A'"
                 base = f"TRIM(CAST({col} AS VARCHAR))"
@@ -3040,45 +3173,41 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     base = f"UPPER({base})"
                 return f"COALESCE(NULLIF({base}, ''), 'N/A')"
 
-            select_cols = [
-                f"{f'TRY_CAST({col_ano} AS BIGINT)' if col_ano else 'NULL'} AS ano",
-                f"{norm_expr(col_uf, uppercase=True)} AS uf",
-                f"{norm_expr(col_cargo)} AS cargo",
-                f"{norm_expr(col_municipio)} AS municipio",
-                f"{group_expr} AS group_value",
-                f"COALESCE(TRY_CAST({col_qt_vagas} AS DOUBLE), 0) AS qt_vagas",
-            ]
-            raw_rows = self._rows(f"SELECT {', '.join(select_cols)} FROM analytics {where}", params)
-
-            unit_map: dict[str, dict] = {}
-            for row in raw_rows:
-                row_ano, row_uf, row_cargo, row_municipio, group_value, qt_vagas = row
-                cargo_up = str(row_cargo or "N/A").upper()
-                if cargo_up in MUNICIPAL_CARGOS:
-                    scope = "municipio"
-                elif cargo_up in NATIONAL_CARGOS:
-                    scope = "nacional"
-                else:
-                    scope = "uf"
-                if group_by == "municipio" and scope != "municipio":
-                    continue
-                if scope == "nacional":
-                    unit_key = f"{row_ano}|{row_cargo}"
-                elif scope == "uf":
-                    unit_key = f"{row_ano}|{row_uf}|{row_cargo}"
-                else:
-                    unit_key = f"{row_ano}|{row_uf}|{row_cargo}|{row_municipio}"
-                current = unit_map.get(unit_key)
-                if current is None or float(qt_vagas or 0) > current["qt_vagas"]:
-                    unit_map[unit_key] = {
-                        "group_value": str(group_value or "N/A"),
-                        "qt_vagas": float(qt_vagas or 0),
-                    }
-
+            cargo_up = f"UPPER({txt(col_cargo)})"
+            national = ", ".join(f"'{c}'" for c in sorted(NATIONAL_CARGOS))
+            municipal = ", ".join(f"'{c}'" for c in sorted(MUNICIPAL_CARGOS))
+            ano_expr = f"CAST(TRY_CAST({col_ano} AS BIGINT) AS VARCHAR)" if col_ano else "'NULL'"
+            unit_expr = (
+                f"CASE WHEN {cargo_up} IN ({national}) THEN {ano_expr} || '|' || {txt(col_cargo)} "
+                f"WHEN {cargo_up} IN ({municipal}) THEN {ano_expr} || '|' || {txt(col_uf, True)} || '|' "
+                f"|| {txt(col_cargo)} || '|' || {txt(col_municipio)} "
+                f"ELSE {ano_expr} || '|' || {txt(col_uf, True)} || '|' || {txt(col_cargo)} END"
+            )
+            unit_key = self._candidate_unit_key_sql()
+            elected_sql = (
+                f"COUNT(DISTINCT CASE WHEN {elected_sql_predicate(col_situacao)} "
+                f"THEN {unit_key} END)"
+                if unit_key
+                else "0"
+            )
+            unit_rows = self._rows(
+                (
+                    f"SELECT MIN({group_expr}) AS group_value, "
+                    f"MAX(COALESCE(TRY_CAST({col_qt_vagas} AS DOUBLE), 0)) AS qt_vagas, "
+                    f"{elected_sql} AS eleitos, MIN({cargo_up}) AS cargo_up "
+                    f"FROM analytics {where} GROUP BY {unit_expr}"
+                ),
+                params,
+            )
             agg: dict[str, float] = {}
-            for item in unit_map.values():
-                key = item["group_value"]
-                agg[key] = agg.get(key, 0.0) + float(item["qt_vagas"])
+            for group_value, qt_vagas, eleitos, unit_cargo in unit_rows:
+                seats = float(qt_vagas or 0)
+                if seats <= 0:
+                    seats = float(eleitos or 0)
+                    if str(unit_cargo or "").upper() in SINGLE_SEAT_CARGOS:
+                        seats = max(seats, 1.0)
+                key = str(group_value or "N/A")
+                agg[key] = agg.get(key, 0.0) + seats
             rows = sorted(agg.items(), key=lambda x: x[1], reverse=True)
         else:
             dedup_cols = [group_col, col_candidato]
@@ -3095,7 +3224,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     "SELECT group_value, COUNT(*) AS vagas_oficiais FROM ("
                     f"  SELECT DISTINCT {dedup_expr}, {group_expr} AS group_value "
                     f"  FROM analytics {where} "
-                    f"{'AND' if where else 'WHERE'} UPPER(TRIM(CAST({col_situacao} AS VARCHAR))) LIKE 'ELEITO%'"
+                    f"{'AND' if where else 'WHERE'} {elected_sql_predicate(col_situacao)}"
                     ") t GROUP BY 1 ORDER BY vagas_oficiais DESC"
                 ),
                 params,

@@ -881,7 +881,7 @@ def test_candidates_search_with_partido_filter(client: TestClient):
 def test_candidates_search_short_unscoped_query_returns_empty_payload(client: TestClient):
     response = client.get(
         "/v1/analytics/candidatos/search",
-        params={"q": "Fabio", "ano": 2024},
+        params={"q": "Fab", "ano": 2024},
     )
 
     assert response.status_code == 200
@@ -1234,10 +1234,12 @@ def test_candidate_electorate_profile_endpoint(client: TestClient):
     assert payload["source_id"] == "6"
     assert payload["canonical_candidate_id"].startswith("person:")
     assert payload["person_id"]
-    assert payload["gender"]["female_share"] == 100.0
-    assert payload["age_bands"]["a35_59"] == 100.0
-    assert payload["dominant_education"] == "SUPERIOR COMPLETO"
-    assert payload["dominant_income_band"] == "2-5 SM"
+    # Sem dados do eleitorado carregados a rota NAO devolve mais o perfil do proprio candidato
+    # (uma candidata dava female_share=100); informa que o perfil esta indisponivel.
+    assert payload["basis"] == "indisponivel"
+    assert payload["gender"] == {"male_share": 0.0, "female_share": 0.0}
+    assert payload["dominant_education"] == "N/A"
+    assert payload["urban_concentration"] is None
 
 
 def test_candidate_electorate_profile_endpoint_accepts_official_param_aliases(client: TestClient):

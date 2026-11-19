@@ -13,12 +13,15 @@ from app.services.analytics.common import (
     COR_RACA_CATEGORY_LABELS,
     COR_RACA_CATEGORY_ORDER,
     MUNICIPAL_CARGOS,
+    SINGLE_SEAT_CARGOS,
     UF_TO_MACROREGIAO,
     VALID_UF_CODES,
     _impact_category,
     _safe_percent,
     logger,
 )
+from app.domain.municipios import lookup_municipio
+from app.services.analytics.electorate import compute_electorate_profile, empty_electorate_profile
 from app.services.analytics.mixins import AnalyticsSupportMixin
 
 @dataclass
@@ -27,6 +30,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     default_top_n: int
     max_top_n: int
     _source_path: Path | None = field(default=None, init=False, repr=False)
+    electorate_profile_df: pd.DataFrame | None = field(default=None, init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
     _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
@@ -64,6 +68,9 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 ) from exc
             service = cls(df, default_top_n=default_top_n, max_top_n=max_top_n)
             service._source_path = Path(file_path)
+            profile_path = Path(file_path).with_name("electorate_profile.parquet")
+            if profile_path.exists():
+                service.electorate_profile_df = pd.read_parquet(profile_path)
             return service
         if suffix == ".csv":
             return cls.from_csv(
@@ -288,6 +295,37 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         return {"anos": anos, "ufs": ufs, "cargos": cargos}
 
+    def mayor_second_round(self, uf: str, ano: int | None = None) -> tuple[int | None, set[str] | None]:
+        """(ano municipal, codigos TSE dos municipios da UF com 2o turno de Prefeito nesse ano)."""
+        col_ano = self._pick_col(["ANO_ELEICAO", "NR_ANO_ELEICAO"])
+        col_turno = self._pick_col(["NR_TURNO", "CD_TURNO", "DS_TURNO"])
+        col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+        col_uf = self._pick_col(["SG_UF"])
+        col_mun = self._pick_col(["NM_UE", "NM_MUNICIPIO"])
+        if not (col_ano and col_turno and col_cargo and col_uf):
+            return ano, None
+        df = self.dataframe
+        uf_key = str(uf).strip().upper()
+        mayors = df[
+            (df[col_cargo].fillna("").astype(str).str.strip().str.upper() == "PREFEITO")
+            & (df[col_uf].fillna("").astype(str).str.strip().str.upper() == uf_key)
+        ]
+        years = pd.to_numeric(mayors[col_ano], errors="coerce")
+        year = ano if ano is not None else (int(years.max()) if years.notna().any() else None)
+        if year is None:
+            return None, None
+        scoped = mayors[years == int(year)]
+        if scoped.empty:
+            return year, None
+        second = scoped[self._extract_turno(scoped[col_turno]) == 2]
+        col_cd = "CD_MUNICIPIO" if "CD_MUNICIPIO" in second.columns else None
+        codes: set[str] = set()
+        for _, row in second.iterrows():
+            code = lookup_municipio(uf_key, row[col_cd] if col_cd else None, row[col_mun] if col_mun else None)["cd_municipio"]
+            if code:
+                codes.add(code)
+        return year, codes
+
     def overview(
         self,
         ano: int | None = None,
@@ -301,15 +339,12 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             df = self._latest_vote_context_rows(df)
         if self._is_national_presidential_scope(cargo=cargo, uf=uf, municipio=municipio):
             df = self._dedupe_national_presidential_candidates(df)
-        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
         )
-        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
-
-        total_eleitos = None
-        if col_situacao:
-            total_eleitos = int(self._is_elected(df[col_situacao]).sum())
+        total_candidatos, total_eleitos = self._overview_candidate_counts(
+            df, exclude_national_elected=cargo is None and bool(uf or municipio)
+        )
 
         total_votos = None
         if col_votos:
@@ -318,7 +353,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
 
         return {
             "total_registros": int(len(df)),
-            "total_candidatos": int(df[col_candidato].nunique()) if col_candidato else None,
+            "total_candidatos": total_candidatos,
             "total_eleitos": total_eleitos,
             "total_votos_nominais": total_votos,
         }
@@ -334,6 +369,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         top_n: int | None = None,
         page: int = 1,
         page_size: int | None = None,
+        somente_eleitos: bool = False,
     ) -> dict:
         df = self._apply_filters(ano=ano, turno=turno, uf=uf, cargo=cargo, partido=partido, municipio=municipio)
         if turno is None:
@@ -369,6 +405,10 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             ),
         )
         df = df.dropna(subset=["_candidate_key"]).copy()
+        if somente_eleitos and col_situacao and col_situacao in df.columns:
+            # Candidato eleito = alguma linha eleita (no ultimo turno, quando o turno nao e informado).
+            elected_keys = set(df.loc[self._is_elected(df[col_situacao]), "_candidate_key"])
+            df = df[df["_candidate_key"].isin(elected_keys)].copy()
         if df.empty:
             return {
                 "top_n": effective_page_size,
@@ -731,7 +771,6 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         col_votos = self._pick_col(
             ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
         )
-        col_candidato = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
         col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
 
         if metric == "registros":
@@ -745,23 +784,29 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             out = tmp.groupby(group_cols, dropna=False)["_votos"].sum().reset_index(name="value")
             return out
 
+        # Candidaturas distintas (pessoa + ano + cargo + escopo), nao linhas por zona/turno.
+        keys = self._candidate_unit_keys(df)
         if metric == "candidatos":
-            if not col_candidato:
+            if keys.isna().all():
                 return None
             out = (
-                df.groupby(group_cols, dropna=False)[col_candidato]
+                df.assign(_key=keys)
+                .groupby(group_cols, dropna=False)["_key"]
                 .nunique(dropna=True)
                 .reset_index(name="value")
             )
             return out
 
         if metric == "eleitos":
-            if not col_situacao:
+            if not col_situacao or keys.isna().all():
                 return None
-            tmp = df.assign(
-                _eleito=self._is_elected(df[col_situacao]).astype(int)
+            elected = self._is_elected(df[col_situacao])
+            out = (
+                df.assign(_key=keys.where(elected))
+                .groupby(group_cols, dropna=False)["_key"]
+                .nunique(dropna=True)
+                .reset_index(name="value")
             )
-            out = tmp.groupby(group_cols, dropna=False)["_eleito"].sum().reset_index(name="value")
             return out
 
         return None
@@ -1023,6 +1068,20 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 df_pref = df_pref[df_pref["_turno"] == int(turno_municipal)]
 
         pref_winners = winner_rows(df_pref, ["_uf", "_municipio"])
+        # Municipio sem prefeito eleito (eleicao anulada/pendente) nao tem "vencedor": a linha seria o
+        # mais votado nao eleito. Vai para a lista propria e fica fora das contagens.
+        no_result = pref_winners[~pref_winners["_is_eleito"]] if not pref_winners.empty else pref_winners
+        pref_winners = pref_winners[pref_winners["_is_eleito"]] if not pref_winners.empty else pref_winners
+        municipal_sem_resultado_items = [
+            {
+                "uf": str(row["_uf"]),
+                "municipio": str(row["_municipio"]),
+                "status": str(row["_situacao"]) if pd.notna(row["_situacao"]) and str(row["_situacao"]) else None,
+                "ano": int(row["_ano"]) if pd.notna(row["_ano"]) else None,
+                "turno": int(row["_turno"]) if pd.notna(row["_turno"]) else None,
+            }
+            for _, row in no_result.sort_values(["_uf", "_municipio"]).iterrows()
+        ]
         if not pref_winners.empty:
             pref_winners = pref_winners.assign(_espectro=pref_winners["_partido"].apply(self._party_spectrum))
         else:
@@ -1086,6 +1145,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "federal": federal_items,
             "municipal_brasil": municipal_brasil_items,
             "municipal_uf": municipal_uf_items,
+            "municipal_sem_resultado": municipal_sem_resultado_items if return_municipal_uf else [],
         }
 
     def candidate_summary(
@@ -1295,67 +1355,11 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "source_id": None,
                 "canonical_candidate_id": None,
                 "person_id": None,
-                "gender": {"male_share": 0.0, "female_share": 0.0},
-                "age_bands": {"a18_34": 0.0, "a35_59": 0.0, "a60_plus": 0.0},
-                "dominant_education": "N/A",
-                "dominant_income_band": "N/A",
-                "urban_concentration": 0.0,
+                **empty_electorate_profile(),
             }
 
-        col_votes = self._pick_col(["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"])
-        weights = pd.to_numeric(candidate_rows[col_votes], errors="coerce").fillna(1.0) if col_votes else 1.0
-        total_weight = float(weights.sum()) if hasattr(weights, "sum") else float(len(candidate_rows))
-        total_weight = total_weight if total_weight > 0 else 1.0
-
-        col_gender = self._pick_col(["DS_GENERO"])
-        male_share = 0.0
-        female_share = 0.0
-        if col_gender:
-            gender_norm = self._normalize_text(candidate_rows[col_gender]).apply(self._normalize_ascii_upper)
-            male_share = round((weights[gender_norm.str.contains("MASC", na=False)].sum() / total_weight) * 100, 4)
-            female_share = round((weights[gender_norm.str.contains("FEM", na=False)].sum() / total_weight) * 100, 4)
-
-        col_age = self._pick_col(["IDADE"])
-        a18_34 = 0.0
-        a35_59 = 0.0
-        a60_plus = 0.0
-        if col_age:
-            ages = pd.to_numeric(candidate_rows[col_age], errors="coerce")
-            a18_34 = round((weights[(ages >= 18) & (ages <= 34)].sum() / total_weight) * 100, 4)
-            a35_59 = round((weights[(ages >= 35) & (ages <= 59)].sum() / total_weight) * 100, 4)
-            a60_plus = round((weights[ages >= 60].sum() / total_weight) * 100, 4)
-
-        col_education = self._pick_col(["DS_GRAU_INSTRUCAO"])
-        dominant_education = "N/A"
-        if col_education:
-            edu = (
-                candidate_rows.assign(_w=weights, _label=self._normalize_text(candidate_rows[col_education]).replace("", "N/A"))
-                .groupby("_label", as_index=False)
-                .agg(weight=("_w", "sum"))
-                .sort_values(["weight", "_label"], ascending=[False, True])
-            )
-            if not edu.empty:
-                dominant_education = str(edu.iloc[0]["_label"])
-
-        col_income = self._pick_col(["DS_FAIXA_RENDA", "DS_RENDA", "FAIXA_RENDA"])
-        dominant_income = "N/A"
-        if col_income:
-            income = (
-                candidate_rows.assign(_w=weights, _label=self._normalize_text(candidate_rows[col_income]).replace("", "N/A"))
-                .groupby("_label", as_index=False)
-                .agg(weight=("_w", "sum"))
-                .sort_values(["weight", "_label"], ascending=[False, True])
-            )
-            if not income.empty:
-                dominant_income = str(income.iloc[0]["_label"])
-
-        col_urban = self._pick_col(["DS_LOCAL_VOTACAO", "DS_TIPO_LOCAL", "DS_CLASSIFICACAO_UE"])
-        urban_concentration = 0.0
-        if col_urban:
-            urban_mask = self._normalize_text(candidate_rows[col_urban]).apply(self._normalize_ascii_upper).str.contains(
-                "URBAN", na=False
-            )
-            urban_concentration = round((weights[urban_mask].sum() / total_weight) * 100, 4)
+        col_votes = next((c for c in ["QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"] if c in candidate_rows.columns), None)
+        profile = compute_electorate_profile(candidate_rows, self.electorate_profile_df, year, col_votes)
 
         identity_payload = self._candidate_identity_payload(candidate_rows)
 
@@ -1364,11 +1368,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "source_id": identity_payload["source_id"],
             "canonical_candidate_id": identity_payload["canonical_candidate_id"],
             "person_id": identity_payload["person_id"],
-            "gender": {"male_share": male_share, "female_share": female_share},
-            "age_bands": {"a18_34": a18_34, "a35_59": a35_59, "a60_plus": a60_plus},
-            "dominant_education": dominant_education,
-            "dominant_income_band": dominant_income,
-            "urban_concentration": urban_concentration,
+            **profile,
         }
 
     def candidate_vote_distribution(
@@ -1799,10 +1799,17 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     + "|"
                     + tmp.loc[mask_nacional, "_cargo"]
                 )
+            # QT_VAGAS so existe onde o TSE publicou consulta_vagas; nas demais disputas vale o numero
+            # de eleitos distintos (e 1 nos cargos de vaga unica, mesmo sem eleito registrado).
+            unit_keys = self._candidate_unit_keys(df)
+            tmp = tmp.assign(
+                _person=unit_keys.where(self._is_elected(df[col_situacao])),
+            )
             unit = (
                 tmp.groupby("_unit_key", as_index=False)
                 .agg(
                     vagas_oficiais=("_qt_vagas", "max"),
+                    eleitos=("_person", "nunique"),
                     ano=("_ano", "max"),
                     uf=("_uf", "max"),
                     cargo=("_cargo", "max"),
@@ -1812,6 +1819,9 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 )
                 .copy()
             )
+            single_seat = unit["cargo"].astype(str).str.upper().isin(SINGLE_SEAT_CARGOS)
+            fallback = unit["eleitos"].where(~single_seat, unit["eleitos"].clip(lower=1))
+            unit = unit.assign(vagas_oficiais=unit["vagas_oficiais"].where(unit["vagas_oficiais"] > 0, fallback))
             if group_by == "municipio":
                 unit = unit[unit["scope"] == "municipio"]
             grouped = (

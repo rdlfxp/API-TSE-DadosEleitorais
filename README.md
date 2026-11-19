@@ -89,6 +89,47 @@ Nos endpoints que retornam dados de candidato, os campos de identidade seguem es
 Observacoes:
 
 - `SQ_CANDIDATO` e `NR_CANDIDATO` nao sao usados como identidade historica da pessoa.
+- `SQ_CANDIDATO` **nao e unico** em 2002, 2006 e 2008: repete entre UFs e municipios (em 2006 sao 3.165 SQs
+  para 19.303 candidaturas). Por isso `normalize.py` e `merge_curated_year.py` juntam consulta e historico
+  por (ano, SQ, escopo), onde escopo = `BR` (Presidente), codigo do municipio (cargos municipais) ou UF
+  (demais). Antes, CPF, genero e id de historico de uma pessoa eram colados em todas as outras com o mesmo
+  SQ. No `vote-history`, o `candidate_id` casa primeiro por SQ e so depois por numero, CPF ou nome, e
+  `state` vem como `BR` para Presidente.
+- **Reconstruir 2002, 2006 e 2008** (a base publicada tem esses anos com votos inflados e ids misturados).
+  O arquivo de historico oficial fica em `raw/2026`, entao o Data Refresh por `incremental_year` nao serve
+  para anos antigos; rode localmente (precisa de `pyarrow`), baixando antes a base do R2:
+  ```bash
+  python scripts/download_curated_from_r2.py ...
+  for Y in 2002 2006 2008; do
+    python scripts/normalize.py --raw-dir data/raw --years $Y --chunk-size 250000 \
+      --historico data/raw/2026/historico_candidatura_2026_BRASIL.csv \
+      --output data/curated/analytics_$Y.parquet --report data/curated/quality_report_$Y.json
+    python scripts/merge_curated_year.py --base data/curated/analytics.parquet \
+      --year-file data/curated/analytics_$Y.parquet --target-year $Y \
+      --historico data/raw/2026/historico_candidatura_2026_BRASIL.csv \
+      --output data/curated/analytics.next.parquet --report data/curated/quality_report.json \
+      --manifest data/curated/manifest.json
+    mv data/curated/analytics.next.parquet data/curated/analytics.parquet
+    mv data/curated/candidate_history.next.parquet data/curated/candidate_history.parquet
+  done
+  ```
+  Confira antes de publicar: total de votos por ano e cargo igual ao do TSE, e `CPFs com mais de um nome`
+  perto de zero.
+- **Perfil do eleitorado** (`GET /v1/candidates/{id}/electorate-profile`): vem de `electorate_profile.parquet`, gerado do
+  perfil do eleitorado do TSE e publicado ao lado da base (R2: `latest/electorate_profile.parquet`):
+  ```bash
+  python scripts/build_electorate_profile.py --years 2000 2002 2004 2006 2008 2010 2012 2014 2016 2018 2020 2022 2024 2026
+  ```
+  O TSE nao publica faixa etaria em 2000-2006 (a rota informa `unavailable: ["idade", ...]`).
+  Sem o arquivo, a rota responde `basis: "indisponivel"` (nao usa mais o perfil do proprio candidato). Para uma
+  eleicao nova, rode so o ano novo com `--merge`.
+- O TSE so publica o historico oficial (`tse-history:...`) de quem esta na base de 2026. As demais
+  candidaturas recebem o id sintetico `tse-candidate:ANO:SQ`, que vale por ano e quebraria a identidade
+  (ex.: Lula em 2002). Na publicacao, `scripts/link_person_identities.py` troca o id sintetico pelo oficial
+  quando o **nome** (sem acento) bate e CPF valido ou data de nascimento tambem batem, e o id oficial e unico.
+  O `merge_curated_year.py` ja roda essa etapa. Para corrigir uma base ja publicada (gera tambem o
+  `candidate_history`):
+  `python scripts/link_person_identities.py --input data/curated/analytics.parquet --output data/curated/analytics.linked.parquet`.
 - No `vote-history`, a API nao expande mais historico por nome completo, nome de urna ou data de nascimento.
 - O historico multi-ano/multicargo so e expandido quando existe `NR_CPF_CANDIDATO`.
 - Quando o candidato nao e encontrado no recorte consultado, `source_id`, `canonical_candidate_id` e `person_id` ficam como `null`.
@@ -246,9 +287,14 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /health`
 - `GET /metrics` (observabilidade)
 - `GET /v1/analytics/filtros` (`200`, `503`)
+- `GET /v1/analytics/municipios?uf=SP&ano=2024` (`200`, `422`, `503`): municipios da UF com codigo TSE, codigo IBGE e `segundo_turno` (Prefeito no `ano`)
 - `GET /v1/analytics/overview?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
 - `GET /v1/analytics/top-candidatos?ano=2022&turno=2&uf=SP&cargo=Deputado%20Estadual&top_n=20` (`200`, `422`, `503`)
+  - `somente_eleitos=true` filtra no servidor (candidato com alguma linha eleita, no ultimo turno do cargo quando `turno` nao e informado).
 - `GET /v1/analytics/candidatos/search?q=candidato&ano=2022&turno=2&uf=SP&cargo=Deputado%20Estadual&page=1&page_size=20` (`200`, `422`, `503`)
+  - `q` casa por nome de registro, **nome de urna** (`nm_urna_candidato` vem no item) e, quando so tem digitos, pelo **numero exato** do candidato; sem acento e sem diferenciar caixa.
+  - Sem `uf`, `cargo` ou `partido`, a busca exige 4+ caracteres (ou um numero); abaixo disso devolve lista vazia sem consultar a base.
+  - Consulta o indice compacto `candidate_history` (uma linha por candidato), nao a tabela por zona.
 - `GET /v1/analytics/distribuicao?group_by=genero&ano=2022&uf=SP` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/distribuicao?group_by=status&ano=2022&uf=SP&cargo=Senador` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/cor-raca-comparativo?ano=2022&uf=SP` (`200`, `422`, `503`)
@@ -256,9 +302,16 @@ Se reprovar no gate, o script encerra com codigo `2` e nao grava o arquivo de sa
 - `GET /v1/analytics/idade?ano=2022&uf=SP&cargo=Deputado%20Estadual` (`200`, `422`, `503`)
 - `GET /v1/analytics/serie-temporal?metric=votos_nominais&uf=SP&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/ranking?group_by=partido&metric=votos_nominais&ano=2022&uf=SP&top_n=10` (`200`, `400`, `422`, `503`)
+  - Sem `top_n` a lista e cortada nos 20 primeiros (Camara 2022 tem 25+ partidos). `page_size` e sinonimo de `top_n`; valores diferentes dao `400`.
 - `GET /v1/analytics/mapa-uf?metric=votos_nominais&ano=2022&cargo=Deputado%20Estadual` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/vagas-oficiais?ano=2024&uf=SP&group_by=cargo` (`200`, `400`, `422`, `503`)
 - `GET /v1/analytics/polarizacao?uf=SP&ano_governador=2022&ano_municipal=2024` (`200`, `422`, `503`)
+
+`eleitos` e `candidatos` (em `/overview`, `/ranking`, `/serie-temporal` e `/mapa-uf`) contam **candidaturas distintas**
+(pessoa + ano + cargo + UF, e municipio nos cargos municipais), nao linhas: a base repete a mesma pessoa por zona,
+por municipio e por turno. Em `/overview` de uma UF ou municipio sem `cargo`, o Presidente (cargo nacional) nao entra
+em `total_eleitos`. `total_votos_nominais` continua sendo a soma de votos das linhas do recorte; some cargos e turnos
+diferentes apenas com cuidado, pois nao representa "votos" de uma disputa.
 
 `group_by` aceitos em `/distribuicao`: `status`, `genero`, `instrucao`, `cor_raca`, `estado_civil`, `ocupacao`, `cargo`, `uf`.
 `metric` aceitos em `/serie-temporal`, `/ranking`, `/mapa-uf`: `votos_nominais`, `candidatos`, `eleitos`, `registros`.
@@ -455,6 +508,10 @@ Resposta `200`:
 }
 ```
 
+Em `municipal_uf` entram apenas prefeitos **eleitos** (um por municipio). Municipios sem prefeito eleito (eleicao
+anulada ou pendente) saem em `municipal_sem_resultado` (`uf`, `municipio`, `status`, `ano`, `turno`) e nao entram nas
+contagens de `municipal_brasil`; `total_prefeitos` continua usando o total oficial de vagas.
+
 Erro `422` (ex.: `top_n > 100`):
 
 ```json
@@ -541,6 +598,14 @@ Resposta `200`:
   ]
 }
 ```
+
+`vagas_oficiais` vem de `QT_VAGAS` (arquivos `consulta_vagas` do TSE, disponiveis de 2018 em diante e em 2026). Onde
+nao ha numero oficial (2002 a 2016, ou uma partição ainda sem a coluna), vale o numero de **eleitos distintos** da
+disputa, e `1` nos cargos de vaga unica (Presidente, Governador, Prefeito e vices), mesmo sem eleito registrado
+(eleicao anulada). O numero oficial, quando existe, sempre prevalece.
+
+O TSE rotula o eleito por media como `MÉDIA` em 2002, 2006 e 2010 (e `ELEITO POR MÉDIA` depois). Ambos contam como
+eleito; sem isso a Camara de 2010 aparecia com 446 de 513 cadeiras.
 
 Erro `400`:
 

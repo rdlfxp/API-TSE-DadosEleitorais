@@ -13,6 +13,7 @@ DEFAULT_FILES = [
     "analytics.csv",
     "analytics.parquet",
     "candidate_history.parquet",
+    "electorate_profile.parquet",
     "quality_report.json",
     "manifest.json",
 ]

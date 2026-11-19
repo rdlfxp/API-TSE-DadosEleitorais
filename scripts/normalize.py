@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -348,6 +349,51 @@ def _first_not_null(series: pd.Series):
     return values.iloc[0] if not values.empty else pd.NA
 
 
+def _cargo_scope_value(value: object) -> str:
+    cargo = "" if value is None or pd.isna(value) else str(value).strip().upper()
+    if cargo in {"PRESIDENTE", "VICE-PRESIDENTE"}:
+        return "nacional"
+    if cargo in {"PREFEITO", "VICE-PREFEITO", "VEREADOR"}:
+        return "municipio"
+    return "uf"
+
+
+def _normalize_ue(series: pd.Series) -> pd.Series:
+    """Codigo da unidade eleitoral sem zeros a esquerda ('067172' e '67172' viram o mesmo)."""
+    text = series.astype("string").str.strip().str.upper()
+    numeric = pd.to_numeric(text, errors="coerce").astype("Int64").astype("string")
+    return numeric.fillna(text).fillna("")
+
+
+def _scope_key(df: pd.DataFrame) -> pd.Series:
+    """Escopo geografico que torna o SQ_CANDIDATO unico.
+
+    Em 2002, 2006 e 2008 o SQ_CANDIDATO se repete entre UFs e municipios (em 2006 ha 3.165 SQs
+    para 19.303 candidaturas), entao (ANO, SQ) sozinho junta pessoas diferentes. Dentro do
+    escopo ele e unico: Presidente = "BR", cargos municipais = codigo do municipio (SG_UE, igual
+    a CD_MUNICIPIO), demais = UF. Sem DS_CARGO no frame devolve "" (sem desambiguacao).
+    """
+    if "DS_CARGO" not in df.columns:
+        return pd.Series("", index=df.index, dtype="string")
+    scope_kind = df["DS_CARGO"].map(_cargo_scope_value)
+    uf = (
+        df["SG_UF"].astype("string").str.strip().str.upper().fillna("")
+        if "SG_UF" in df.columns
+        else pd.Series("", index=df.index, dtype="string")
+    )
+    ue_col = next((c for c in ("SG_UE", "CD_MUNICIPIO") if c in df.columns), None)
+    ue = _normalize_ue(df[ue_col]) if ue_col else pd.Series("", index=df.index, dtype="string")
+    return pd.Series(
+        np.select(
+            [scope_kind.eq("nacional"), scope_kind.eq("municipio")],
+            ["BR", "M" + ue],
+            default="U" + uf,
+        ),
+        index=df.index,
+        dtype="string",
+    )
+
+
 def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame:
     if not paths:
         return pd.DataFrame()
@@ -385,6 +431,7 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
                 "NR_CANDIDATO",
                 "NR_CPF_CANDIDATO",
                 "SG_UF",
+                "SG_UE",
                 "DS_CARGO",
                 "DS_GENERO",
                 "DS_GRAU_INSTRUCAO",
@@ -402,6 +449,7 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
             continue
 
         prepared = df[keep].copy()
+        prepared = prepared.assign(_SCOPE=_scope_key(prepared))
         if "NR_CPF_CANDIDATO" in prepared.columns:
             prepared = prepared.assign(
                 NR_CPF_CANDIDATO=_normalize_cpf_series(prepared["NR_CPF_CANDIDATO"])
@@ -425,8 +473,20 @@ def _prepare_consulta(paths: list[str], sep: str, encoding: str) -> pd.DataFrame
         return pd.DataFrame()
 
     consulta = pd.concat(frames, ignore_index=True)
-    primary_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in consulta.columns]
-    if len(primary_keys) == 2:
+    if "_SCOPE" in consulta.columns:
+        consulta = consulta.assign(_SCOPE=consulta["_SCOPE"].fillna("").astype("string"))
+        # Arquivos sem cargo/UF (ex.: consulta complementar) ficam com escopo vazio. Se o SQ so
+        # existe em um escopo nos demais arquivos, a linha entra nele; se for ambiguo, continua vazia.
+        known = consulta[consulta["_SCOPE"].ne("")]
+        per_sq = known.groupby(["ANO_ELEICAO", "SQ_CANDIDATO"])["_SCOPE"].agg(["nunique", "first"])
+        single = per_sq.loc[per_sq["nunique"].eq(1), "first"]
+        blank = consulta["_SCOPE"].eq("")
+        if blank.any() and not single.empty:
+            keys = pd.MultiIndex.from_frame(consulta.loc[blank, ["ANO_ELEICAO", "SQ_CANDIDATO"]])
+            filled = pd.Series(single.reindex(keys).to_numpy(), index=consulta.index[blank])
+            consulta.loc[blank, "_SCOPE"] = filled.fillna("").astype("string")
+    primary_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO", "_SCOPE"] if c in consulta.columns]
+    if len(primary_keys) >= 2:
         value_cols = [c for c in consulta.columns if c not in primary_keys]
         consulta = (
             consulta.groupby(primary_keys, dropna=False, as_index=False)[value_cols]
@@ -473,6 +533,9 @@ def _prepare_historico(paths: list[str], sep: str, encoding: str) -> pd.DataFram
                     "SQ_CANDIDATO": pd.to_numeric(
                         df["SQ_CANDIDATO"], errors="coerce"
                     ).astype("Int64"),
+                    # Escopo da candidatura antiga (cargo/UF/municipio): sem ele, SQs repetidos
+                    # em 2006/2008 ganhavam todos o id oficial de uma unica pessoa.
+                    "_SCOPE": _scope_key(df),
                     "HISTORICO_CANDIDATURA_ID": history_id,
                 }
             )
@@ -482,6 +545,9 @@ def _prepare_historico(paths: list[str], sep: str, encoding: str) -> pd.DataFram
                 {
                     "ANO_ELEICAO": current_year,
                     "SQ_CANDIDATO": current_sq,
+                    # A candidatura atual nao traz cargo no arquivo: escopo vazio = coringa
+                    # (o SQ da eleicao atual e unico).
+                    "_SCOPE": pd.Series("", index=df.index, dtype="string"),
                     "HISTORICO_CANDIDATURA_ID": history_id,
                 }
             )
@@ -489,25 +555,18 @@ def _prepare_historico(paths: list[str], sep: str, encoding: str) -> pd.DataFram
 
     if not frames:
         return pd.DataFrame(
-            columns=["ANO_ELEICAO", "SQ_CANDIDATO", "HISTORICO_CANDIDATURA_ID"]
+            columns=["ANO_ELEICAO", "SQ_CANDIDATO", "_SCOPE", "HISTORICO_CANDIDATURA_ID"]
         )
 
     result = pd.concat(frames, ignore_index=True).dropna(
         subset=["ANO_ELEICAO", "SQ_CANDIDATO"]
     )
     result = result[result["SQ_CANDIDATO"].notna()]
+    result = result.assign(_SCOPE=result["_SCOPE"].fillna("").astype("string"))
     return result.drop_duplicates(
-        subset=["ANO_ELEICAO", "SQ_CANDIDATO"], keep="last"
+        subset=["ANO_ELEICAO", "SQ_CANDIDATO", "_SCOPE"], keep="last"
     )
 
-
-def _cargo_scope_value(value: object) -> str:
-    cargo = "" if value is None or pd.isna(value) else str(value).strip().upper()
-    if cargo in {"PRESIDENTE", "VICE-PRESIDENTE"}:
-        return "nacional"
-    if cargo in {"PREFEITO", "VICE-PREFEITO", "VEREADOR"}:
-        return "municipio"
-    return "uf"
 
 
 def _prepare_vagas(paths: list[str], sep: str, encoding: str) -> pd.DataFrame:
@@ -600,6 +659,14 @@ def _normalize_votacao_file(
 ) -> pd.DataFrame:
     historico_df = historico_df if historico_df is not None else pd.DataFrame()
     vagas_df = vagas_df if vagas_df is not None else pd.DataFrame()
+    # SQs que aparecem em um unico escopo no ano: o SQ sozinho identifica a pessoa.
+    consulta_sq_unique = pd.DataFrame()
+    if (
+        not consulta_df.empty
+        and {"ANO_ELEICAO", "SQ_CANDIDATO", "_SCOPE"}.issubset(consulta_df.columns)
+    ):
+        scopes_per_sq = consulta_df.groupby(["ANO_ELEICAO", "SQ_CANDIDATO"])["_SCOPE"].transform("nunique")
+        consulta_sq_unique = consulta_df[scopes_per_sq.eq(1)].drop(columns=["_SCOPE"])
 
     def _normalize_votacao_chunk(df: pd.DataFrame) -> pd.DataFrame:
         df = _clean_columns(df).copy()
@@ -631,6 +698,7 @@ def _normalize_votacao_file(
             else:
                 df.loc[:, "NM_UE"] = municipio
 
+        scope = _scope_key(df) if "SQ_CANDIDATO" in df.columns else None
         if merge_consulta and not consulta_df.empty:
             join_keys = [c for c in ["ANO_ELEICAO", "SQ_CANDIDATO"] if c in df.columns and c in consulta_df.columns]
             if not join_keys:
@@ -653,12 +721,43 @@ def _normalize_votacao_file(
                     if c in consulta_df.columns
                 ]
                 if profile_cols:
-                    df = df.merge(
-                        consulta_df[join_keys + profile_cols],
-                        on=join_keys,
-                        how="left",
-                        suffixes=("", "_CONS"),
-                    ).copy()
+                    scoped = (
+                        scope is not None
+                        and "_SCOPE" in consulta_df.columns
+                        and join_keys == ["ANO_ELEICAO", "SQ_CANDIDATO"]
+                    )
+                    if scoped:
+                        df = df.assign(_SCOPE=scope)
+                        keys = [*join_keys, "_SCOPE"]
+                        merged = df.merge(
+                            consulta_df[keys + profile_cols],
+                            on=keys,
+                            how="left",
+                            suffixes=("", "_CONS"),
+                        ).copy()
+                        # Linhas que o escopo nao casou (SG_UE/UF divergente entre arquivos): usa o
+                        # SQ sozinho, mas so quando esse SQ nao e ambiguo no ano.
+                        unmatched = merged[[f"{c}_CONS" if c in df.columns else c for c in profile_cols]].isna().all(axis=1)
+                        if unmatched.any() and not consulta_sq_unique.empty:
+                            fallback = merged.loc[unmatched, join_keys].merge(
+                                consulta_sq_unique[join_keys + profile_cols],
+                                on=join_keys,
+                                how="left",
+                                suffixes=("", "_FB"),
+                            )
+                            fallback.index = merged.index[unmatched]
+                            for col in profile_cols:
+                                target = f"{col}_CONS" if col in df.columns else col
+                                source = f"{col}_FB" if f"{col}_FB" in fallback.columns else col
+                                merged.loc[unmatched, target] = fallback[source]
+                        df = merged.drop(columns=["_SCOPE"])
+                    else:
+                        df = df.merge(
+                            consulta_df[join_keys + profile_cols],
+                            on=join_keys,
+                            how="left",
+                            suffixes=("", "_CONS"),
+                        ).copy()
                     for col in profile_cols:
                         alt = f"{col}_CONS"
                         if alt in df.columns:
@@ -689,12 +788,44 @@ def _normalize_votacao_file(
             and "ANO_ELEICAO" in df.columns
             and "SQ_CANDIDATO" in df.columns
         ):
-            df = df.merge(
-                historico_df,
-                on=["ANO_ELEICAO", "SQ_CANDIDATO"],
-                how="left",
-                suffixes=("", "_HIST"),
-            )
+            if "_SCOPE" in historico_df.columns and scope is not None:
+                df = df.assign(_SCOPE=scope)
+                scoped_hist = historico_df[historico_df["_SCOPE"].ne("")]
+                wildcard_hist = historico_df[historico_df["_SCOPE"].eq("")]
+                keys = ["ANO_ELEICAO", "SQ_CANDIDATO"]
+                by_scope = df.merge(
+                    scoped_hist[[*keys, "_SCOPE", "HISTORICO_CANDIDATURA_ID"]],
+                    on=[*keys, "_SCOPE"],
+                    how="left",
+                    suffixes=("", "_HIST"),
+                )
+                by_any = df[keys].merge(
+                    wildcard_hist[[*keys, "HISTORICO_CANDIDATURA_ID"]].rename(
+                        columns={"HISTORICO_CANDIDATURA_ID": "_HIST_ANY"}
+                    ),
+                    on=keys,
+                    how="left",
+                )
+                hist_col = (
+                    "HISTORICO_CANDIDATURA_ID_HIST"
+                    if "HISTORICO_CANDIDATURA_ID_HIST" in by_scope.columns
+                    else "HISTORICO_CANDIDATURA_ID"
+                )
+                by_scope = by_scope.assign(
+                    **{"HISTORICO_CANDIDATURA_ID_HIST": by_scope[hist_col].where(
+                        by_scope[hist_col].notna(), by_any["_HIST_ANY"].to_numpy()
+                    )}
+                )
+                if hist_col == "HISTORICO_CANDIDATURA_ID":
+                    by_scope = by_scope.drop(columns=["HISTORICO_CANDIDATURA_ID"])
+                df = by_scope.drop(columns=["_SCOPE"])
+            else:
+                df = df.merge(
+                    historico_df,
+                    on=["ANO_ELEICAO", "SQ_CANDIDATO"],
+                    how="left",
+                    suffixes=("", "_HIST"),
+                )
             if "HISTORICO_CANDIDATURA_ID_HIST" in df.columns:
                 if "HISTORICO_CANDIDATURA_ID" in df.columns:
                     df.loc[:, "HISTORICO_CANDIDATURA_ID"] = df[

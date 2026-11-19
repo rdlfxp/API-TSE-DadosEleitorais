@@ -113,6 +113,7 @@ EDGE_CACHE_365_DAYS_SECONDS = 60 * 60 * 24 * 365
 _CLOSED = settings.analytics_closed_cache_ttl_seconds
 MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
     "/v1/analytics/filtros": 3600,
+    "/v1/analytics/municipios": _CLOSED,
     "/v1/analytics/overview": _CLOSED,
     "/v1/analytics/top-candidatos": _CLOSED,
     "/v1/analytics/candidatos/search": 43200,
@@ -134,6 +135,7 @@ MEMORY_CACHE_TTL_BY_ENDPOINT: dict[str, int] = {
 EDGE_CACHE_TTL_BY_PATH: dict[str, int] = {
     "/v1/resultados": 10,
     "/v1/analytics/filtros": EDGE_CACHE_180_DAYS_SECONDS,
+    "/v1/analytics/municipios": 60 * 60 * 24,
     "/v1/analytics/overview": EDGE_CACHE_180_DAYS_SECONDS,
     "/v1/analytics/top-candidatos": EDGE_CACHE_180_DAYS_SECONDS,
     "/v1/analytics/candidatos/search": EDGE_CACHE_180_DAYS_SECONDS,
