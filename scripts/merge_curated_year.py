@@ -10,8 +10,10 @@ from pathlib import Path
 import duckdb
 
 try:
+    from scripts.link_person_identities import link_in_place
     from scripts.normalize import CANONICAL_COLUMNS, _prepare_historico
 except ModuleNotFoundError:  # Execucao direta: python scripts/merge_curated_year.py
+    from link_person_identities import link_in_place
     from normalize import CANONICAL_COLUMNS, _prepare_historico
 
 
@@ -135,7 +137,32 @@ def _cast_expr(alias: str, col: str, available: set[str]) -> str:
     return f"TRY_CAST({alias}.{col} AS BIGINT) AS {col}"
 
 
-def _base_select(base_columns: set[str], target_year: int) -> str:
+def _scope_sql(alias: str, available: set[str]) -> str:
+    """Mesmo escopo de normalize._scope_key, calculado sobre as colunas do parquet publicado."""
+    cargo = (
+        f"UPPER(TRIM(CAST({alias}.DS_CARGO AS VARCHAR)))" if "DS_CARGO" in available else "''"
+    )
+    uf = f"UPPER(TRIM(CAST({alias}.SG_UF AS VARCHAR)))" if "SG_UF" in available else "''"
+    ue = (
+        f"CAST(TRY_CAST({alias}.CD_MUNICIPIO AS BIGINT) AS VARCHAR)"
+        if "CD_MUNICIPIO" in available
+        else "NULL"
+    )
+    return (
+        f"CASE WHEN {cargo} IN ('PRESIDENTE', 'VICE-PRESIDENTE') THEN 'BR' "
+        f"WHEN {cargo} IN ('PREFEITO', 'VICE-PREFEITO', 'VEREADOR') THEN 'M' || COALESCE({ue}, '') "
+        f"ELSE 'U' || COALESCE({uf}, '') END"
+    )
+
+
+def _base_select(base_columns: set[str], target_year: int, rebuild_history: bool = False) -> str:
+    """Linhas da base (menos o ano alvo) com o id de historico remapeado.
+
+    `rebuild_history`: ha arquivo de historico oficial nesta execucao; os ids `tse-history:`
+    ja gravados na base nao sao confiaveis (versoes antigas ligavam por (ano, SQ), que se
+    repete entre UFs em 2006/2008) e sao descartados em favor do mapa novo, que usa o escopo.
+    """
+    scope = _scope_sql("b", base_columns)
     expressions: list[str] = []
     for col in CANONICAL_COLUMNS:
         if col == "HISTORICO_CANDIDATURA_ID":
@@ -144,32 +171,55 @@ def _base_select(base_columns: set[str], target_year: int) -> str:
                 if col in base_columns
                 else "CAST(NULL AS VARCHAR)"
             )
+            if rebuild_history and col in base_columns:
+                existing = f"CASE WHEN {existing} LIKE 'tse-history:%' THEN NULL ELSE {existing} END"
+            # O id sintetico vale por (ano, SQ); onde o SQ se repete entre escopos, inclui o escopo.
             fallback = (
                 "CASE WHEN b.ANO_ELEICAO IS NOT NULL AND b.SQ_CANDIDATO IS NOT NULL THEN "
                 "'tse-candidate:' || CAST(TRY_CAST(b.ANO_ELEICAO AS BIGINT) AS VARCHAR) || ':' || "
-                "CAST(TRY_CAST(b.SQ_CANDIDATO AS BIGINT) AS VARCHAR) END"
+                "CAST(TRY_CAST(b.SQ_CANDIDATO AS BIGINT) AS VARCHAR) || "
+                "CASE WHEN amb.SQ_CANDIDATO IS NOT NULL THEN ':' || " + scope + " ELSE '' END END"
             )
             expressions.append(
-                f"COALESCE(h.HISTORICO_CANDIDATURA_ID, {existing}, {fallback}) AS {col}"
+                f"COALESCE(hs.HISTORICO_CANDIDATURA_ID, ha.HISTORICO_CANDIDATURA_ID, {existing}, {fallback}) AS {col}"
             )
         else:
             expressions.append(_cast_expr("b", col, base_columns))
     return (
         "SELECT "
         + ", ".join(expressions)
-        + " FROM base_rows b LEFT JOIN history_map h "
-        + "ON TRY_CAST(b.ANO_ELEICAO AS BIGINT) = h.ANO_ELEICAO "
-        + "AND TRY_CAST(b.SQ_CANDIDATO AS BIGINT) = h.SQ_CANDIDATO "
+        + " FROM base_rows b "
+        + "LEFT JOIN history_map hs ON TRY_CAST(b.ANO_ELEICAO AS BIGINT) = hs.ANO_ELEICAO "
+        + f"AND TRY_CAST(b.SQ_CANDIDATO AS BIGINT) = hs.SQ_CANDIDATO AND hs.SCOPE = {scope} "
+        + "LEFT JOIN history_map ha ON TRY_CAST(b.ANO_ELEICAO AS BIGINT) = ha.ANO_ELEICAO "
+        + "AND TRY_CAST(b.SQ_CANDIDATO AS BIGINT) = ha.SQ_CANDIDATO AND ha.SCOPE = '' "
+        + "LEFT JOIN ambiguous_sq amb ON TRY_CAST(b.ANO_ELEICAO AS BIGINT) = amb.ANO_ELEICAO "
+        + "AND TRY_CAST(b.SQ_CANDIDATO AS BIGINT) = amb.SQ_CANDIDATO "
         + f"WHERE TRY_CAST(b.ANO_ELEICAO AS BIGINT) <> {int(target_year)}"
     )
 
 
 def _year_select(year_columns: set[str], target_year: int, compact: bool = True) -> str:
-    expressions = [_cast_expr("y", col, year_columns) for col in CANONICAL_COLUMNS]
+    scope = _scope_sql("y", year_columns)
+    expressions: list[str] = []
+    for col in CANONICAL_COLUMNS:
+        if col == "HISTORICO_CANDIDATURA_ID":
+            # O ano alvo tambem recebe o id oficial do arquivo de historico (que fica em
+            # raw/<ano atual>, nao em raw/<ano alvo>), pelo mesmo mapa com escopo da base.
+            existing = _cast_expr("y", col, year_columns).rsplit(" AS ", 1)[0]
+            expressions.append(
+                f"COALESCE(hs.HISTORICO_CANDIDATURA_ID, ha.HISTORICO_CANDIDATURA_ID, {existing}) AS {col}"
+            )
+        else:
+            expressions.append(_cast_expr("y", col, year_columns))
     typed = (
         "SELECT "
         + ", ".join(expressions)
         + " FROM year_rows y "
+        + "LEFT JOIN history_map hs ON TRY_CAST(y.ANO_ELEICAO AS BIGINT) = hs.ANO_ELEICAO "
+        + f"AND TRY_CAST(y.SQ_CANDIDATO AS BIGINT) = hs.SQ_CANDIDATO AND hs.SCOPE = {scope} "
+        + "LEFT JOIN history_map ha ON TRY_CAST(y.ANO_ELEICAO AS BIGINT) = ha.ANO_ELEICAO "
+        + "AND TRY_CAST(y.SQ_CANDIDATO AS BIGINT) = ha.SQ_CANDIDATO AND ha.SCOPE = '' "
         + f"WHERE TRY_CAST(y.ANO_ELEICAO AS BIGINT) = {int(target_year)}"
     )
     if not compact:
@@ -323,8 +373,9 @@ def main() -> None:
             "CREATE TEMP TABLE history_map AS "
             "SELECT TRY_CAST(ANO_ELEICAO AS BIGINT) AS ANO_ELEICAO, "
             "TRY_CAST(SQ_CANDIDATO AS BIGINT) AS SQ_CANDIDATO, "
+            "COALESCE(CAST(_SCOPE AS VARCHAR), '') AS SCOPE, "
             "MAX(CAST(HISTORICO_CANDIDATURA_ID AS VARCHAR)) AS HISTORICO_CANDIDATURA_ID "
-            "FROM history_map_source GROUP BY 1, 2"
+            "FROM history_map_source GROUP BY 1, 2, 3"
         )
         conn.execute(
             f"CREATE VIEW base_rows AS SELECT * FROM read_parquet('{_quoted_path(base)}')"
@@ -332,14 +383,27 @@ def main() -> None:
         conn.execute(
             f"CREATE VIEW year_rows AS SELECT * FROM read_parquet('{_quoted_path(year_file)}')"
         )
+        conn.execute(
+            "CREATE TEMP TABLE ambiguous_sq AS "
+            "SELECT ANO_ELEICAO, SQ_CANDIDATO FROM ("
+            "SELECT TRY_CAST(b.ANO_ELEICAO AS BIGINT) AS ANO_ELEICAO, "
+            "TRY_CAST(b.SQ_CANDIDATO AS BIGINT) AS SQ_CANDIDATO, "
+            f"{_scope_sql('b', base_columns)} AS SCOPE FROM base_rows b GROUP BY ALL) "
+            "GROUP BY ANO_ELEICAO, SQ_CANDIDATO HAVING COUNT(*) > 1"
+        )
         year_query = _year_select(year_columns, args.target_year, compact=not args.no_compact)
-        query = f"{_base_select(base_columns, args.target_year)} UNION ALL {year_query}"
+        rebuild_history = len(history) > 0
+        query = f"{_base_select(base_columns, args.target_year, rebuild_history)} UNION ALL {year_query}"
         if output.exists():
             output.unlink()
         conn.execute(
             f"COPY ({query}) TO '{_quoted_path(output)}' "
             f"(FORMAT PARQUET, COMPRESSION '{args.compression.replace("'", "''")}')"
         )
+        # Troca ids sinteticos (tse-candidate:) pelo id oficial da mesma pessoa, para o
+        # person_id nao quebrar entre eleicoes (ex.: Lula em 2002).
+        link_stats = link_in_place(output, args.compression)
+        print(f"[merge-curated-year] identidades ligadas: {link_stats}")
         _write_candidate_history_index(conn, output, history_output, args.compression)
         report = _quality_report(conn, output)
     finally:
