@@ -70,7 +70,8 @@ def test_duckdb_from_file_supports_file_backed_database(tmp_path, sample_df: pd.
     )
 
     try:
-        assert db_path.exists()
+        # O caminho efetivo ganha um sufixo do processo (ver teste abaixo), entao confere o real.
+        assert Path(service._database_path).exists()
         assert service.filter_options()["anos"] == [2022]
     finally:
         service.close()

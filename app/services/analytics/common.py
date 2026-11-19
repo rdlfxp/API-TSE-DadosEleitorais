@@ -9,6 +9,23 @@ ELEITO_LABELS = {
     "MÉDIA",
 }
 
+# Em 2002, 2006 e 2010 o TSE rotula o eleito por media apenas como "MÉDIA" (435 + 78 = 513 deputados
+# federais em 2002); a partir de 2014 vira "ELEITO POR MÉDIA". Sem tratar o rotulo antigo, a bancada
+# aparece incompleta (ex.: 446 de 513 em 2010).
+ELECTED_EXTRA_STATUSES = ("MÉDIA", "MEDIA")
+
+
+def is_elected_status(value: object) -> bool:
+    text = str(value or "").strip().upper()
+    return text.startswith("ELEITO") or text in ELECTED_EXTRA_STATUSES
+
+
+def elected_sql_predicate(status_column: str) -> str:
+    """Predicado SQL: a situacao total do turno indica candidato eleito."""
+    norm = f"UPPER(TRIM(CAST({status_column} AS VARCHAR)))"
+    extras = ", ".join(f"'{label}'" for label in ELECTED_EXTRA_STATUSES)
+    return f"({norm} LIKE 'ELEITO%' OR {norm} IN ({extras}))"
+
 MUNICIPAL_CARGOS = {
     "PREFEITO",
     "VICE-PREFEITO",
@@ -18,6 +35,17 @@ MUNICIPAL_CARGOS = {
 NATIONAL_CARGOS = {
     "PRESIDENTE",
     "VICE-PRESIDENTE",
+}
+
+# Cargos de vaga unica: a disputa tem exatamente 1 cadeira, independentemente de quem foi eleito
+# (cobre anos sem consulta_vagas e eleicoes anuladas/pendentes, sem eleito registrado).
+SINGLE_SEAT_CARGOS = {
+    "PRESIDENTE",
+    "VICE-PRESIDENTE",
+    "GOVERNADOR",
+    "VICE-GOVERNADOR",
+    "PREFEITO",
+    "VICE-PREFEITO",
 }
 
 VALID_UF_CODES = {

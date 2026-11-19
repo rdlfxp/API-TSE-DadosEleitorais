@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.services.analytics.common import (
+    ELECTED_EXTRA_STATUSES,
     MUNICIPAL_CARGOS,
     MUNICIPIO_ALIAS_MAP,
     NATIONAL_CARGOS,
@@ -111,7 +112,49 @@ class AnalyticsSupportMixin:
         return cargo_norm == "PRESIDENTE" and self._normalize_uf_filter(uf) is None and not municipio_norm
 
     def _is_elected_series(self, series: pd.Series) -> pd.Series:
-        return series.fillna("").astype(str).str.strip().str.upper().str.startswith("ELEITO")
+        text = series.fillna("").astype(str).str.strip().str.upper()
+        return text.str.startswith("ELEITO") | text.isin(ELECTED_EXTRA_STATUSES)
+
+    def _candidate_unit_keys(self, df: pd.DataFrame) -> pd.Series:
+        """Uma chave por candidatura (pessoa + ano + cargo + escopo), ignorando zona e turno.
+
+        O dataset tem 1 linha por zona/municipio e por turno; contar linhas conta a mesma pessoa
+        dezenas de vezes. O escopo (UF; UF e municipio nos cargos municipais; nenhum no
+        Presidente) tambem evita fundir pessoas com SQ_CANDIDATO repetido (2002 a 2008).
+        """
+        col_id = self._pick_col(["SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO"])
+        if not col_id or df.empty:
+            return pd.Series([""] * len(df), index=df.index, dtype="string")
+
+        def text(names: list[str]) -> pd.Series:
+            col = self._pick_col(names)
+            if col and col in df.columns:
+                return df[col].fillna("").astype(str).str.strip()
+            return pd.Series([""] * len(df), index=df.index)
+
+        cargo = text(["DS_CARGO", "DS_CARGO_D"])
+        scope = cargo.map(self._cargo_scope)
+        uf = text(["SG_UF"]).str.upper().where(scope != "nacional", "")
+        ue = text(["NM_UE", "NM_MUNICIPIO"]).where(scope == "municipio", "")
+        keys = (
+            text([col_id]) + "|" + text(["ANO_ELEICAO", "NR_ANO_ELEICAO"]) + "|" + cargo.str.upper()
+            + "|" + uf + "|" + ue
+        )
+        return keys.where(text([col_id]) != "", pd.NA).astype("string")
+
+    def _overview_candidate_counts(self, df: pd.DataFrame, *, exclude_national_elected: bool) -> tuple[int | None, int | None]:
+        """(total_candidatos, total_eleitos) em pessoas distintas, nao em linhas por zona."""
+        keys = self._candidate_unit_keys(df)
+        total_candidatos = int(keys.nunique()) if not keys.empty and keys.notna().any() else None
+        col_situacao = self._pick_col(["DS_SIT_TOT_TURNO"])
+        if not col_situacao or col_situacao not in df.columns:
+            return total_candidatos, None
+        elected = self._is_elected_series(df[col_situacao])
+        if exclude_national_elected:
+            col_cargo = self._pick_col(["DS_CARGO", "DS_CARGO_D"])
+            if col_cargo and col_cargo in df.columns:
+                elected = elected & (df[col_cargo].fillna("").astype(str).map(self._cargo_scope) != "nacional")
+        return total_candidatos, int(keys[elected].nunique())
 
     def _is_elected(self, series: pd.Series) -> pd.Series:
         return self._is_elected_series(series)
