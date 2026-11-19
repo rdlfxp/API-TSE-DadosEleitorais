@@ -30,8 +30,13 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     # O indice de historico e regenerado por merge_curated_year.py a partir do
-    # Parquet mesclado; por isso sua ausencia no R2 nao bloqueia o refresh.
-    for filename, required in (("analytics.parquet", True), ("candidate_history.parquet", False)):
+    # Parquet mesclado; por isso sua ausencia no R2 nao bloqueia o refresh. O perfil do eleitorado
+    # (scripts/build_electorate_profile.py) nao muda no refresh incremental: baixa para ser republicado.
+    for filename, required in (
+        ("analytics.parquet", True),
+        ("candidate_history.parquet", False),
+        ("electorate_profile.parquet", False),
+    ):
         key = f"{args.prefix.rstrip('/')}/{filename}"
         destination = output_dir / filename
         print(f"[r2-download] {key} -> {destination}", flush=True)

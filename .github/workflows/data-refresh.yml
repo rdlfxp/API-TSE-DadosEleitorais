@@ -212,6 +212,7 @@ jobs:
             data/curated/analytics.csv
             data/curated/analytics.parquet
             data/curated/candidate_history.parquet
+            data/curated/electorate_profile.parquet
             data/curated/quality_report.json
             data/curated/manifest.json
 
