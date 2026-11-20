@@ -287,7 +287,8 @@ def test_merge_gives_target_year_rows_their_official_id_by_scope(tmp_path, monke
     finally:
         conn.close()
     assert rows["ZENI"] == "tse-history:2026:130002540613"
-    assert rows["JOSE"] is None  # sem historico oficial e sem colisao conhecida na base
+    # Sem historico oficial: id sintetico com o escopo, porque o SQ se repete entre UFs no proprio ano.
+    assert rows["JOSE"] == "tse-candidate:2008:51816:M67172"
 
 
 def test_summary_matches_sq_before_candidate_number(tmp_path):

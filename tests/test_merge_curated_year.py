@@ -240,3 +240,51 @@ def test_merge_no_compact_keeps_zone_rows(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert count == (2,)
+
+
+def test_merge_reads_br_dates_computes_age_and_keeps_history_id(tmp_path, monkeypatch):
+    base = tmp_path / "base.parquet"
+    year_file = tmp_path / "year.parquet"
+    output = tmp_path / "analytics.parquet"
+    _write_parquet(pd.DataFrame([{"ANO_ELEICAO": 2020, "NR_TURNO": 1, "SG_UF": "SP", "DS_CARGO": "Vereador",
+                                  "SQ_CANDIDATO": 1, "QT_VOTOS_NOMINAIS_VALIDOS": 10}]), base)
+
+    def row(sq: int, nasc: str | None, **extra) -> dict:
+        return {"ANO_ELEICAO": 2022, "NR_TURNO": 1, "SG_UF": "SP", "DS_CARGO": "Deputado Federal",
+                "SQ_CANDIDATO": sq, "DT_ELEICAO": "02/10/2022", "DT_NASCIMENTO": nasc,
+                "FAIXA_ETARIA": "N/A", "IDADE": None, "QT_VOTOS_NOMINAIS_VALIDOS": 5, **extra}
+
+    _write_parquet(
+        pd.DataFrame(
+            [
+                row(1, "29/07/1965"),
+                row(2, "17/10/2000"),
+                row(3, "sem data"),
+                row(4, None, IDADE=75.0),
+            ]
+        ),
+        year_file,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["merge_curated_year.py", "--base", str(base), "--year-file", str(year_file), "--target-year", "2022",
+         "--output", str(output), "--report", str(tmp_path / "q.json"), "--manifest", str(tmp_path / "m.json")],
+    )
+    merge_curated_year.main()
+
+    conn = duckdb.connect()
+    try:
+        rows = conn.execute(
+            "SELECT SQ_CANDIDATO, CAST(DT_ELEICAO AS VARCHAR), IDADE, FAIXA_ETARIA, HISTORICO_CANDIDATURA_ID "
+            "FROM read_parquet(?) WHERE ANO_ELEICAO = 2022 ORDER BY SQ_CANDIDATO",
+            [str(output)],
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [
+        (1, "2022-10-02", 57.0, "50-59", "tse-candidate:2022:1"),
+        (2, "2022-10-02", 22.0, "18-29", "tse-candidate:2022:2"),
+        (3, "2022-10-02", None, "N/A", "tse-candidate:2022:3"),
+        (4, "2022-10-02", 75.0, "70+", "tse-candidate:2022:4"),
+    ]

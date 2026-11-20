@@ -141,6 +141,75 @@ Vale para `/overview`, `/ranking`, `/serie-temporal` e `/mapa-uf` (métricas `el
 | item de zona | `zone_id?`, `zone_name?`, `municipio?` | agora sempre preenchidos |
 | `CandidateSummaryResponse` | `foto_url: String?` | já existia; agora também 2006–2022 |
 
-## Pendente / fora desta lista
-- Publicação da base (ver README, "Reconstruir 2002, 2006 e 2008") e validação contra o TSE.
-- Itens ainda abertos no doc do app: #2, #3, #6–#11, #20 (e #25/#26).
+## Pendências futuras (registradas em 2026-11-20)
+
+### A. Reconstrução 2002/2006/2008 corrigida e publicada em 2026-11-20 17:51Z (`rb4`)
+**Estado atual:** `tse-curated/latest/analytics.parquet` (119.917.188 bytes) e `candidate_history.parquet`
+(105.035.666 bytes) são a reconstrução corrigida; `candidate_photos.parquet` e `electorate_profile.parquet` já estavam
+publicados. A API só lê o R2 na inicialização: **vale depois de reiniciar o `api-tse`**.
+Histórico: a primeira reconstrução (`rb3`, 17:11Z) trouxe colunas vazias e foi revertida; a causa estava em
+`scripts/merge_curated_year.py` (correção **não commitada**, com teste novo em `tests/test_merge_curated_year.py` e
+ajuste em `tests/test_sq_collisions.py`):
+- `DT_ELEICAO` vinha em dd/mm/aaaa e o `TRY_CAST ... AS DATE` a zerava (a base de 2026 já tem esse defeito hoje).
+- `IDADE` já vinha vazia nos arquivos por ano de 2018–2024; agora é calculada de `DT_NASCIMENTO` e `DT_ELEICAO` (mesma
+  regra de `normalize._compute_age`) e `FAIXA_ETARIA` é refeita. Conferido: idade igual à da base antiga em 100% dos
+  candidatos que tinham valor (11.794 em 2022; 428.441 em 2024).
+- `HISTORICO_CANDIDATURA_ID` do ano alvo não recebia o id sintético de reserva; o último ano da cadeia (2024) ficava com
+  92% nulo e fora da ligação de identidades. Agora recebe, e a detecção de SQ repetido inclui as linhas do ano alvo.
+Validação (base anterior x nova): mesmas colunas e tipos; nenhuma coluna piorou ≥ 2 pontos de nulos em nenhum ano
+(`DS_COR_RACA` 2002–2008 nulo no lugar de `#NE` é equivalente: a API trata os dois como "não informado"). Votos de 2002
+Presidente 1º turno = 84.952.512 e Lula 2002/2006 batem com o TSE; `vote-history` do Lula = 2026, 2022, 2006, 2002 (`BR`).
+Mudanças esperadas: 2002 e 2006 sem inflação (1,05 bi → 611 mi; 954 mi → 574 mi), 2008 de 424 mi para 212 mi e
+dobra de linhas (detalhe por zona; 2020 também), 2018/2022 Deputado Distrital de ~70 mil para ~1,4 mi de votos (DF),
+CPF preenchido em 2002/2006/2008/2018/2020/2022, e CPFs com mais de um nome sobem de 0 para 24.492 (6.518 depois de tirar
+acento e espaço duplo; é grafia e nome que mudou entre eleições, mesmo CPF).
+Voltar atrás: a base anterior está em `scratchpad/rb4/base/`.
+Ainda aberto: `DT_ELEICAO` de 2026 segue nula na base (vem de antes); `scripts/upload_to_r2.py` envia como snapshot a
+última pasta de `data/releases/` (hoje o teste `20990102`), não a base publicada, e criou `snapshots/20990102` no R2;
+`age_stats` com `somente_eleitos` conta linhas, então em anos gerais as linhas do Presidente por município dominam a
+distribuição (ex.: 6.405 de ~7.000 em 60–69 anos em 2018), mesma família dos itens #15/#16.
+
+### A2. Anos 2000, 2004, 2010, 2012, 2014 e 2016 reconstruídos e publicados em 2026-11-20 18:26Z (`rb6`)
+A base publicada tinha esses seis anos com votos 2x (todos os cargos exceto Presidente em 2010 e 2014), o Deputado
+Distrital de 2010 ausente e CPF 100% nulo. Reconstruídos do bruto (`normalize.py` + `merge_curated_year.py` corrigido).
+**Estado atual:** `latest/analytics.parquet` = 149.621.451 bytes e `candidate_history.parquet` = 115.897.842 bytes
+(6.076.234 linhas). Vale depois de reiniciar o `api-tse`. A base de antes (rb4) está em `scratchpad/rb4/`.
+Validação: votos 2000 361,9 mi → 181,0 mi; 2004 410,2 → 205,1; 2010 1.120,8 → 662,3; 2012 450,1 → 225,0; 2014 1.014,3 →
+613,4; 2016 452,6 → 226,3. Razões entre cargos coerentes em todos os anos (Federal ÷ Presidente 0,85–0,93; Prefeito 1º
+turno 85,0 mi em 2000, 96,0 em 2004, 101,0 em 2008, 104,7 em 2012, 105,7 em 2016, 102,0 em 2020, 112,0 em 2024).
+Presidente de 2010 e 2014 bate com o TSE (Dilma 2010 = 47.651.434; válidos 2014 = 104.023.802). Eleitos iguais aos de
+antes, exceto Distrital 2010: 0 → 24. Nenhuma coluna ficou com mais nulos; demais anos idênticos.
+Detalhes que ficam: 2004 tem 10 pares de linhas com a mesma chave (o TSE grava `SQ_CANDIDATO = 1` como valor genérico em
+2004; os votos não se perdem); 124 linhas de 2000/2004 com CPF `00000000000` ou `99999999999` (o ligador de
+identidades recusa CPF de dígitos iguais); CPFs com mais de um nome (normalizado) = 50.253, quase todos grafia ou nome
+que mudou entre eleições. Efeito no app: totais de votos e votos por candidato desses anos caem à metade.
+
+### B. Fotos (`meucandidato-fotos`): baixar depois de validar o app
+Índice publicado (`candidate_photos.parquet`): 2004 = 1.501 (só AC) · 2006 = 18.977 · 2008 = 94.488 (9 UFs) ·
+2010 = 22.908 · 2012 = 23.440 (4 UFs) · 2014 = 26.195 · **2016 = 0** · 2018 = 29.119 · 2020 = 139.838 (9 UFs) ·
+2022 = 29.266. Completos: só as eleições gerais (2006, 2010, 2014, 2018, 2022). As municipais (2008, 2012, 2016,
+2020) estão incompletas, e é nelas que o app mais depende de foto.
+- Contagem real no bucket (2026-11-20): 2016, 2024 e 2026 = 0 objetos. Há objetos além do índice nas UFs que foram
+  interrompidas (2004: 3.644 contra 1.501 indexadas; 2008: 130.469 contra 94.488; 2012: 37.319 contra 23.440; 2020:
+  162.182 contra 139.838); as chaves são fixas, então a retomada só completa e sobrescreve.
+- Retomar (UFs com marcador `.uploaded` são puladas), sempre com `--bucket meucandidato-fotos --upload --upload-workers 2`:
+  `--years 2016`, `--years 2020`, `--years 2012` (sem TO) e `--years 2008`, depois `--years 2004`.
+  Em 2012 BA e 2008 MG a conexão com o R2 caiu (`EndpointConnectionError`); basta repetir.
+- Depois: `--index-only --upload --bucket meucandidato-fotos`, e republicar o índice com `scripts/upload_to_r2.py`.
+- 2024 e 2026: decisão de 2026-11-20 — também guardar no R2. O app tenta primeiro a fonte atual, depois o R2 e, por
+  fim, a foto mais recente da mesma pessoa ou o avatar do partido. Falta definir qual `foto_url` a API devolve
+  quando as duas existirem.
+- Sem foto no TSE: 2000 e 2002; TO 2012 (zip corrompido no TSE); alguns arquivos com nome corrompido (2020 BA e MG).
+- `--upload-workers` (em `scripts/build_candidate_photos.py`) ainda não foi commitado; `ensure_zip` não valida o zip.
+
+### C. Para ver o app funcionando
+Definir `PHOTOS_BASE_URL=https://fotos.safeartlabs.com` no EasyPanel e reiniciar o `api-tse` (a base corrigida do
+item A já está no R2). Depois: `/health`; busca `lula`; `vote-history` do Lula (esperado 2002, 2006, 2022, 2026, todos
+`BR`); `summary?year=2022` com `foto_url`; `electorate-profile` com `basis`; `overview?ano=2002&cargo=Presidente`; um
+painel de idade de 2022 e de 2024.
+
+### D. Itens do doc do app sem implementação no backend
+#2/#22 (detalhe municipal de Deputado, Senador e Governador em 2026), #6/#25 (locais de votação e rota da zona),
+#7/#8 (ao vivo: Presidente por UF/município e mapa por município), #10 (push da Live Activity), #11 (série da
+apuração), #20 (espectro por partido), #23 (agenda de eleições) e #26 (candidaturas de 2028).
+O #3 (Deputados do Amapá em 2026) depende do TSE publicar os dados.
