@@ -432,6 +432,7 @@ def test_r2_bootstrap_downloads_parquet_only(tmp_path, monkeypatch):
         "latest/analytics.parquet",
         "latest/candidate_history.parquet",
         "latest/electorate_profile.parquet",
+        "latest/candidate_photos.parquet",
     ]
 
 def test_lifespan_loads_from_r2_bootstrap_when_local_missing(tmp_path, monkeypatch):

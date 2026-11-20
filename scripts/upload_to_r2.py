@@ -14,6 +14,7 @@ DEFAULT_FILES = [
     "analytics.parquet",
     "candidate_history.parquet",
     "electorate_profile.parquet",
+    "candidate_photos.parquet",
     "quality_report.json",
     "manifest.json",
 ]
