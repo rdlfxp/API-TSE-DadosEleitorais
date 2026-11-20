@@ -114,6 +114,33 @@ def _schema_columns(conn: duckdb.DuckDBPyConnection, path: Path) -> set[str]:
     }
 
 
+def _date_value(alias: str, col: str, available: set[str]) -> str:
+    """DATE a partir de ISO ou de dd/mm/aaaa (formato dos CSV do TSE); o CAST direto zerava o segundo."""
+    if col not in available:
+        return "CAST(NULL AS DATE)"
+    text = f"CAST({alias}.{col} AS VARCHAR)"
+    return f"COALESCE(CAST(TRY_STRPTIME({text}, '%d/%m/%Y') AS DATE), TRY_CAST({text} AS DATE))"
+
+
+def _age_value(alias: str, available: set[str]) -> str:
+    """IDADE do arquivo, ou calculada de DT_NASCIMENTO e DT_ELEICAO (mesma regra de normalize._compute_age)."""
+    given = f"TRY_CAST({alias}.IDADE AS DOUBLE)" if "IDADE" in available else "CAST(NULL AS DOUBLE)"
+    nasc = _date_value(alias, "DT_NASCIMENTO", available)
+    eleicao = _date_value(alias, "DT_ELEICAO", available)
+    computed = f"ROUND(DATE_DIFF('day', {nasc}, {eleicao}) / 365.25)"
+    return (
+        f"CASE WHEN {given} BETWEEN 15 AND 120 THEN {given} "
+        f"WHEN {computed} BETWEEN 15 AND 120 THEN CAST({computed} AS DOUBLE) END"
+    )
+
+
+AGE_BAND_SQL = (
+    "CASE WHEN IDADE IS NULL THEN 'N/A' WHEN IDADE <= 29 THEN '18-29' WHEN IDADE <= 39 THEN '30-39' "
+    "WHEN IDADE <= 49 THEN '40-49' WHEN IDADE <= 59 THEN '50-59' WHEN IDADE <= 69 THEN '60-69' "
+    "ELSE '70+' END"
+)
+
+
 def _cast_expr(alias: str, col: str, available: set[str]) -> str:
     if col not in available:
         if col in TEXT_COLUMNS:
@@ -133,7 +160,7 @@ def _cast_expr(alias: str, col: str, available: set[str]) -> str:
     if col in FLOAT_COLUMNS:
         return f"TRY_CAST({alias}.{col} AS DOUBLE) AS {col}"
     if col in DATE_COLUMNS:
-        return f"TRY_CAST({alias}.{col} AS DATE) AS {col}"
+        return f"{_date_value(alias, col, available)} AS {col}"
     return f"TRY_CAST({alias}.{col} AS BIGINT) AS {col}"
 
 
@@ -207,9 +234,18 @@ def _year_select(year_columns: set[str], target_year: int, compact: bool = True)
             # O ano alvo tambem recebe o id oficial do arquivo de historico (que fica em
             # raw/<ano atual>, nao em raw/<ano alvo>), pelo mesmo mapa com escopo da base.
             existing = _cast_expr("y", col, year_columns).rsplit(" AS ", 1)[0]
-            expressions.append(
-                f"COALESCE(hs.HISTORICO_CANDIDATURA_ID, ha.HISTORICO_CANDIDATURA_ID, {existing}) AS {col}"
+            # Sem o id sintetico, o ultimo ano da cadeia (que nao passa mais por _base_select) ficava sem id.
+            fallback = (
+                "CASE WHEN y.ANO_ELEICAO IS NOT NULL AND y.SQ_CANDIDATO IS NOT NULL THEN "
+                "'tse-candidate:' || CAST(TRY_CAST(y.ANO_ELEICAO AS BIGINT) AS VARCHAR) || ':' || "
+                "CAST(TRY_CAST(y.SQ_CANDIDATO AS BIGINT) AS VARCHAR) || "
+                "CASE WHEN amb.SQ_CANDIDATO IS NOT NULL THEN ':' || " + scope + " ELSE '' END END"
             )
+            expressions.append(
+                f"COALESCE(hs.HISTORICO_CANDIDATURA_ID, ha.HISTORICO_CANDIDATURA_ID, {existing}, {fallback}) AS {col}"
+            )
+        elif col == "IDADE":
+            expressions.append(f"{_age_value('y', year_columns)} AS IDADE")
         else:
             expressions.append(_cast_expr("y", col, year_columns))
     typed = (
@@ -220,8 +256,11 @@ def _year_select(year_columns: set[str], target_year: int, compact: bool = True)
         + f"AND TRY_CAST(y.SQ_CANDIDATO AS BIGINT) = hs.SQ_CANDIDATO AND hs.SCOPE = {scope} "
         + "LEFT JOIN history_map ha ON TRY_CAST(y.ANO_ELEICAO AS BIGINT) = ha.ANO_ELEICAO "
         + "AND TRY_CAST(y.SQ_CANDIDATO AS BIGINT) = ha.SQ_CANDIDATO AND ha.SCOPE = '' "
+        + "LEFT JOIN ambiguous_sq amb ON TRY_CAST(y.ANO_ELEICAO AS BIGINT) = amb.ANO_ELEICAO "
+        + "AND TRY_CAST(y.SQ_CANDIDATO AS BIGINT) = amb.SQ_CANDIDATO "
         + f"WHERE TRY_CAST(y.ANO_ELEICAO AS BIGINT) = {int(target_year)}"
     )
+    typed = f"SELECT * REPLACE ({AGE_BAND_SQL} AS FAIXA_ETARIA) FROM ({typed})"
     if not compact:
         return typed
     return _compact_select(typed)
@@ -388,7 +427,10 @@ def main() -> None:
             "SELECT ANO_ELEICAO, SQ_CANDIDATO FROM ("
             "SELECT TRY_CAST(b.ANO_ELEICAO AS BIGINT) AS ANO_ELEICAO, "
             "TRY_CAST(b.SQ_CANDIDATO AS BIGINT) AS SQ_CANDIDATO, "
-            f"{_scope_sql('b', base_columns)} AS SCOPE FROM base_rows b GROUP BY ALL) "
+            f"{_scope_sql('b', base_columns)} AS SCOPE FROM base_rows b "
+            "UNION "
+            "SELECT TRY_CAST(y.ANO_ELEICAO AS BIGINT), TRY_CAST(y.SQ_CANDIDATO AS BIGINT), "
+            f"{_scope_sql('y', year_columns)} FROM year_rows y) "
             "GROUP BY ANO_ELEICAO, SQ_CANDIDATO HAVING COUNT(*) > 1"
         )
         year_query = _year_select(year_columns, args.target_year, compact=not args.no_compact)

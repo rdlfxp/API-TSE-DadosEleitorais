@@ -245,6 +245,7 @@ def main() -> None:
     parser.add_argument("--index-only", action="store_true", help="So remonta o indice a partir das partes.")
     parser.add_argument("--prefix", default="fotos", help="Prefixo dos objetos (igual a PHOTOS_OBJECT_PREFIX).")
     parser.add_argument("--upload", action="store_true", help="Envia as fotos ao R2; so partes enviadas entram no indice.")
+    parser.add_argument("--upload-workers", type=int, default=8, help="Envios simultaneos ao R2 (reduza se aparecer limite de taxa).")
     parser.add_argument("--account-id", default=os.environ.get("R2_ACCOUNT_ID"))
     parser.add_argument("--access-key-id", default=os.environ.get("R2_ACCESS_KEY_ID"))
     parser.add_argument("--secret-access-key", default=os.environ.get("R2_SECRET_ACCESS_KEY"))
@@ -271,7 +272,7 @@ def main() -> None:
                 if not args.force and (_absent_marker(output_dir, year, uf).exists() or part.exists()):
                     # Ja processado; so falta enviar, se pedido.
                     if client and part.exists() and not _uploaded_marker(output_dir, year, uf).exists():
-                        sent = upload_photos(client, args.bucket, output_dir, pd.read_parquet(part), year, args.prefix)
+                        sent = upload_photos(client, args.bucket, output_dir, pd.read_parquet(part), year, args.prefix, args.upload_workers)
                         _uploaded_marker(output_dir, year, uf).touch()
                         print(f"[fotos] {year} {uf}: {sent} foto(s) enviadas ao R2", flush=True)
                     continue
@@ -290,7 +291,7 @@ def main() -> None:
                 frame = result["index"]
                 frame.to_parquet(part, index=False)
                 if client:
-                    sent = upload_photos(client, args.bucket, output_dir, frame, year, args.prefix)
+                    sent = upload_photos(client, args.bucket, output_dir, frame, year, args.prefix, args.upload_workers)
                     _uploaded_marker(output_dir, year, uf).touch()
                     print(f"[fotos] {year} {uf}: {sent} foto(s) enviadas ao R2", flush=True)
                 if not args.keep_zips:
