@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     r2_object_key_parquet: str = "latest/analytics.parquet"
     r2_object_key_candidate_history: str = "latest/candidate_history.parquet"
     r2_object_key_electorate_profile: str = "latest/electorate_profile.parquet"
+    r2_object_key_candidate_photos: str = "latest/candidate_photos.parquet"
     r2_endpoint: str | None = None
     r2_region_name: str = "auto"
     rate_limit_enabled: bool = True
@@ -52,6 +53,10 @@ class Settings(BaseSettings):
     cache_warmup_enabled: bool = False
     cache_warmup_years: str = "2022,2024,2026"
     cache_warmup_delay_seconds: float = 5.0
+    # Fotos oficiais 2006-2022 hospedadas no proprio storage (scripts/build_candidate_photos.py).
+    # Vazio = desligado: a API segue sem foto para esses anos. Ex.: https://fotos.exemplo.com
+    photos_base_url: str | None = None
+    photos_object_prefix: str = "fotos"
     live_results_base_url: str = "https://resultados.tse.jus.br"
     live_results_timeout_seconds: int = 10
     live_results_redis_ttl_seconds: int = 10

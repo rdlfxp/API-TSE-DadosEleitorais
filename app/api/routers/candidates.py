@@ -30,8 +30,10 @@ def candidate_summary(request: Request, candidate_id: str, ano: int | None = Que
     filters = {"candidate_id": candidate_id, "year": resolved_year, "turno": turno, "state": resolved_state, "office": resolved_office}
     data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/summary", filters, lambda: get_service().candidate_summary(candidate_id=candidate_id, year=resolved_year, turno=turno, state=resolved_state, office=resolved_office), cache_ttl_seconds=settings.analytics_closed_cache_ttl_seconds)
     latest_year = (data.get("latest_election") or {}).get("year")
+    # Foto: primeiro a do site de divulgacao do TSE (so a URL, anos ao vivo) e, nos anos antigos, a hospedada
+    # no proprio storage (indice candidate_photos.parquet). A API so devolve a URL; o app carrega do CDN.
     photo = _PHOTOS.photo_url(year=latest_year, office=data.get("office"), state=data.get("state"), candidate_sq=data.get("source_id"))
-    return CandidateSummaryResponse(**data, foto_url=photo)
+    return CandidateSummaryResponse(**{**data, "foto_url": photo or data.get("foto_url")})
 
 
 @router.get("/v1/candidates/{candidate_id}/vote-history", response_model=VoteHistoryResponse, responses=ERROR_RESPONSES)

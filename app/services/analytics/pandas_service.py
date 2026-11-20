@@ -23,6 +23,8 @@ from app.services.analytics.common import (
 from app.domain.municipios import lookup_municipio
 from app.services.analytics.electorate import compute_electorate_profile, empty_electorate_profile
 from app.services.analytics.mixins import AnalyticsSupportMixin
+from app.services.photos import PHOTO_INDEX_FILENAME, CandidatePhotoIndex
+from app.core.config import settings
 
 @dataclass
 class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
@@ -31,6 +33,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     max_top_n: int
     _source_path: Path | None = field(default=None, init=False, repr=False)
     electorate_profile_df: pd.DataFrame | None = field(default=None, init=False, repr=False)
+    photo_index: CandidatePhotoIndex | None = field(default=None, init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
     _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
@@ -71,6 +74,9 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             profile_path = Path(file_path).with_name("electorate_profile.parquet")
             if profile_path.exists():
                 service.electorate_profile_df = pd.read_parquet(profile_path)
+            service.photo_index = CandidatePhotoIndex.from_file(
+                Path(file_path).with_name(PHOTO_INDEX_FILENAME), settings.photos_base_url, settings.photos_object_prefix
+            )
             return service
         if suffix == ".csv":
             return cls.from_csv(
@@ -1328,6 +1334,7 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "vote_share": vote_share,
                 "state_rank": rank,
             },
+            "foto_url": self._candidate_photo_url(latest_rows, latest_year),
         }
 
     def candidate_vote_history(

@@ -28,6 +28,8 @@ from app.services.analytics.common import (
 from app.domain.municipios import lookup_municipio
 from app.services.analytics.electorate import compute_electorate_profile, empty_electorate_profile
 from app.services.analytics.mixins import AnalyticsSupportMixin
+from app.services.photos import PHOTO_INDEX_FILENAME, CandidatePhotoIndex
+from app.core.config import settings
 
 @dataclass
 class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
@@ -40,6 +42,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
     _database_path: str | None = field(default=None, init=False, repr=False)
     _candidate_history_relation: str = field(default="analytics", init=False, repr=False)
     _has_electorate_profile: bool = field(default=False, init=False, repr=False)
+    photo_index: CandidatePhotoIndex | None = field(default=None, init=False, repr=False)
     _official_prefeito_totals_cache: dict[int, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
     _zone_geometry_index_cache: dict[str, object] | None = field(default=None, init=False, repr=False)
     _municipality_coord_index_cache: dict[str, tuple[float, float]] | None = field(default=None, init=False, repr=False)
@@ -144,6 +147,9 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                     f"SELECT * FROM read_parquet('{escaped_profile_path}')"
                 )
                 service._has_electorate_profile = True
+            service.photo_index = CandidatePhotoIndex.from_file(
+                path.with_name(PHOTO_INDEX_FILENAME), settings.photos_base_url, settings.photos_object_prefix
+            )
         if create_indexes and materialize_table:
             service._create_indexes()
         return service
@@ -2031,6 +2037,7 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "vote_share": vote_share,
                 "state_rank": rank,
             },
+            "foto_url": self._candidate_photo_url(latest_rows, latest_year),
         }
 
     def candidate_vote_history(

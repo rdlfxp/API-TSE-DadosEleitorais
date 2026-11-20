@@ -100,6 +100,36 @@ class AnalyticsSupportMixin:
             return None
         return max(common)
 
+    def _candidate_photo_url(self, rows: pd.DataFrame, year: int | None) -> str | None:
+        """URL da foto hospedada para o candidato naquele ano; None sem indice ou sem foto.
+
+        So le o indice (consulta pontual); a imagem em si nunca passa pela API.
+        """
+        index = getattr(self, "photo_index", None)
+        if index is None or not year or rows is None or rows.empty or "SQ_CANDIDATO" not in rows.columns:
+            return None
+
+        def column(*names: str) -> pd.Series:
+            for name in names:
+                if name in rows.columns:
+                    return rows[name]
+            return pd.Series([""] * len(rows), index=rows.index)
+
+        keys = (
+            pd.DataFrame(
+                {
+                    "uf": column("SG_UF"),
+                    "sq": rows["SQ_CANDIDATO"],
+                    "ue": column("CD_MUNICIPIO", "SG_UE"),
+                    "cargo": column("DS_CARGO", "DS_CARGO_D"),
+                }
+            )
+            .fillna("")
+            .drop_duplicates()
+            .head(1000)
+        )
+        return index.lookup_rows(int(year), list(keys.itertuples(index=False, name=None)))
+
     def _is_national_presidential_scope(
         self,
         *,

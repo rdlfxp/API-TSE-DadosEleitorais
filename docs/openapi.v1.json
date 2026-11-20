@@ -4809,7 +4809,7 @@
               }
             ],
             "title": "Foto Url",
-            "description": "URL https da foto oficial (site de divulgação do TSE). Opcional; pode não existir para alguns candidatos."
+            "description": "URL https da foto oficial (site de divulgação do TSE ou, nos anos antigos, o storage da API). Opcional; pode não existir para alguns candidatos."
           }
         },
         "type": "object",

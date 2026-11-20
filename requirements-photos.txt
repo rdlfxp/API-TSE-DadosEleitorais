@@ -1,0 +1,2 @@
+# Dependencias so dos scripts de fotos (scripts/build_candidate_photos.py); a API nao precisa.
+Pillow==13.0.0

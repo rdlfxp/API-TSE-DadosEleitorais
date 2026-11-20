@@ -61,7 +61,10 @@ async def lifespan(_: FastAPI):
             cache_state.DATA_LAST_MODIFIED_TS = selected_path.stat().st_mtime
             history_path = selected_path.with_name(selected_path.name.replace("analytics", "candidate_history", 1))
             cache_state.DATA_CACHE_VERSION = cache_state.file_content_version(
-                selected_path, history_path, selected_path.with_name("electorate_profile.parquet")
+                selected_path,
+                history_path,
+                selected_path.with_name("electorate_profile.parquet"),
+                selected_path.with_name("candidate_photos.parquet"),
             )
         except OSError:
             cache_state.DATA_LAST_MODIFIED_TS = None

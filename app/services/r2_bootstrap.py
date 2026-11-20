@@ -68,6 +68,9 @@ def ensure_local_analytics_from_r2(preferred_path: Path, prefer_parquet: bool) -
         profile_key = str(settings.r2_object_key_electorate_profile or "").strip()
         if profile_key:
             _download(client, profile_key, parquet_path.with_name("electorate_profile.parquet"))
+        photos_key = str(settings.r2_object_key_candidate_photos or "").strip()
+        if photos_key:
+            _download(client, photos_key, parquet_path.with_name("candidate_photos.parquet"))
         return parquet_path
 
     return None

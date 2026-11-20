@@ -123,6 +123,26 @@ Observacoes:
   O TSE nao publica faixa etaria em 2000-2006 (a rota informa `unavailable: ["idade", ...]`).
   Sem o arquivo, a rota responde `basis: "indisponivel"` (nao usa mais o perfil do proprio candidato). Para uma
   eleicao nova, rode so o ano novo com `--merge`.
+- **Fotos 2006-2022** (`foto_url` em `GET /v1/candidates/{id}/summary`): o TSE publica pacotes
+  `foto_cand<ano>_<UF>_div.zip` (de 2004 a 2022; 2000 e 2002 nao tem). `scripts/build_candidate_photos.py` baixa
+  devagar (pausa entre arquivos e retomada), converte para JPEG de ate 360 px (as fotos de 2020/2022 caem de ~27 KB
+  para ~6 KB; as antigas ja sao ~5 KB), grava `fotos/<ano>/<uf>/[<ue>/]<sq>.jpg` e gera
+  `candidate_photos.parquet` (so o indice `ano, uf, ue, sq`; R2: `latest/candidate_photos.parquet`).
+  ```bash
+  pip install -r requirements-photos.txt
+  python scripts/build_candidate_photos.py --years 2018 2022 --pause 5 --upload    # R2_* no ambiente ou flags
+  python scripts/build_candidate_photos.py --years 2020 --ufs SP --upload           # um ano/UF por vez, se preferir
+  ```
+  - A chave e `(ano, UF, UE, SQ)`: nos anos antigos o SQ se repete entre municipios (em 2004 o nome do arquivo traz o
+    UE do municipio). Presidente fica no pacote `BR`; a API tenta `BR` so para Presidente/Vice.
+  - A API **nao serve imagem**: devolve so a URL (`PHOTOS_BASE_URL` + `fotos/...`) quando o indice tem a foto, senao
+    `null` (o app nunca pede uma foto que da 404). A consulta ao indice e pontual (~0,5 ms) e entra no cache do
+    `summary`. Os objetos sao imutaveis (`Cache-Control: public, max-age=31536000, immutable`); sirva o bucket por um
+    dominio publico (R2 com dominio proprio) e configure `PHOTOS_BASE_URL`. Sem a variavel ou sem o arquivo, a API
+    segue como antes (so fotos do TSE ao vivo, 2024 e 2026).
+  - `--upload` envia cada (ano, UF) antes de entrar no indice. Sem `--upload` o indice inclui tudo o que foi
+    processado localmente. Reexecutar pula o que ja foi feito (`--force` reprocessa).
+  - O refresh de dados (`data-refresh.yml`) baixa e republica o indice junto com os demais arquivos.
 - O TSE so publica o historico oficial (`tse-history:...`) de quem esta na base de 2026. As demais
   candidaturas recebem o id sintetico `tse-candidate:ANO:SQ`, que vale por ano e quebraria a identidade
   (ex.: Lula em 2002). Na publicacao, `scripts/link_person_identities.py` troca o id sintetico pelo oficial

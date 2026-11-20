@@ -2,9 +2,9 @@
 
 Registro vivo, para gerar o prompt de ajuste do app no final. Status:
 **código** = pronto e testado na API; **publicar** = só vale em produção depois que a base nova for publicada
-(reconstrução de 2002/2006/2008, vagas 2018–2024 e `electorate_profile.parquet`) e o `api-tse` reiniciado.
+(reconstrução de 2002/2006/2008, vagas 2018–2024, `electorate_profile.parquet` e fotos) e o `api-tse` reiniciado.
 
-Itens de `docs/pendencias-backend.md` do app: #27, #4, #15, #16, #1, #21, #17, #18, #19, #12, #5, #24, #13, #14.
+Itens de `docs/pendencias-backend.md` do app: #27, #4, #15, #16, #1, #21, #17, #18, #19, #12, #5, #24, #13, #14, #9.
 
 ## 1. Busca de candidatos (`GET /v1/analytics/candidatos/search`) — #4 — código
 - `q` casa por nome de registro, **nome de urna** e, se só tiver dígitos, pelo **número exato**. Sem acento e sem caixa.
@@ -115,6 +115,17 @@ Vale para `/overview`, `/ranking`, `/serie-temporal` e `/mapa-uf` (métricas `el
 - **App:** `retention` agora é `Double?`; voltar a exibir quando houver valor ("retém X% da votação anterior") e
   omitir quando `null`.
 
+## 13. Fotos de 2006 a 2022 — #9 — código + publicar (precisa do `candidate_photos.parquet` e das imagens no CDN)
+- `foto_url` de `GET /v1/candidates/{id}/summary` passa a vir preenchido também para eleições de 2006 a 2022
+  (antes só 2024 e 2026). É uma URL https do CDN próprio da API, com cache imutável de 1 ano; a API não serve a imagem.
+- Continua opcional: `null` quando o TSE não publicou a foto daquele candidato. O contrato não mudou (mesmo campo e tipo);
+  só a descrição ganhou "ou, nos anos antigos, o storage da API".
+- 2000 e 2002 não têm pacote de fotos no TSE (404). Sem foto, o app segue usando a foto mais recente do mesmo
+  `person_id` e o avatar do partido.
+- Tamanho: JPEG com no máximo 360 px (média ~5–6 KB), adequado para lista e resumo; não há URL de tamanho maior.
+- **App:** nada a mudar no `Codable`; o `AsyncImage` e o `URLCache` atuais cobrem. Pode remover o contorno que
+  reaproveita a foto de outra eleição **depois** que a publicação das fotos estiver no ar (manter até lá).
+
 ## Tabela de decodificação (modelos Codable)
 | Modelo | Campo novo | Observação |
 |---|---|---|
@@ -128,6 +139,7 @@ Vale para `/overview`, `/ranking`, `/serie-temporal` e `/mapa-uf` (métricas `el
 | `AgeBandsProfile` | `under_18` | padrão 0 |
 | `CompareCandidateItem` | `retention` agora opcional | `null` sem eleição comparável |
 | item de zona | `zone_id?`, `zone_name?`, `municipio?` | agora sempre preenchidos |
+| `CandidateSummaryResponse` | `foto_url: String?` | já existia; agora também 2006–2022 |
 
 ## Pendente / fora desta lista
 - Publicação da base (ver README, "Reconstruir 2002, 2006 e 2008") e validação contra o TSE.
