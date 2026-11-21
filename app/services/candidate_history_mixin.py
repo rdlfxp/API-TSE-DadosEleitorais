@@ -383,6 +383,192 @@ class CandidateHistoryMixin:
             "person_id": identity["person_id"],
         }
 
+    def _collision_person_key_series(self, df: pd.DataFrame) -> pd.Series:
+        """Chave de pessoa para separar homonimos de `SQ_CANDIDATO` (2000-2008 repetem o SQ).
+
+        Historico oficial (`tse-history:`) > CPF > nome+nascimento. O id `tse-candidate:` e de uma
+        candidatura so, entao nao serve de chave: a mesma pessoa tem um por ano.
+        """
+        history = (
+            self._text_series(df["HISTORICO_CANDIDATURA_ID"])
+            if "HISTORICO_CANDIDATURA_ID" in df.columns
+            else pd.Series([""] * len(df), index=df.index)
+        )
+        history = history.where(history.str.startswith("tse-history:"), "")
+        cpf = (
+            self._cpf_series(df["NR_CPF_CANDIDATO"]) if "NR_CPF_CANDIDATO" in df.columns else pd.Series([""] * len(df), index=df.index)
+        )
+        name = self._person_identity_name_series(df)
+        birth = self._person_identity_birth_series(df)
+        by_name = "name:" + name + "|" + birth
+        by_cpf = "cpf:" + cpf
+        key = by_name.where(cpf == "", by_cpf)
+        return history.where(history != "", key).fillna("")
+
+    def _collision_scope_series(self, df: pd.DataFrame) -> pd.Series:
+        """Escopo da candidatura no ano: cargo + UF (cargo estadual) + municipio (cargo municipal)."""
+        col_office = self._select_history_col(df, ["DS_CARGO", "DS_CARGO_D", "_office"])
+        col_state = self._select_history_col(df, ["SG_UF", "_state"])
+        col_mun = self._select_history_col(df, ["CD_MUNICIPIO", "NM_UE", "NM_MUNICIPIO", "_municipality"])
+        blank = pd.Series([""] * len(df), index=df.index)
+        office = self._identity_series(df[col_office]) if col_office else blank
+        state = self._identity_series(df[col_state]) if col_state else blank
+        mun = self._identity_series(df[col_mun]) if col_mun else blank
+        level = office.map(self._cargo_scope)  # type: ignore[attr-defined]
+        state = state.where(level != "nacional", "")
+        mun = mun.where(level == "municipio", "")
+        return office + "|" + state + "|" + mun
+
+    def _single_candidate_rows(
+        self,
+        rows: pd.DataFrame,
+        *,
+        year: int | None = None,
+        state: str | None = None,
+        office: str | None = None,
+        municipio: str | None = None,
+    ) -> pd.DataFrame:
+        """Reduz as linhas de um `candidate_id` a UMA pessoa e, em cada ano, a UMA candidatura.
+
+        Em 2000-2008 o `SQ_CANDIDATO` e um sequencial pequeno repetido entre anos, UFs e (2000/2004)
+        municipios. Sem isso, o historico, o CPF e a foto de um homonimo de SQ vazavam para a pessoa
+        consultada (Marta Suplicy 2000 recebia o historico de um deputado do RJ). Escolhe, nesta ordem:
+        a pessoa que tem linhas no recorte pedido e depois a de maior votacao; desempate pela chave.
+        """
+        if rows is None or rows.empty:
+            return rows
+        keys = self._collision_person_key_series(rows)
+        if keys.nunique() > 1:
+            wanted = pd.Series(True, index=rows.index)
+            col_year = self._select_history_col(rows, ["ANO_ELEICAO", "NR_ANO_ELEICAO", "_year"])
+            if year is not None and col_year:
+                wanted &= pd.to_numeric(rows[col_year], errors="coerce") == int(year)
+            if state and "SG_UF" in rows.columns:
+                wanted &= self._identity_series(rows["SG_UF"]) == self._identity_text(state)
+            if office:
+                col_office = self._select_history_col(rows, ["DS_CARGO", "DS_CARGO_D", "_office"])
+                if col_office:
+                    wanted &= self._identity_series(rows[col_office]) == self._identity_text(office)
+            if municipio:
+                col_mun = self._select_history_col(rows, ["NM_UE", "NM_MUNICIPIO", "_municipality"])
+                if col_mun:
+                    wanted &= self._identity_series(rows[col_mun]) == self._identity_text(municipio)
+            col_votes = self._select_history_col(
+                rows, ["_votes", "QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
+            )
+            votes = pd.to_numeric(rows[col_votes], errors="coerce").fillna(0) if col_votes else pd.Series(0.0, index=rows.index)
+            ranking = pd.DataFrame({"key": keys, "wanted": wanted.astype(int), "votes": votes})
+            ranked = (
+                ranking.groupby("key", as_index=False)
+                .agg(wanted=("wanted", "max"), votes=("votes", "sum"))
+                .sort_values(["wanted", "votes", "key"], ascending=[False, False, True], kind="stable")
+            )
+            rows = rows[keys == str(ranked.iloc[0]["key"])]
+
+        scopes = self._collision_scope_series(rows)
+        col_year = self._select_history_col(rows, ["ANO_ELEICAO", "NR_ANO_ELEICAO", "_year"])
+        if col_year is None:
+            return rows.copy()
+        years = pd.to_numeric(rows[col_year], errors="coerce")
+        if (pd.DataFrame({"y": years, "s": scopes}).drop_duplicates().groupby("y")["s"].nunique() <= 1).all():
+            return rows.copy()
+        col_votes = self._select_history_col(
+            rows, ["_votes", "QT_VOTOS_NOMINAIS_VALIDOS", "NR_VOTACAO_NOMINAL", "QT_VOTOS_NOMINAIS"]
+        )
+        votes = pd.to_numeric(rows[col_votes], errors="coerce").fillna(0) if col_votes else pd.Series(0.0, index=rows.index)
+        office_text = self._identity_text(office) if office else ""
+        state_text = self._identity_text(state) if state else ""
+        by_scope = (
+            pd.DataFrame({"y": years, "s": scopes, "v": votes})
+            .groupby(["y", "s"], as_index=False)["v"]
+            .sum()
+        )
+        by_scope["wanted"] = by_scope["s"].map(
+            lambda scope: int(
+                (not office_text or scope.split("|")[0] == office_text)
+                and (not state_text or scope.split("|")[1] in {"", state_text})
+            )
+        )
+        best = (
+            by_scope.sort_values(["y", "wanted", "v", "s"], ascending=[True, False, False, True], kind="stable")
+            .drop_duplicates("y")
+        )
+        chosen = set(zip(best["y"], best["s"]))
+        keep = [(y, s) in chosen for y, s in zip(years, scopes)]
+        return rows[keep].copy()
+
+    def _same_person_photo_fallback(
+        self,
+        *,
+        candidate_id: str,
+        reference_rows: pd.DataFrame,
+        year: int | None,
+        state: str | None,
+        office: str | None,
+        municipio: str | None,
+        live_photo_url: Any = None,
+    ) -> str | None:
+        """Foto de OUTRA eleicao da mesma pessoa, da mais recente para a mais antiga.
+
+        So vale historico comprovado da pessoa (historico oficial, CPF ou nome+nascimento) e nome
+        compativel; nunca o `SQ_CANDIDATO` sozinho, que em 2000-2008 pertence a varias pessoas.
+        """
+        loader = getattr(self, "_candidate_history_targeted_rows", None)
+        try:
+            if callable(loader):
+                person_rows, _ = loader(candidate_id=candidate_id, state=state, office=office, year=year, municipio=municipio)
+            else:
+                person_rows, _ = self._historical_candidate_rows(
+                    candidate_id=candidate_id,
+                    state=state,
+                    office=office,
+                    all_rows=self._prepare_candidate_compact_rows(self._candidate_compact_frame()),
+                    year=year,
+                    municipio=municipio,
+                )  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - foto e opcional: nunca derruba o resumo
+            return None
+        if person_rows is None or person_rows.empty or reference_rows is None or reference_rows.empty:
+            return None
+
+        def tokens(value: object) -> tuple[str, str]:
+            parts = self._identity_text(value).split()
+            return (parts[0], parts[-1]) if parts else ("", "")
+
+        reference_names = {tokens(name) for name in self._person_identity_name_series(reference_rows) if name}
+        names = self._person_identity_name_series(person_rows)
+        compatible = names.map(lambda name: bool(name) and tokens(name) in reference_names)
+        person_rows = person_rows[compatible.values]
+        col_year = self._select_history_col(person_rows, ["ANO_ELEICAO", "NR_ANO_ELEICAO", "_year"])
+        if person_rows.empty or not col_year:
+            return None
+        years = pd.to_numeric(person_rows[col_year], errors="coerce")
+        for other_year in sorted({int(value) for value in years.dropna().tolist()}, reverse=True):
+            if year is not None and other_year == int(year):
+                continue
+            rows_year = self._single_candidate_rows(person_rows[(years == other_year).values])
+            if rows_year.empty:
+                continue
+            if callable(live_photo_url):
+                col_office = self._select_history_col(rows_year, ["DS_CARGO", "DS_CARGO_D", "_office"])
+                col_uf = self._select_history_col(rows_year, ["SG_UF", "_state"])
+                col_sq = self._select_history_col(rows_year, ["SQ_CANDIDATO", "_source_id"])
+                if col_office and col_sq:
+                    seen = rows_year[[c for c in (col_office, col_uf, col_sq) if c]].drop_duplicates().head(20)
+                    for record in seen.to_dict("records"):
+                        url = live_photo_url(
+                            year=other_year,
+                            office=str(record.get(col_office) or "") or None,
+                            state=str(record.get(col_uf) or "") or None if col_uf else None,
+                            candidate_sq=str(record.get(col_sq) or "") or None,
+                        )
+                        if url:
+                            return url
+            url = self._candidate_photo_url(rows_year, other_year)  # type: ignore[attr-defined]
+            if url:
+                return url
+        return None
+
     def _historical_candidate_rows(
         self,
         candidate_id: str,
@@ -391,6 +577,8 @@ class CandidateHistoryMixin:
         office: str | None = None,
         all_rows: pd.DataFrame | None = None,
         use_cpf_identity: bool = False,
+        year: int | None = None,
+        municipio: str | None = None,
     ) -> tuple[pd.DataFrame, dict[str, str | None]]:
         projection_cols = self._candidate_history_projection_columns()
         scoped_source = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
@@ -399,6 +587,8 @@ class CandidateHistoryMixin:
         if seed_rows.empty and (state or office):
             history_rows = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
             seed_rows = history_rows[self._candidate_mask(history_rows, candidate_id, candidate_cpf=candidate_cpf)].copy()
+        # SQ repetido (2000-2008): um unico homonimo manda no CPF, no historico e na foto.
+        seed_rows = self._single_candidate_rows(seed_rows, year=year, state=state, office=office, municipio=municipio)
         if seed_rows.empty:
             empty_base = all_rows if all_rows is not None else self._load_history_rows(columns=projection_cols)
             return empty_base.iloc[0:0].copy(), {
@@ -428,8 +618,6 @@ class CandidateHistoryMixin:
             elif "NR_CPF_CANDIDATO" in all_rows.columns:
                 person_mask = person_mask | (self._cpf_series(all_rows["NR_CPF_CANDIDATO"]) == cpf_value)
         candidate_rows = all_rows[person_mask.fillna(False)].copy()
-        if candidate_rows.empty:
-            candidate_rows = all_rows[self._candidate_mask(all_rows, candidate_id)].copy()
         if candidate_rows.empty:
             candidate_rows = seed_rows.copy()
 
@@ -872,6 +1060,8 @@ class CandidateHistoryMixin:
         candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
+        year: int | None = None,
+        municipio: str | None = None,
     ) -> dict[str, Any]:
         targeted_loader = getattr(self, "_candidate_history_targeted_rows", None)
         if callable(targeted_loader):
@@ -880,6 +1070,8 @@ class CandidateHistoryMixin:
                 candidate_cpf=candidate_cpf,
                 state=state,
                 office=office,
+                year=year,
+                municipio=municipio,
             )
             base_df = self._prepare_candidate_compact_rows(candidate_rows)
             candidate_rows = base_df
@@ -892,6 +1084,8 @@ class CandidateHistoryMixin:
                 office=office,
                 all_rows=base_df,
                 use_cpf_identity=bool(candidate_cpf),
+                year=year,
+                municipio=municipio,
             )  # type: ignore[attr-defined]
         if candidate_rows.empty:
             return {

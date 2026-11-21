@@ -23,12 +23,13 @@ _PHOTOS = LiveResultsService()
 
 
 @router.get("/v1/candidates/{candidate_id}/summary", response_model=CandidateSummaryResponse, responses=ERROR_RESPONSES)
-def candidate_summary(request: Request, candidate_id: str, ano: int | None = Query(default=None), year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None) -> CandidateSummaryResponse:
+def candidate_summary(request: Request, candidate_id: str, ano: int | None = Query(default=None), year: int | None = None, turno: int | None = Query(default=None, ge=1, le=2), uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None, municipio: str | None = None, municipality: str | None = None) -> CandidateSummaryResponse:
     resolved_year = resolve_year_param(ano=ano, year=year)
     resolved_state = resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
-    filters = {"candidate_id": candidate_id, "year": resolved_year, "turno": turno, "state": resolved_state, "office": resolved_office}
-    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/summary", filters, lambda: get_service().candidate_summary(candidate_id=candidate_id, year=resolved_year, turno=turno, state=resolved_state, office=resolved_office), cache_ttl_seconds=settings.analytics_closed_cache_ttl_seconds)
+    resolved_municipio = municipio or municipality
+    filters = {"candidate_id": candidate_id, "year": resolved_year, "turno": turno, "state": resolved_state, "office": resolved_office, "municipio": resolved_municipio}
+    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/summary", filters, lambda: get_service().candidate_summary(candidate_id=candidate_id, year=resolved_year, turno=turno, state=resolved_state, office=resolved_office, municipio=resolved_municipio, live_photo_url=_PHOTOS.photo_url), cache_ttl_seconds=settings.analytics_closed_cache_ttl_seconds)
     latest_year = (data.get("latest_election") or {}).get("year")
     # Foto: primeiro a do site de divulgacao do TSE (so a URL, anos ao vivo) e, nos anos antigos, a hospedada
     # no proprio storage (indice candidate_photos.parquet). A API so devolve a URL; o app carrega do CDN.
@@ -37,11 +38,13 @@ def candidate_summary(request: Request, candidate_id: str, ano: int | None = Que
 
 
 @router.get("/v1/candidates/{candidate_id}/vote-history", response_model=VoteHistoryResponse, responses=ERROR_RESPONSES)
-def candidate_vote_history(request: Request, candidate_id: str, nr_cpf_candidato: str | None = Query(default=None, description="CPF do candidato. Quando informado, e a chave preferencial para montar o historico eleitoral."), uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None) -> VoteHistoryResponse:
+def candidate_vote_history(request: Request, candidate_id: str, nr_cpf_candidato: str | None = Query(default=None, description="CPF do candidato. Quando informado, e a chave preferencial para montar o historico eleitoral."), uf: str | None = Query(default=None, min_length=2, max_length=2), state: str | None = Query(default=None, min_length=2, max_length=2), cargo: str | None = None, office: str | None = None, ano: int | None = Query(default=None), year: int | None = None, municipio: str | None = None, municipality: str | None = None) -> VoteHistoryResponse:
     resolved_state = resolve_state_param(state=state, uf=uf)
     resolved_office = office or cargo
-    filters = {"candidate_id": candidate_id, "nr_cpf_candidato": nr_cpf_candidato, "state": resolved_state, "office": resolved_office}
-    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/vote-history", filters, lambda: get_service().candidate_vote_history(candidate_id=candidate_id, candidate_cpf=nr_cpf_candidato, state=resolved_state, office=resolved_office), cache_ttl_seconds=settings.analytics_vote_history_cache_ttl_seconds)
+    resolved_year = resolve_year_param(ano=ano, year=year)
+    resolved_municipio = municipio or municipality
+    filters = {"candidate_id": candidate_id, "nr_cpf_candidato": nr_cpf_candidato, "state": resolved_state, "office": resolved_office, "year": resolved_year, "municipio": resolved_municipio}
+    data = run_analytics_query(request, f"/v1/candidates/{candidate_id}/vote-history", filters, lambda: get_service().candidate_vote_history(candidate_id=candidate_id, candidate_cpf=nr_cpf_candidato, state=resolved_state, office=resolved_office, year=resolved_year, municipio=resolved_municipio), cache_ttl_seconds=settings.analytics_vote_history_cache_ttl_seconds)
     return VoteHistoryResponse(**data)
 
 

@@ -9,6 +9,7 @@ from threading import Lock
 
 import duckdb
 import pandas as pd
+from typing import Any
 
 from app.services.candidate_history_mixin import CandidateHistoryMixin
 
@@ -1850,8 +1851,11 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         turno: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        municipio: str | None = None,
+        live_photo_url: Any = None,
     ) -> dict:
-        candidate_rows = self._candidate_filtered_df(candidate_id, ano=year, uf=state, cargo=office)
+        candidate_rows = self._candidate_filtered_df(candidate_id, ano=year, uf=state, cargo=office, municipio=municipio)
+        candidate_rows = self._single_candidate_rows(candidate_rows, year=year, state=state, office=office, municipio=municipio)
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
@@ -2037,7 +2041,16 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "vote_share": vote_share,
                 "state_rank": rank,
             },
-            "foto_url": self._candidate_photo_url(latest_rows, latest_year),
+            "foto_url": self._candidate_photo_url(latest_rows, latest_year)
+            or self._same_person_photo_fallback(
+                candidate_id=candidate_id,
+                reference_rows=candidate_rows,
+                year=year,
+                state=state,
+                office=office,
+                municipio=municipio,
+                live_photo_url=live_photo_url,
+            ),
         }
 
     def candidate_vote_history(
@@ -2046,8 +2059,12 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
+        year: int | None = None,
+        municipio: str | None = None,
     ) -> dict:
-        return CandidateHistoryMixin.candidate_vote_history(self, candidate_id, candidate_cpf=candidate_cpf, state=state, office=office)
+        return CandidateHistoryMixin.candidate_vote_history(
+            self, candidate_id, candidate_cpf=candidate_cpf, state=state, office=office, year=year, municipio=municipio
+        )
 
     def _candidate_history_targeted_rows(
         self,
@@ -2056,12 +2073,14 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
+        year: int | None = None,
+        municipio: str | None = None,
     ) -> tuple[pd.DataFrame, dict[str, str | None]]:
         columns = self._projection_columns(self._candidate_history_projection_columns()) or []
         select_clause = ", ".join(columns) if columns else "*"
 
-        def load_seed(seed_state: str | None, seed_office: str | None) -> pd.DataFrame:
-            where, where_params = self._where(uf=seed_state, cargo=seed_office)
+        def load_seed(seed_state: str | None, seed_office: str | None, seed_year: int | None = year, seed_mun: str | None = municipio) -> pd.DataFrame:
+            where, where_params = self._where(ano=seed_year, uf=seed_state, cargo=seed_office, municipio=seed_mun)
             candidate_clauses, candidate_params = self._candidate_clauses_and_params(candidate_id)
             if not candidate_clauses:
                 return pd.DataFrame()
@@ -2084,8 +2103,10 @@ class DuckDBAnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
             "'\\.0$', ''), '[^0-9]', '', 'g'), 11, '0')"
         )
         seed_rows = load_seed(state, office)
-        if seed_rows.empty and (state or office):
-            seed_rows = load_seed(None, None)
+        if seed_rows.empty and (state or office or year or municipio):
+            seed_rows = load_seed(None, None, None, None)
+        # SQ repetido (2000-2008): um unico homonimo manda no CPF, no historico e na foto.
+        seed_rows = self._single_candidate_rows(seed_rows, year=year, state=state, office=office, municipio=municipio)
         if seed_rows.empty and self._cpf_text(candidate_cpf) and self._has("NR_CPF_CANDIDATO"):
             seed_rows = self._df(
                 f"SELECT {select_clause} FROM {self._candidate_history_relation} WHERE {cpf_sql} = ?",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -1161,9 +1161,12 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         turno: int | None = None,
         state: str | None = None,
         office: str | None = None,
+        municipio: str | None = None,
+        live_photo_url: Any = None,
     ) -> dict:
-        scoped = self._apply_filters(ano=year, uf=state, cargo=office)
+        scoped = self._apply_filters(ano=year, uf=state, cargo=office, municipio=municipio)
         candidate_rows = scoped[self._candidate_mask(scoped, candidate_id)].copy()
+        candidate_rows = self._single_candidate_rows(candidate_rows, year=year, state=state, office=office, municipio=municipio)
         if candidate_rows.empty:
             return {
                 "candidate_id": str(candidate_id),
@@ -1334,7 +1337,16 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
                 "vote_share": vote_share,
                 "state_rank": rank,
             },
-            "foto_url": self._candidate_photo_url(latest_rows, latest_year),
+            "foto_url": self._candidate_photo_url(latest_rows, latest_year)
+            or self._same_person_photo_fallback(
+                candidate_id=candidate_id,
+                reference_rows=candidate_rows,
+                year=year,
+                state=state,
+                office=office,
+                municipio=municipio,
+                live_photo_url=live_photo_url,
+            ),
         }
 
     def candidate_vote_history(
@@ -1343,8 +1355,12 @@ class AnalyticsService(AnalyticsSupportMixin, CandidateHistoryMixin):
         candidate_cpf: str | None = None,
         state: str | None = None,
         office: str | None = None,
+        year: int | None = None,
+        municipio: str | None = None,
     ) -> dict:
-        return CandidateHistoryMixin.candidate_vote_history(self, candidate_id, candidate_cpf=candidate_cpf, state=state, office=office)
+        return CandidateHistoryMixin.candidate_vote_history(
+            self, candidate_id, candidate_cpf=candidate_cpf, state=state, office=office, year=year, municipio=municipio
+        )
 
     def candidate_electorate_profile(
         self,
