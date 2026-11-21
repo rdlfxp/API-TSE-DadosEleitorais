@@ -305,3 +305,128 @@ def test_summary_matches_sq_before_candidate_number(tmp_path):
         service.close()
     assert summary["office"] == "Presidente"
     assert summary["latest_election"]["year"] == 2006
+
+
+# ---------------------------------------------------------------- SQ repetido em 2000-2008: pessoa unica
+def _photo_index(tmp_path, rows):
+    from app.services.photos import CandidatePhotoIndex
+
+    path = tmp_path / "candidate_photos.parquet"
+    conn = duckdb.connect()
+    try:
+        conn.register("f", pd.DataFrame(rows, columns=["ano", "uf", "ue", "sq"]).astype({"ano": "int16"}))
+        conn.execute(f"COPY f TO '{str(path).replace(chr(39), chr(39) * 2)}' (FORMAT PARQUET)")
+    finally:
+        conn.close()
+    return CandidatePhotoIndex.from_file(path, "https://fotos.example.com")
+
+
+def _marta_and_namesake_rows() -> list[dict]:
+    # SQ 1823: Marta (2000, SP, Prefeito, sem historico oficial), um deputado do RJ de 2002 com
+    # historico oficial ate 2026 e um vereador de 2008 do AM.
+    return [
+        _hist_row(2000, "SP", "Prefeito", 1823, 13, "MARTA TERESA SUPLICY", "tse-candidate:2000:1823", votes=3000, ue="71072"),
+        _hist_row(2008, "SP", "Prefeito", 1197, 13, "MARTA TERESA SUPLICY", "tse-candidate:2008:1197:M71072", votes=2000, ue="71072"),
+        _hist_row(2014, "SP", "Senador", 250000001674, 13, "MARTA TERESA SUPLICY", "tse-candidate:2014:250000001674", votes=1000),
+        _hist_row(2002, "RJ", "Deputado Estadual", 1823, 20000, "MARIO REIS ESTEVES", "tse-history:2026:190002550512", votes=50),
+        _hist_row(2026, "RJ", "Deputado Federal", 190002550512, 20000, "MARIO REIS ESTEVES", "tse-history:2026:190002550512", votes=80),
+        _hist_row(2008, "AM", "Vereador", 1823, 12345, "MANOEL VALENTE", "tse-candidate:2008:1823:M2534", votes=900, ue="2534"),
+    ]
+
+
+def test_vote_history_with_repeated_sq_never_leaks_the_namesake(tmp_path):
+    service = _history_service(tmp_path, _marta_and_namesake_rows())
+    try:
+        scoped = service.candidate_vote_history("1823", state="SP", office="Prefeito")
+        unscoped = service.candidate_vote_history("1823")
+        by_year = service.candidate_vote_history("1823", year=2000)
+    finally:
+        service.close()
+    # Com ou sem recorte: so a Marta (a de maior votacao), jamais o historico do deputado do RJ.
+    for history in (scoped, unscoped, by_year):
+        assert {item["year"] for item in history["items"]} == {2000, 2008, 2014}
+        assert all(item["state"] == "SP" for item in history["items"]), history
+        assert "190002550512" not in str(history)
+
+
+def test_vote_history_scoped_to_the_namesake_returns_the_namesake(tmp_path):
+    service = _history_service(tmp_path, _marta_and_namesake_rows())
+    try:
+        history = service.candidate_vote_history("1823", state="RJ", office="Deputado Estadual")
+    finally:
+        service.close()
+    assert {item["year"] for item in history["items"]} == {2002, 2026}
+
+
+def test_summary_with_repeated_sq_sums_only_one_person_and_one_municipality(tmp_path):
+    # SQ 1 em 2004: prefeitos diferentes em municipios diferentes da mesma UF.
+    service = _history_service(
+        tmp_path,
+        [
+            _hist_row(2004, "AC", "Prefeito", 1, 11, "PREFEITO DE RIO BRANCO", "tse-candidate:2004:1:M1", votes=5000, ue="1"),
+            _hist_row(2004, "AC", "Prefeito", 1, 12, "PREFEITO DE CRUZEIRO", "tse-candidate:2004:1:M2", votes=700, ue="2"),
+        ],
+    )
+    try:
+        biggest = service.candidate_summary("1", year=2004, state="AC", office="Prefeito")
+        other = service.candidate_summary("1", year=2004, state="AC", office="Prefeito", municipio="2")
+    finally:
+        service.close()
+    assert biggest["name"] == "PREFEITO DE RIO BRANCO" and biggest["latest_vote_value"] == 5000
+    assert biggest["votos_consolidados"] == 5000  # nao soma os dois prefeitos
+    assert other["name"] == "PREFEITO DE CRUZEIRO" and other["latest_vote_value"] == 700
+
+
+def test_photo_lookup_refuses_an_ambiguous_municipality(tmp_path):
+    index = _photo_index(tmp_path, [(2004, "AC", "100", "1"), (2004, "AC", "200", "1")])
+    assert index.lookup(2004, "AC", 1, ues=["100"]) == "https://fotos.example.com/fotos/2004/ac/100/1.jpg"
+    assert index.lookup(2004, "AC", 1, ues=["100", "200"]) is None  # duas pessoas possiveis
+    assert index.lookup(2004, "AC", 1, ues=[]) is None and index.lookup(2004, "AC", 1, ues=[""]) is None
+
+
+def test_summary_falls_back_to_the_photo_of_the_same_person_only(tmp_path):
+    service = _history_service(tmp_path, _marta_and_namesake_rows())
+    service.photo_index = _photo_index(
+        tmp_path,
+        [
+            (2014, "SP", "", "250000001674"),  # Marta senadora 2014
+            (2026, "RJ", "", "190002550512"),  # deputado do RJ: nunca pode aparecer para a Marta
+            (2008, "AM", "2534", "1823"),  # vereador do AM com o mesmo SQ da Marta em 2000
+        ],
+    )
+    try:
+        summary = service.candidate_summary("1823", year=2000, state="SP", office="Prefeito")
+        no_scope = service.candidate_summary("1823")
+        no_photo = service.candidate_summary("1823", year=2002, state="RJ", office="Deputado Estadual")
+        calls = []
+
+        def live(**kwargs):
+            calls.append(kwargs)
+            return None
+
+        service.candidate_summary("1823", year=2000, state="SP", office="Prefeito", live_photo_url=live)
+    finally:
+        service.close()
+    assert summary["foto_url"] == "https://fotos.example.com/fotos/2014/sp/250000001674.jpg"
+    assert no_scope["name"] == "MARTA TERESA SUPLICY"
+    assert "190002550512" not in str(summary["foto_url"]) and "/2008/am/" not in str(summary["foto_url"])
+    # O deputado do RJ so tem foto em 2026 (do indice): essa e a dele, nao a da Marta.
+    assert no_photo["name"] == "MARIO REIS ESTEVES"
+    assert no_photo["foto_url"] == "https://fotos.example.com/fotos/2026/rj/190002550512.jpg"
+    assert any(call["candidate_sq"] == "250000001674" and call["year"] == 2014 for call in calls)
+
+
+def test_summary_keeps_no_photo_when_the_only_other_holder_has_another_name(tmp_path):
+    service = _history_service(
+        tmp_path,
+        [
+            _hist_row(2000, "SP", "Prefeito", 1823, 13, "MARTA TERESA SUPLICY", "tse-candidate:2000:1823", votes=3000, ue="71072"),
+            _hist_row(2008, "AM", "Vereador", 1823, 12345, "MANOEL VALENTE", "tse-candidate:2008:1823:M2534", votes=900, ue="2534"),
+        ],
+    )
+    service.photo_index = _photo_index(tmp_path, [(2008, "AM", "2534", "1823")])
+    try:
+        summary = service.candidate_summary("1823", year=2000, state="SP", office="Prefeito")
+    finally:
+        service.close()
+    assert summary["foto_url"] is None

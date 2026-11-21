@@ -64,9 +64,11 @@ class CandidatePhotoIndex:
         if "" in found:
             ue = ""
         else:
-            wanted = {normalize_sq(u) for u in ues}
+            wanted = {normalize_sq(u) for u in ues} - {""}
             matches = sorted(found & wanted)
-            if not matches:
+            # Sem UE conhecido ou com mais de um municipio possivel o SQ nao identifica a pessoa
+            # (2000-2008 repetem o SQ entre municipios): sem foto e melhor que a foto de outra pessoa.
+            if len(matches) != 1:
                 return None
             ue = matches[0]
         return f"{self._base_url}/{photo_object_key(year, uf_text, ue, sq_text, self._prefix)}"

@@ -103,8 +103,10 @@ def test_summary_exposes_optional_https_photo(client):
     assert pres["foto_url"] == "https://resultados.tse.jus.br/oficial/ele2026/6257/fotos/br/1.jpeg"
     senador = client.get("/v1/candidates/11/summary", params={"year": 2026}).json()
     assert senador["foto_url"] == "https://resultados.tse.jus.br/oficial/ele2026/6259/fotos/sp/11.jpeg"
+    # 2022 nao tem foto propria, mas o 99 e a mesma pessoa do candidato 1: cai na foto da eleicao
+    # mais recente dela (fallback seguro da mesma pessoa, nunca pelo SQ sozinho).
     old = client.get("/v1/candidates/99/summary", params={"year": 2022}).json()
-    assert old["foto_url"] is None
+    assert old["foto_url"] == "https://resultados.tse.jus.br/oficial/ele2026/6257/fotos/br/1.jpeg"
 
 
 def test_vote_history_with_cpf_keeps_person_id_and_full_history(client):
